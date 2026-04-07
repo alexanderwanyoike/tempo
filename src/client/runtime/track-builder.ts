@@ -92,42 +92,41 @@ export class TestTrack {
       // Entry on LEFT, exit on RIGHT. 60m apart - no overlap.
       ...makeLoopPoints(260, -20, -280, 60, 60),
 
-      // ---- Exit loop to RIGHT side - follow the loop's exit tangent ----
-      // Loop exits at ~(290, -20, -280) heading roughly -Z and slightly +X
-      // Continue that direction smoothly
+      // ---- Exit loop, smooth rightward curve ----
       new Vector3(300, -20, -280),
-      new Vector3(320, -15, -260),
+      new Vector3(320, -18, -270),
+      new Vector3(340, -12, -250),
 
-      // ---- Big climb ----
-      new Vector3(320, 15, -200),
-      new Vector3(340, 35, -140),
+      // ---- Gentle climb ----
+      new Vector3(360, 0, -220),
+      new Vector3(370, 15, -180),
 
-      // ---- JUMP RAMP 2 ----
-      new Vector3(310, 45, -20),
-      new Vector3(280, 20, 40),
+      // ---- JUMP RAMP 2 - hilltop ----
+      new Vector3(360, 35, -130),
+      new Vector3(340, 20, -80),
 
-      // ---- Stomach drop into hairpin ----
-      new Vector3(240, -10, 80),
-      new Vector3(160, -20, 100),
-      new Vector3(80, -15, 80),
+      // ---- Sweeping left descent ----
+      new Vector3(300, 5, -40),
+      new Vector3(240, -8, -10),
+      new Vector3(170, -15, -20),
 
-      // ---- S-curve ----
-      new Vector3(30, -10, 20),
-      new Vector3(-30, -8, -50),
-      new Vector3(-80, -8, 10),
+      // ---- S-curve (kept away from start corridor at x~0, z=0 to -180) ----
+      new Vector3(110, -10, -60),
+      new Vector3(80, -8, -120),
+      new Vector3(120, -8, -180),
 
       // ---- Climb with JUMP RAMP 3 ----
-      new Vector3(-110, 8, 80),
-      new Vector3(-100, 25, 140),
-      new Vector3(-80, 10, 190),
+      new Vector3(150, 8, -240),
+      new Vector3(140, 25, -300),
+      new Vector3(120, 10, -350),
 
-      // ---- Final sweep ----
-      new Vector3(-20, 15, 230),
-      new Vector3(60, 18, 210),
+      // ---- Final sweeping left ----
+      new Vector3(80, 12, -400),
+      new Vector3(40, 10, -420),
 
       // ---- Finish straight ----
-      new Vector3(100, 10, 160),
-      new Vector3(100, 5, 80),
+      new Vector3(-20, 5, -400),
+      new Vector3(-60, 3, -360),
     ];
 
     this.centerline = new CatmullRomCurve3(controlPoints, false, "centripetal", 0.5);
