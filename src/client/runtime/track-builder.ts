@@ -92,14 +92,10 @@ export class TestTrack {
       // Entry on LEFT, exit on RIGHT. 60m apart - no overlap.
       ...makeLoopPoints(260, -20, -280, 60, 60),
 
-      // ---- Exit loop, smooth rightward curve ----
-      new Vector3(300, -20, -280),
-      new Vector3(320, -18, -270),
-      new Vector3(340, -12, -250),
-
-      // ---- Gentle climb ----
-      new Vector3(360, 0, -220),
-      new Vector3(370, 15, -180),
+      // ---- Exit loop - follow the tangent direction (right, slightly down, toward +Z) ----
+      new Vector3(310, -22, -270),
+      new Vector3(340, -18, -250),
+      new Vector3(365, -5, -225),
 
       // ---- JUMP RAMP 2 - hilltop ----
       new Vector3(360, 35, -130),
