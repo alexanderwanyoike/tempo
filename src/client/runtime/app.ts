@@ -26,6 +26,7 @@ export class App {
   private readonly carBody: Mesh;
   private readonly input: VehicleInput;
   private readonly vehicleController: VehicleController;
+  private readonly track: TestTrack;
   private readonly cameraForward = new Vector3(0, 0, -1);
   private lastFrameTime = 0;
 
@@ -73,13 +74,13 @@ export class App {
     this.input = new VehicleInput();
     this.vehicleController = new VehicleController(defaultVehicleTuning);
 
-    const track = new TestTrack();
-    this.scene.add(track.meshGroup);
+    this.track = new TestTrack();
+    this.scene.add(this.track.meshGroup);
 
-    this.vehicleController.setTrackQuery((pos) => track.queryNearest(pos));
-    this.vehicleController.setRespawnFn((u) => track.getRespawnAt(u));
+    this.vehicleController.setTrackQuery((pos, hintU) => this.track.queryNearest(pos, hintU));
+    this.vehicleController.setRespawnFn((u) => this.track.getRespawnAt(u));
 
-    const start = track.getStartPosition();
+    const start = this.track.getStartPosition();
     this.vehicleController.state.position.copy(start.position);
     this.vehicleController.state.yaw = start.yaw;
 
@@ -119,8 +120,10 @@ export class App {
     const state = this.vehicleController.state;
 
     this.carRoot.position.copy(state.position);
+    // Hover bob is visual only - applied to mesh, not physics
+    this.carRoot.position.y += state.visualHoverOffset;
     this.carRoot.rotation.set(0, state.yaw, 0, "XYZ");
-    const visualYaw = -state.steering * 0.15 * (0.3 + Math.min(state.speed / 65, 1) * 0.7);
+    const visualYaw = -state.steering * 0.15 * (0.3 + Math.min(state.speed / 90, 1) * 0.7);
     this.carBody.rotation.set(state.visualPitch, visualYaw, state.visualBank, "XYZ");
   }
 
@@ -144,7 +147,7 @@ export class App {
     // Camera follows VELOCITY primarily, not heading.
     // This means when the car yaws into a turn, the camera stays aligned
     // with the travel direction and you SEE the car rotated on screen.
-    const speedRatio = Math.min(speed / 65, 1);
+    const speedRatio = Math.min(speed / 90, 1);
     const velocityBias = MathUtils.clamp(speedRatio, 0, 0.75);
     const desiredForward = headingDir.clone().lerp(velocityDir, velocityBias).normalize();
 
@@ -152,14 +155,22 @@ export class App {
     this.cameraForward.lerp(desiredForward, 0.12).normalize();
 
     // Speed-sensitive framing
-    const cameraBack = MathUtils.lerp(11, 14, speedRatio);
-    const cameraUp = MathUtils.lerp(4.5, 5.5, speedRatio);
-    const lookAhead = MathUtils.lerp(16, 22, speedRatio);
+    const cameraBack = MathUtils.lerp(12, 18, speedRatio);
+    const cameraUp = MathUtils.lerp(5, 7, speedRatio);
+    const lookAhead = MathUtils.lerp(18, 30, speedRatio);
 
     const targetPosition = state.position
       .clone()
       .addScaledVector(this.cameraForward, -cameraBack)
       .add(new Vector3(0, cameraUp, 0));
+
+    // Ensure camera stays above track surface at its position
+    const camTrackQuery = this.track.queryNearest(targetPosition);
+    const minCamY = camTrackQuery.center.y + 3.0;
+    if (targetPosition.y < minCamY) {
+      targetPosition.y = minCamY;
+    }
+
     const lookTarget = state.position
       .clone()
       .addScaledVector(this.cameraForward, lookAhead)
@@ -169,7 +180,7 @@ export class App {
     this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
 
     // Speed-based FOV
-    this.camera.fov = MathUtils.lerp(70, 85, speedRatio * speedRatio);
+    this.camera.fov = MathUtils.lerp(70, 95, speedRatio * speedRatio);
     this.camera.updateProjectionMatrix();
   }
 

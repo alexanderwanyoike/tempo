@@ -132,19 +132,42 @@ export class TestTrack {
     return { position: pos, yaw };
   }
 
-  queryNearest(position: Vector3): TrackQuery {
+  /**
+   * Query nearest track point. Pass hintU to search locally (prevents
+   * snapping to wrong segment when track crosses over itself).
+   */
+  queryNearest(position: Vector3, hintU?: number): TrackQuery {
     let bestDist = Infinity;
     let bestIdx = 0;
 
-    for (let i = 0; i < this.samples.length; i++) {
-      const s = this.samples[i];
-      const dx = position.x - s.x;
-      const dy = position.y - s.y;
-      const dz = position.z - s.z;
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
+    if (hintU !== undefined) {
+      // Local search: only look +/- 40 samples around hint
+      const hintIdx = Math.round(hintU * SAMPLE_COUNT);
+      const searchRadius = 40;
+      const start = Math.max(0, hintIdx - searchRadius);
+      const end = Math.min(this.samples.length - 1, hintIdx + searchRadius);
+
+      for (let i = start; i <= end; i++) {
+        const s = this.samples[i];
+        const dx = position.x - s.x;
+        const dz = position.z - s.z;
+        const d = dx * dx + dz * dz; // XZ only for local search
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+    } else {
+      // Global search (used by camera and initial placement)
+      for (let i = 0; i < this.samples.length; i++) {
+        const s = this.samples[i];
+        const dx = position.x - s.x;
+        const dz = position.z - s.z;
+        const d = dx * dx + dz * dz;
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
       }
     }
 
@@ -153,8 +176,8 @@ export class TestTrack {
     const prevIdx = Math.max(0, bestIdx - 1);
     const nextIdx = Math.min(len - 1, bestIdx + 1);
 
-    const distPrev = this.distSq(position, this.samples[prevIdx]);
-    const distNext = this.distSq(position, this.samples[nextIdx]);
+    const distPrev = this.xzDistSq(position, this.samples[prevIdx]);
+    const distNext = this.xzDistSq(position, this.samples[nextIdx]);
 
     const neighborIdx = distPrev < distNext ? prevIdx : nextIdx;
     let uLow = Math.min(bestIdx, neighborIdx) / SAMPLE_COUNT;
@@ -164,7 +187,7 @@ export class TestTrack {
       const uMid = (uLow + uHigh) / 2;
       const pLow = this.centerline.getPointAt(Math.min(uLow, 0.9999));
       const pHigh = this.centerline.getPointAt(Math.min(uHigh, 0.9999));
-      if (this.distSq(position, pLow) < this.distSq(position, pHigh)) {
+      if (this.xzDistSq(position, pLow) < this.xzDistSq(position, pHigh)) {
         uHigh = uMid;
       } else {
         uLow = uMid;
@@ -177,19 +200,18 @@ export class TestTrack {
     const right = new Vector3().crossVectors(tangent, UP).normalize();
 
     const toPos = position.clone().sub(center);
+    toPos.y = 0; // lateral offset is XZ only
     const lateralOffset = toPos.dot(right);
 
-    // Determine if this section has walls (most do, but some gaps could be added later)
     const hasWalls = true;
 
     return { center, tangent, right, lateralOffset, u: uFinal, hasWalls };
   }
 
-  private distSq(a: Vector3, b: Vector3): number {
+  private xzDistSq(a: Vector3, b: Vector3): number {
     const dx = a.x - b.x;
-    const dy = a.y - b.y;
     const dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
+    return dx * dx + dz * dz;
   }
 
   private buildRoad(): Mesh {

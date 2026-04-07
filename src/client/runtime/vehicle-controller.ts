@@ -2,7 +2,7 @@ import { MathUtils, Vector3 } from "three";
 import type { VehicleInputState } from "./input";
 import type { TrackQuery } from "./track-builder";
 
-export type TrackQueryFn = (position: Vector3) => TrackQuery;
+export type TrackQueryFn = (position: Vector3, hintU?: number) => TrackQuery;
 export type RespawnFn = (u: number) => { position: Vector3; yaw: number };
 
 const HALF_WIDTH = 15; // must match track-builder TRACK_WIDTH / 2
@@ -46,9 +46,9 @@ export type VehicleState = {
 export const defaultVehicleTuning: VehicleTuning = {
   hoverHeight: 0.45,
 
-  thrust: 80,
-  topSpeed: 65,
-  dragCoefficient: 1.2,
+  thrust: 120,
+  topSpeed: 90,
+  dragCoefficient: 1.3,
 
   steeringRate: 2.8,
   steeringResponse: 12,
@@ -86,6 +86,7 @@ export class VehicleController {
   private lastSafeU = 0;
   private airborne = false;
   private verticalVelocity = 0;
+  private lastTrackY = 0;
 
   constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
 
@@ -162,34 +163,39 @@ export class VehicleController {
     // 9. Integrate position
     s.position.addScaledVector(s.velocity, dt);
 
-    // 9b. Track interaction: surface follow, airborne, walls, respawn
+    // 9b. Track interaction: physics-based surface follow, jumps, walls, respawn
     if (this.trackQuery) {
-      const query = this.trackQuery(s.position);
+      // Local search using last known u to prevent snapping to wrong segment
+      const query = this.trackQuery(s.position, this.lastSafeU);
       const trackSurfaceY = query.center.y + t.hoverHeight;
-      const GRAVITY = 40;
+      const GRAVITY = 35;
 
       if (this.airborne) {
-        // Apply gravity
+        // In the air: gravity pulls down
         this.verticalVelocity -= GRAVITY * dt;
         s.position.y += this.verticalVelocity * dt;
 
-        // Check if we've landed back on track
-        if (s.position.y <= trackSurfaceY && Math.abs(query.lateralOffset) < HALF_WIDTH) {
+        // Land when we drop to track surface (and falling)
+        if (s.position.y <= trackSurfaceY && this.verticalVelocity <= 0 &&
+            Math.abs(query.lateralOffset) < HALF_WIDTH) {
           this.airborne = false;
           this.verticalVelocity = 0;
-          s.position.y = trackSurfaceY + s.visualHoverOffset;
+          s.position.y = trackSurfaceY;
+          this.lastTrackY = trackSurfaceY; // reset so next frame doesn't see a huge delta
           this.lastSafeU = query.u;
         }
       } else {
-        // On track: check if we should launch off a ramp
-        // If track surface drops away sharply, go airborne
-        const heightAboveTrack = s.position.y - trackSurfaceY;
-        if (heightAboveTrack > 1.5 && s.speed > 10) {
+        // On track: compute how fast the surface rises/falls under us
+        const surfaceDelta = trackSurfaceY - this.lastTrackY;
+        const surfaceVelocity = surfaceDelta / Math.max(dt, 0.001);
+
+        // Go airborne if surface drops away faster than gravity
+        if (surfaceVelocity < -8 && s.speed > 10) {
           this.airborne = true;
-          this.verticalVelocity = Math.max(heightAboveTrack * 2, 5);
+          this.verticalVelocity = Math.max(-surfaceVelocity * 0.3, 5);
         } else {
-          // Follow track surface
-          s.position.y = trackSurfaceY + s.visualHoverOffset;
+          // Stick to surface - physics Y is exact, no bob
+          s.position.y = trackSurfaceY;
           this.lastSafeU = query.u;
         }
 
@@ -211,7 +217,9 @@ export class VehicleController {
         }
       }
 
-      // Fall-off detection: too far below track or way off to the side
+      this.lastTrackY = trackSurfaceY;
+
+      // Fall-off: too far below track or way off to the side
       const tooFarBelow = s.position.y < query.center.y - 30;
       const tooFarAway = Math.abs(query.lateralOffset) > HALF_WIDTH * 3;
 
@@ -242,10 +250,12 @@ export class VehicleController {
     this.elapsedTime += dt;
     const visualSpeedRatio = Math.min(s.speed / t.topSpeed, 1);
 
+    // Hover bob fades out at high speed to prevent shaking
+    const bobScale = 1 - visualSpeedRatio * 0.85;
     s.visualHoverOffset =
       Math.sin(this.elapsedTime * t.visualHoverFrequency) *
       t.visualHoverAmplitude *
-      (0.4 + visualSpeedRatio * 0.6);
+      bobScale;
 
     // Bank: blend steering and airbrake input
     const totalBankInput = s.steering + (isAirbraking ? airbrakeInput * 0.6 : 0);
@@ -264,7 +274,7 @@ export class VehicleController {
 
     // 13. Lock Y to hover height (fallback when no track query)
     if (!this.trackQuery) {
-      s.position.y = t.hoverHeight + s.visualHoverOffset;
+      s.position.y = t.hoverHeight;
     }
   }
 }
