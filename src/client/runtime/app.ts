@@ -138,9 +138,10 @@ export class App {
       .clone()
       .addScaledVector(forward, -6.8)
       .add(new Vector3(0, 2.6, 0));
+    const lookTarget = state.position.clone().addScaledVector(forward, 10).add(new Vector3(0, 0.8, 0));
 
     this.camera.position.lerp(targetPosition, 0.08);
-    this.camera.lookAt(state.position.x, state.position.y + 0.75, state.position.z - 3);
+    this.camera.lookAt(lookTarget);
   }
 
   private render = (time: number): void => {

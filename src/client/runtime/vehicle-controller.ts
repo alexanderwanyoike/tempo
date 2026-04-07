@@ -34,7 +34,7 @@ export const defaultVehicleTuning: VehicleTuning = {
   acceleration: 22,
   drag: 5,
   brakeDrag: 12,
-  steeringRate: 1.9,
+  steeringRate: 1.45,
   steeringResponse: 7,
   lateralGrip: 16,
   lateralGripAtSpeed: 6,
@@ -89,7 +89,7 @@ export class VehicleController {
     const speedRatio = MathUtils.clamp(nextForwardSpeed / this.tuning.maxForwardSpeed, 0, 1);
     const steeringPower = MathUtils.lerp(0.6, 1, speedRatio);
     const yawDelta = this.state.steering * this.tuning.steeringRate * steeringPower * dt;
-    this.state.yaw -= yawDelta;
+    this.state.yaw += yawDelta;
 
     const lateralGrip = MathUtils.lerp(
       this.tuning.lateralGrip,
