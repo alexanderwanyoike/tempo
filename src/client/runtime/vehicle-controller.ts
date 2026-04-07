@@ -83,10 +83,11 @@ export class VehicleController {
   private elapsedTime = 0;
   private trackQuery: TrackQueryFn | null = null;
   private respawnFn: RespawnFn | null = null;
-  private lastSafeU = 0;
+  lastSafeU = 0;
   private airborne = false;
   private verticalVelocity = 0;
   private lastTrackY = 0;
+  private landingCooldown = 0;
 
   constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
 
@@ -181,16 +182,22 @@ export class VehicleController {
           this.airborne = false;
           this.verticalVelocity = 0;
           s.position.y = trackSurfaceY;
-          this.lastTrackY = trackSurfaceY; // reset so next frame doesn't see a huge delta
+          this.lastTrackY = trackSurfaceY;
+          this.landingCooldown = 0.4; // prevent re-launch on downhill
           this.lastSafeU = query.u;
         }
       } else {
+        // Tick down landing cooldown
+        if (this.landingCooldown > 0) {
+          this.landingCooldown -= dt;
+        }
+
         // On track: compute how fast the surface rises/falls under us
         const surfaceDelta = trackSurfaceY - this.lastTrackY;
         const surfaceVelocity = surfaceDelta / Math.max(dt, 0.001);
 
-        // Go airborne if surface drops away faster than gravity
-        if (surfaceVelocity < -8 && s.speed > 10) {
+        // Go airborne if surface drops away sharply (and not in cooldown)
+        if (surfaceVelocity < -15 && s.speed > 15 && this.landingCooldown <= 0) {
           this.airborne = true;
           this.verticalVelocity = Math.max(-surfaceVelocity * 0.3, 5);
         } else {
@@ -232,6 +239,7 @@ export class VehicleController {
         s.forwardSpeed = 0;
         this.airborne = false;
         this.verticalVelocity = 0;
+        this.landingCooldown = 0;
       }
     }
 

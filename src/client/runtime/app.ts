@@ -164,8 +164,9 @@ export class App {
       .addScaledVector(this.cameraForward, -cameraBack)
       .add(new Vector3(0, cameraUp, 0));
 
-    // Ensure camera stays above track surface at its position
-    const camTrackQuery = this.track.queryNearest(targetPosition);
+    // Ensure camera stays above the track segment the car is on (local search)
+    const carU = this.vehicleController.lastSafeU;
+    const camTrackQuery = this.track.queryNearest(targetPosition, carU);
     const minCamY = camTrackQuery.center.y + 3.0;
     if (targetPosition.y < minCamY) {
       targetPosition.y = minCamY;
