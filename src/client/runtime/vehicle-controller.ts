@@ -5,13 +5,12 @@ export type VehicleTuning = {
   hoverHeight: number;
   maxForwardSpeed: number;
   acceleration: number;
-  drag: number;
-  brakeDrag: number;
+  coastDeceleration: number;
+  brakeDeceleration: number;
   minSteerSpeedRatio: number;
   steeringRate: number;
   steeringResponse: number;
-  driftFactor: number;
-  driftCorrection: number;
+  visualTurnSlip: number;
   visualHoverAmplitude: number;
   visualHoverFrequency: number;
   visualBankAngle: number;
@@ -21,6 +20,7 @@ export type VehicleTuning = {
 export type VehicleState = {
   position: Vector3;
   velocity: Vector3;
+  forwardSpeed: number;
   yaw: number;
   steering: number;
   visualHoverOffset: number;
@@ -32,26 +32,24 @@ export type VehicleState = {
 export const defaultVehicleTuning: VehicleTuning = {
   hoverHeight: 0.45,
   maxForwardSpeed: 32,
-  acceleration: 22,
-  drag: 5,
-  brakeDrag: 12,
-  minSteerSpeedRatio: 0.2,
-  steeringRate: 1.45,
-  steeringResponse: 7,
-  driftFactor: 0.12,
-  driftCorrection: 10,
+  acceleration: 28,
+  coastDeceleration: 6,
+  brakeDeceleration: 16,
+  minSteerSpeedRatio: 0.18,
+  steeringRate: 1.85,
+  steeringResponse: 10,
+  visualTurnSlip: 0.35,
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
-  visualBankAngle: 0.28,
-  visualPitchAngle: 0.1,
+  visualBankAngle: 0.22,
+  visualPitchAngle: 0.08,
 };
-
-const UP = new Vector3(0, 1, 0);
 
 export class VehicleController {
   readonly state: VehicleState = {
     position: new Vector3(0, defaultVehicleTuning.hoverHeight, 0),
     velocity: new Vector3(),
+    forwardSpeed: 0,
     yaw: 0,
     steering: 0,
     visualHoverOffset: 0,
@@ -75,15 +73,26 @@ export class VehicleController {
       dt,
     );
 
-    const forward = new Vector3(Math.sin(this.state.yaw), 0, -Math.cos(this.state.yaw));
-    const right = new Vector3().crossVectors(forward, UP).normalize();
+    let nextForwardSpeed = this.state.forwardSpeed;
 
-    const forwardSpeed = this.state.velocity.dot(forward);
-    const throttleForce = input.throttle ? this.tuning.acceleration : 0;
-    const drag = input.brake ? this.tuning.brakeDrag : this.tuning.drag;
-    const nextForwardSpeed = MathUtils.clamp(
-      forwardSpeed + (throttleForce - forwardSpeed * drag) * dt,
-      0,
+    if (input.throttle) {
+      nextForwardSpeed += this.tuning.acceleration * dt;
+    } else {
+      nextForwardSpeed = Math.max(
+        0,
+        nextForwardSpeed - this.tuning.coastDeceleration * dt,
+      );
+    }
+
+    if (input.brake) {
+      nextForwardSpeed = Math.max(
+        0,
+        nextForwardSpeed - this.tuning.brakeDeceleration * dt,
+      );
+    }
+
+    nextForwardSpeed = Math.min(
+      nextForwardSpeed,
       this.tuning.maxForwardSpeed * this.state.boostMultiplier,
     );
 
@@ -92,23 +101,13 @@ export class VehicleController {
     const yawDelta = this.state.steering * this.tuning.steeringRate * steeringPower * dt;
     this.state.yaw += yawDelta;
 
-    forward.set(Math.sin(this.state.yaw), 0, -Math.cos(this.state.yaw));
-    right.crossVectors(forward, UP).normalize();
-
-    const desiredLateralSpeed =
-      this.state.steering * nextForwardSpeed * this.tuning.driftFactor * speedRatio;
-    const currentLateralSpeed = this.state.velocity.dot(right);
-    const nextLateralSpeed = MathUtils.damp(
-      currentLateralSpeed,
-      desiredLateralSpeed,
-      this.tuning.driftCorrection,
-      dt,
-    );
+    const forward = new Vector3(Math.sin(this.state.yaw), 0, -Math.cos(this.state.yaw));
+    const visualSlipOffset = this.state.steering * nextForwardSpeed * this.tuning.visualTurnSlip;
 
     this.state.velocity
       .copy(forward)
-      .multiplyScalar(nextForwardSpeed)
-      .addScaledVector(right, nextLateralSpeed);
+      .multiplyScalar(nextForwardSpeed);
+    this.state.forwardSpeed = nextForwardSpeed;
 
     this.state.position.addScaledVector(this.state.velocity, dt);
 
@@ -127,5 +126,7 @@ export class VehicleController {
     );
 
     this.state.position.y = this.tuning.hoverHeight + this.state.visualHoverOffset;
+    this.state.position.x += Math.sin(this.state.yaw + Math.PI / 2) * visualSlipOffset * dt * 0.02;
+    this.state.position.z += -Math.cos(this.state.yaw + Math.PI / 2) * visualSlipOffset * dt * 0.02;
   }
 }

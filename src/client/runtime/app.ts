@@ -16,6 +16,7 @@ import { VehicleInput } from "./input";
 import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
+  private static readonly UP = new Vector3(0, 1, 0);
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
@@ -134,15 +135,15 @@ export class App {
   private updateCamera(): void {
     const state = this.vehicleController.state;
     const forward = new Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw));
-    const right = new Vector3().crossVectors(forward, new Vector3(0, 1, 0)).normalize();
+    const right = new Vector3().crossVectors(forward, App.UP).normalize();
     const targetPosition = state.position
       .clone()
-      .addScaledVector(forward, -8.5)
+      .addScaledVector(forward, -9)
       .addScaledVector(right, 0)
-      .add(new Vector3(0, 3.4, 0));
-    const lookTarget = state.position.clone().addScaledVector(forward, 12).add(new Vector3(0, 1.1, 0));
+      .add(new Vector3(0, 4.2, 0));
+    const lookTarget = state.position.clone().addScaledVector(forward, 18).add(new Vector3(0, 1.3, 0));
 
-    this.camera.position.lerp(targetPosition, 0.12);
+    this.camera.position.lerp(targetPosition, 0.16);
     this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
   }
 
