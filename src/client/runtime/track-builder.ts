@@ -36,23 +36,23 @@ export interface TrackQuery {
 }
 
 /**
- * Generate loop points: a vertical circle with entry/exit offset.
- * "Cut the circle at the bottom, pull one side forward and one back."
- * Entry approaches from +Z side, exit leaves toward -Z side.
+ * Generate loop: vertical circle in YZ plane.
+ * Entry and exit pulled apart in X (left/right) so roads don't overlap.
+ * "Cut the circle at the bottom, pull one side LEFT, one side RIGHT."
  */
-function makeLoopPoints(x: number, bottomY: number, centerZ: number, radius: number, zSpread: number): Vector3[] {
+function makeLoopPoints(centerX: number, bottomY: number, centerZ: number, radius: number, xSpread: number): Vector3[] {
   const pts: Vector3[] = [];
   const N = 24;
   const cy = bottomY + radius;
   for (let i = 0; i < N; i++) {
     const t = i / (N - 1);
-    // Full circle from -100 deg to +260 deg (360 deg arc with slight offset)
-    const angle = (-100 + t * 360) * Math.PI / 180;
+    // Full circle (350 deg to avoid exact overlap)
+    const angle = (-Math.PI / 2) + t * (Math.PI * 2 * 0.97);
     const py = cy + radius * Math.sin(angle);
     const pz = centerZ + radius * Math.cos(angle);
-    // Offset Z based on progress: entry pulled toward +Z, exit toward -Z
-    const zOffset = (t - 0.5) * -zSpread;
-    pts.push(new Vector3(x, py, pz + zOffset));
+    // X offset: entry pulled LEFT (-X), exit pulled RIGHT (+X)
+    const px = centerX + (t - 0.5) * xSpread;
+    pts.push(new Vector3(px, py, pz));
   }
   return pts;
 }
@@ -82,23 +82,25 @@ export class TestTrack {
       new Vector3(60, -8, -460),
       new Vector3(160, -15, -500),
 
-      // ---- Valley floor, approach to loop ----
-      new Vector3(240, -18, -460),
-      new Vector3(260, -20, -380),
-      new Vector3(260, -20, -320),  // flat approach at loop bottom height
+      // ---- Valley floor, approach from LEFT side ----
+      new Vector3(220, -18, -460),
+      new Vector3(230, -20, -380),
+      new Vector3(235, -20, -320),  // approach at x=235 (left of loop center x=260)
 
       // ---- LOOP DE LOOP ----
-      // Vertical circle, radius 60, at x=260, bottom y=-20, center z=-280
-      // The car enters heading -Z, loops up-over-down in the YZ plane
-      ...makeLoopPoints(260, -20, -280, 60, 40),
+      // Circle radius 60, center at x=260. xSpread=60 pulls entry to x=230, exit to x=290
+      // Entry on LEFT, exit on RIGHT. 60m apart - no overlap.
+      ...makeLoopPoints(260, -20, -280, 60, 60),
 
-      // ---- Exit loop, continue ----
-      new Vector3(260, -20, -240),
-      new Vector3(260, -15, -200),
+      // ---- Exit loop to RIGHT side - follow the loop's exit tangent ----
+      // Loop exits at ~(290, -20, -280) heading roughly -Z and slightly +X
+      // Continue that direction smoothly
+      new Vector3(300, -20, -280),
+      new Vector3(320, -15, -260),
 
       // ---- Big climb ----
-      new Vector3(300, 15, -140),
-      new Vector3(320, 35, -80),
+      new Vector3(320, 15, -200),
+      new Vector3(340, 35, -140),
 
       // ---- JUMP RAMP 2 ----
       new Vector3(310, 45, -20),
