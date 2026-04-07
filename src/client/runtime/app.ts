@@ -17,7 +17,6 @@ import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
   private static readonly UP = new Vector3(0, 1, 0);
-  private static readonly CAMERA_SIDE_OFFSET = 2.1;
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
@@ -25,6 +24,7 @@ export class App {
   private readonly carBody: Mesh;
   private readonly input: VehicleInput;
   private readonly vehicleController: VehicleController;
+  private readonly cameraForward = new Vector3(0, 0, -1);
   private lastFrameTime = 0;
 
   constructor(
@@ -157,20 +157,19 @@ export class App {
 
   private updateCamera(): void {
     const state = this.vehicleController.state;
-    const forward = new Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw));
-    const right = new Vector3().crossVectors(forward, App.UP).normalize();
+    const desiredForward = new Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw)).normalize();
+    this.cameraForward.lerp(desiredForward, 0.08).normalize();
+
     const targetPosition = state.position
       .clone()
-      .addScaledVector(forward, -10.5)
-      .addScaledVector(right, App.CAMERA_SIDE_OFFSET)
-      .add(new Vector3(0, 4.6, 0));
+      .addScaledVector(this.cameraForward, -12)
+      .add(new Vector3(0, 4.8, 0));
     const lookTarget = state.position
       .clone()
-      .addScaledVector(forward, 16)
-      .addScaledVector(right, state.steering * 2.2)
-      .add(new Vector3(0, 1.2, 0));
+      .addScaledVector(this.cameraForward, 18)
+      .add(new Vector3(0, 1.1, 0));
 
-    this.camera.position.lerp(targetPosition, 0.09);
+    this.camera.position.lerp(targetPosition, 0.12);
     this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
   }
 

@@ -10,7 +10,6 @@ export type VehicleTuning = {
   minSteerSpeedRatio: number;
   steeringRate: number;
   steeringResponse: number;
-  visualTurnSlip: number;
   visualHoverAmplitude: number;
   visualHoverFrequency: number;
   visualBankAngle: number;
@@ -38,7 +37,6 @@ export const defaultVehicleTuning: VehicleTuning = {
   minSteerSpeedRatio: 0.18,
   steeringRate: 1.85,
   steeringResponse: 10,
-  visualTurnSlip: 0.35,
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
   visualBankAngle: 0.4,
@@ -102,7 +100,6 @@ export class VehicleController {
     this.state.yaw += yawDelta;
 
     const forward = new Vector3(Math.sin(this.state.yaw), 0, -Math.cos(this.state.yaw));
-    const visualSlipOffset = this.state.steering * nextForwardSpeed * this.tuning.visualTurnSlip;
 
     this.state.velocity
       .copy(forward)
@@ -126,7 +123,5 @@ export class VehicleController {
     );
 
     this.state.position.y = this.tuning.hoverHeight + this.state.visualHoverOffset;
-    this.state.position.x += Math.sin(this.state.yaw + Math.PI / 2) * visualSlipOffset * dt * 0.02;
-    this.state.position.z += -Math.cos(this.state.yaw + Math.PI / 2) * visualSlipOffset * dt * 0.02;
   }
 }
