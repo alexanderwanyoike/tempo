@@ -1,5 +1,11 @@
 import { MathUtils, Vector3 } from "three";
 import type { VehicleInputState } from "./input";
+import type { TrackQuery } from "./track-builder";
+
+export type TrackQueryFn = (position: Vector3) => TrackQuery;
+export type RespawnFn = (u: number) => { position: Vector3; yaw: number };
+
+const HALF_WIDTH = 15; // must match track-builder TRACK_WIDTH / 2
 
 export type VehicleTuning = {
   hoverHeight: number;
@@ -40,19 +46,19 @@ export type VehicleState = {
 export const defaultVehicleTuning: VehicleTuning = {
   hoverHeight: 0.45,
 
-  thrust: 38,
-  topSpeed: 32,
+  thrust: 80,
+  topSpeed: 65,
   dragCoefficient: 1.2,
 
-  steeringRate: 2.5,
-  steeringResponse: 10,
+  steeringRate: 2.8,
+  steeringResponse: 12,
 
-  lateralGrip: 3.5,
+  lateralGrip: 4.0,
 
-  airbrakeYawBoost: 1.8,
-  airbrakeDrag: 0.35,
+  airbrakeYawBoost: 2.2,
+  airbrakeDrag: 0.4,
 
-  brakeForce: 22,
+  brakeForce: 35,
 
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
@@ -75,8 +81,21 @@ export class VehicleController {
   };
 
   private elapsedTime = 0;
+  private trackQuery: TrackQueryFn | null = null;
+  private respawnFn: RespawnFn | null = null;
+  private lastSafeU = 0;
+  private airborne = false;
+  private verticalVelocity = 0;
 
-  constructor(private readonly tuning: VehicleTuning = defaultVehicleTuning) {}
+  constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
+
+  setTrackQuery(fn: TrackQueryFn): void {
+    this.trackQuery = fn;
+  }
+
+  setRespawnFn(fn: RespawnFn): void {
+    this.respawnFn = fn;
+  }
 
   update(deltaSeconds: number, input: VehicleInputState): void {
     const dt = Math.min(deltaSeconds, 1 / 30);
@@ -143,6 +162,71 @@ export class VehicleController {
     // 9. Integrate position
     s.position.addScaledVector(s.velocity, dt);
 
+    // 9b. Track interaction: surface follow, airborne, walls, respawn
+    if (this.trackQuery) {
+      const query = this.trackQuery(s.position);
+      const trackSurfaceY = query.center.y + t.hoverHeight;
+      const GRAVITY = 40;
+
+      if (this.airborne) {
+        // Apply gravity
+        this.verticalVelocity -= GRAVITY * dt;
+        s.position.y += this.verticalVelocity * dt;
+
+        // Check if we've landed back on track
+        if (s.position.y <= trackSurfaceY && Math.abs(query.lateralOffset) < HALF_WIDTH) {
+          this.airborne = false;
+          this.verticalVelocity = 0;
+          s.position.y = trackSurfaceY + s.visualHoverOffset;
+          this.lastSafeU = query.u;
+        }
+      } else {
+        // On track: check if we should launch off a ramp
+        // If track surface drops away sharply, go airborne
+        const heightAboveTrack = s.position.y - trackSurfaceY;
+        if (heightAboveTrack > 1.5 && s.speed > 10) {
+          this.airborne = true;
+          this.verticalVelocity = Math.max(heightAboveTrack * 2, 5);
+        } else {
+          // Follow track surface
+          s.position.y = trackSurfaceY + s.visualHoverOffset;
+          this.lastSafeU = query.u;
+        }
+
+        // Wall collision (only when grounded)
+        const boundary = 14.0;
+        if (query.hasWalls) {
+          const penetration = Math.abs(query.lateralOffset) - boundary;
+          if (penetration > 0) {
+            const pushDir = query.lateralOffset > 0 ? -1 : 1;
+            s.position.addScaledVector(query.right, pushDir * penetration);
+
+            const wallNormal = query.right.clone().multiplyScalar(pushDir);
+            const velIntoWall = s.velocity.dot(wallNormal);
+            if (velIntoWall < 0) {
+              s.velocity.addScaledVector(wallNormal, -velIntoWall);
+              s.velocity.multiplyScalar(0.85);
+            }
+          }
+        }
+      }
+
+      // Fall-off detection: too far below track or way off to the side
+      const tooFarBelow = s.position.y < query.center.y - 30;
+      const tooFarAway = Math.abs(query.lateralOffset) > HALF_WIDTH * 3;
+
+      if ((tooFarBelow || tooFarAway) && this.respawnFn) {
+        const spawn = this.respawnFn(this.lastSafeU);
+        s.position.copy(spawn.position);
+        s.yaw = spawn.yaw;
+        s.velocity.set(0, 0, 0);
+        s.speed = 0;
+        s.forwardSpeed = 0;
+        this.airborne = false;
+        this.verticalVelocity = 0;
+      }
+    }
+
     // 10. Derive speed values
     s.forwardSpeed = s.velocity.dot(forward);
     s.speed = s.velocity.length();
@@ -178,7 +262,9 @@ export class VehicleController {
       t.visualPitchAngle,
     );
 
-    // 13. Lock Y to hover height
-    s.position.y = t.hoverHeight + s.visualHoverOffset;
+    // 13. Lock Y to hover height (fallback when no track query)
+    if (!this.trackQuery) {
+      s.position.y = t.hoverHeight + s.visualHoverOffset;
+    }
   }
 }

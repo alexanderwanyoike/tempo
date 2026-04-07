@@ -14,6 +14,7 @@ import {
 } from "three";
 import type { ClientConfig } from "./config";
 import { VehicleInput } from "./input";
+import { TestTrack } from "./track-builder";
 import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
@@ -72,51 +73,17 @@ export class App {
     this.input = new VehicleInput();
     this.vehicleController = new VehicleController(defaultVehicleTuning);
 
-    const road = new Mesh(
-      new BoxGeometry(30, 0.1, 400),
-      new MeshStandardMaterial({
-        color: "#151922",
-        emissive: "#111520",
-        metalness: 0.1,
-        roughness: 0.9,
-      }),
-    );
-    road.position.z = -160;
+    const track = new TestTrack();
+    this.scene.add(track.meshGroup);
 
-    const laneMarkers = new Mesh(
-      new BoxGeometry(0.16, 0.02, 400),
-      new MeshStandardMaterial({
-        color: "#40f2ff",
-        emissive: "#1aa9b3",
-        metalness: 0.1,
-        roughness: 0.6,
-      }),
-    );
-    laneMarkers.position.set(0, 0.07, -160);
+    this.vehicleController.setTrackQuery((pos) => track.queryNearest(pos));
+    this.vehicleController.setRespawnFn((u) => track.getRespawnAt(u));
 
-    const leftRail = new Mesh(
-      new BoxGeometry(0.2, 0.35, 400),
-      new MeshStandardMaterial({
-        color: "#4e233a",
-        emissive: "#3a1328",
-        metalness: 0.2,
-        roughness: 0.7,
-      }),
-    );
-    leftRail.position.set(-14.6, 0.22, -160);
+    const start = track.getStartPosition();
+    this.vehicleController.state.position.copy(start.position);
+    this.vehicleController.state.yaw = start.yaw;
 
-    const rightRail = new Mesh(
-      new BoxGeometry(0.2, 0.35, 400),
-      new MeshStandardMaterial({
-        color: "#4e233a",
-        emissive: "#3a1328",
-        metalness: 0.2,
-        roughness: 0.7,
-      }),
-    );
-    rightRail.position.set(14.6, 0.22, -160);
-
-    this.scene.add(road, laneMarkers, leftRail, rightRail, this.carRoot);
+    this.scene.add(this.carRoot);
   }
 
   start(): void {
@@ -153,7 +120,7 @@ export class App {
 
     this.carRoot.position.copy(state.position);
     this.carRoot.rotation.set(0, state.yaw, 0, "XYZ");
-    const visualYaw = -state.steering * 0.15 * (0.3 + Math.min(state.speed / 32, 1) * 0.7);
+    const visualYaw = -state.steering * 0.15 * (0.3 + Math.min(state.speed / 65, 1) * 0.7);
     this.carBody.rotation.set(state.visualPitch, visualYaw, state.visualBank, "XYZ");
   }
 
@@ -177,7 +144,7 @@ export class App {
     // Camera follows VELOCITY primarily, not heading.
     // This means when the car yaws into a turn, the camera stays aligned
     // with the travel direction and you SEE the car rotated on screen.
-    const speedRatio = Math.min(speed / 32, 1);
+    const speedRatio = Math.min(speed / 65, 1);
     const velocityBias = MathUtils.clamp(speedRatio, 0, 0.75);
     const desiredForward = headingDir.clone().lerp(velocityDir, velocityBias).normalize();
 
@@ -202,7 +169,7 @@ export class App {
     this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
 
     // Speed-based FOV
-    this.camera.fov = MathUtils.lerp(70, 78, speedRatio * speedRatio);
+    this.camera.fov = MathUtils.lerp(70, 85, speedRatio * speedRatio);
     this.camera.updateProjectionMatrix();
   }
 
