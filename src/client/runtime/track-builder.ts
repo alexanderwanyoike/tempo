@@ -125,7 +125,7 @@ export class TestTrack {
       new Vector3(-60, 3, -360),
     ];
 
-    this.centerline = new CatmullRomCurve3(controlPoints, false, "centripetal", 0.5);
+    this.centerline = new CatmullRomCurve3(controlPoints, false, "centripetal", 0.3);
     this.totalLength = this.centerline.getLength();
 
     // Sample points along the curve
