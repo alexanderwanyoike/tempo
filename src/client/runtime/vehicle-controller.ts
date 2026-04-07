@@ -41,7 +41,7 @@ export const defaultVehicleTuning: VehicleTuning = {
   visualTurnSlip: 0.35,
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
-  visualBankAngle: 0.22,
+  visualBankAngle: 0.4,
   visualPitchAngle: 0.08,
 };
 

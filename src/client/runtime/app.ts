@@ -17,6 +17,7 @@ import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
   private static readonly UP = new Vector3(0, 1, 0);
+  private static readonly CAMERA_SIDE_OFFSET = 2.1;
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
@@ -92,7 +93,29 @@ export class App {
     );
     laneMarkers.position.set(0, 0.07, -160);
 
-    this.scene.add(road, laneMarkers, this.carRoot);
+    const leftRail = new Mesh(
+      new BoxGeometry(0.2, 0.35, 400),
+      new MeshStandardMaterial({
+        color: "#4e233a",
+        emissive: "#3a1328",
+        metalness: 0.2,
+        roughness: 0.7,
+      }),
+    );
+    leftRail.position.set(-14.6, 0.22, -160);
+
+    const rightRail = new Mesh(
+      new BoxGeometry(0.2, 0.35, 400),
+      new MeshStandardMaterial({
+        color: "#4e233a",
+        emissive: "#3a1328",
+        metalness: 0.2,
+        roughness: 0.7,
+      }),
+    );
+    rightRail.position.set(14.6, 0.22, -160);
+
+    this.scene.add(road, laneMarkers, leftRail, rightRail, this.carRoot);
   }
 
   start(): void {
@@ -138,12 +161,16 @@ export class App {
     const right = new Vector3().crossVectors(forward, App.UP).normalize();
     const targetPosition = state.position
       .clone()
-      .addScaledVector(forward, -9)
-      .addScaledVector(right, 0)
-      .add(new Vector3(0, 4.2, 0));
-    const lookTarget = state.position.clone().addScaledVector(forward, 18).add(new Vector3(0, 1.3, 0));
+      .addScaledVector(forward, -10.5)
+      .addScaledVector(right, App.CAMERA_SIDE_OFFSET)
+      .add(new Vector3(0, 4.6, 0));
+    const lookTarget = state.position
+      .clone()
+      .addScaledVector(forward, 16)
+      .addScaledVector(right, state.steering * 2.2)
+      .add(new Vector3(0, 1.2, 0));
 
-    this.camera.position.lerp(targetPosition, 0.16);
+    this.camera.position.lerp(targetPosition, 0.09);
     this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
   }
 
