@@ -1,0 +1,13 @@
+.notes/
+node_modules/
+dist/
+dist-server/
+.vite/
+.DS_Store
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+.netlify/
+.railway/

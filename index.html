@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tempo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI", sans-serif;
+        background: #090b12;
+        color: #f4f7ff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at top, rgba(0, 255, 209, 0.16), transparent 30%),
+          radial-gradient(circle at bottom, rgba(255, 72, 120, 0.14), transparent 30%),
+          #090b12;
+      }
+
+      #app {
+        width: 100vw;
+        height: 100vh;
+      }
+
+      .hud {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        z-index: 2;
+        padding: 12px 14px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(10, 12, 20, 0.76);
+        backdrop-filter: blur(10px);
+      }
+
+      .hud h1,
+      .hud p {
+        margin: 0;
+      }
+
+      .hud p {
+        margin-top: 6px;
+        font-size: 12px;
+        opacity: 0.75;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="hud">
+      <h1>Tempo</h1>
+      <p>Scaffold build: client shell only</p>
+    </div>
+    <div id="app"></div>
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>
