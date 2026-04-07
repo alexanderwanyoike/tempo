@@ -1,29 +1,23 @@
 import { MathUtils, Vector3 } from "three";
 import type { VehicleInputState } from "./input";
-import type { TrackQuery } from "./track-builder";
+import type { TestTrack, TrackFrame, TrackQuery } from "./track-builder";
+
+const GRAVITY = 35;
+const HALF_WIDTH = 15;
 
 export type TrackQueryFn = (position: Vector3, hintU?: number) => TrackQuery;
-export type RespawnFn = (u: number) => { position: Vector3; yaw: number };
-
-const HALF_WIDTH = 15; // must match track-builder TRACK_WIDTH / 2
 
 export type VehicleTuning = {
   hoverHeight: number;
-
   thrust: number;
   topSpeed: number;
   dragCoefficient: number;
-
   steeringRate: number;
   steeringResponse: number;
-
   lateralGrip: number;
-
   airbrakeYawBoost: number;
   airbrakeDrag: number;
-
   brakeForce: number;
-
   visualHoverAmplitude: number;
   visualHoverFrequency: number;
   visualBankAngle: number;
@@ -31,11 +25,23 @@ export type VehicleTuning = {
 };
 
 export type VehicleState = {
-  position: Vector3;
-  velocity: Vector3;
-  forwardSpeed: number;
+  // Track-relative (physics truth)
+  trackU: number;
   speed: number;
-  yaw: number;
+  lateralOffset: number;
+  lateralVelocity: number;
+
+  // Derived world-space (for rendering)
+  position: Vector3;
+  forward: Vector3;
+  right: Vector3;
+  up: Vector3;
+
+  // Airborne
+  airborne: boolean;
+  worldVelocity: Vector3;
+
+  // Visual/input
   steering: number;
   visualHoverOffset: number;
   visualBank: number;
@@ -45,21 +51,15 @@ export type VehicleState = {
 
 export const defaultVehicleTuning: VehicleTuning = {
   hoverHeight: 0.45,
-
   thrust: 120,
   topSpeed: 90,
   dragCoefficient: 1.3,
-
-  steeringRate: 2.8,
+  steeringRate: 45,
   steeringResponse: 12,
-
-  lateralGrip: 4.0,
-
-  airbrakeYawBoost: 2.2,
+  lateralGrip: 5.0,
+  airbrakeYawBoost: 30,
   airbrakeDrag: 0.4,
-
   brakeForce: 35,
-
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
   visualBankAngle: 0.45,
@@ -68,11 +68,16 @@ export const defaultVehicleTuning: VehicleTuning = {
 
 export class VehicleController {
   readonly state: VehicleState = {
-    position: new Vector3(0, defaultVehicleTuning.hoverHeight, 0),
-    velocity: new Vector3(),
-    forwardSpeed: 0,
+    trackU: 0.001,
     speed: 0,
-    yaw: 0,
+    lateralOffset: 0,
+    lateralVelocity: 0,
+    position: new Vector3(),
+    forward: new Vector3(0, 0, -1),
+    right: new Vector3(1, 0, 0),
+    up: new Vector3(0, 1, 0),
+    airborne: false,
+    worldVelocity: new Vector3(),
     steering: 0,
     visualHoverOffset: 0,
     visualBank: 0,
@@ -80,209 +85,188 @@ export class VehicleController {
     boostMultiplier: 1,
   };
 
+  lastSafeU = 0.001;
   private elapsedTime = 0;
-  private trackQuery: TrackQueryFn | null = null;
-  private respawnFn: RespawnFn | null = null;
-  lastSafeU = 0;
-  private airborne = false;
-  private verticalVelocity = 0;
-  private lastTrackY = 0;
-  private landingCooldown = 0;
+  private track: TestTrack | null = null;
+  private trackQueryFn: TrackQueryFn | null = null;
 
   constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
 
-  setTrackQuery(fn: TrackQueryFn): void {
-    this.trackQuery = fn;
+  setTrack(track: TestTrack): void {
+    this.track = track;
   }
 
-  setRespawnFn(fn: RespawnFn): void {
-    this.respawnFn = fn;
+  setTrackQuery(fn: TrackQueryFn): void {
+    this.trackQueryFn = fn;
   }
 
   update(deltaSeconds: number, input: VehicleInputState): void {
     const dt = Math.min(deltaSeconds, 1 / 30);
-    const t = this.tuning;
-    const s = this.state;
+    if (!this.track) return;
 
-    // 1. Steering input smoothing
+    const s = this.state;
+    const t = this.tuning;
+
+    if (s.airborne) {
+      this.updateAirborne(dt);
+      this.updateVisuals(dt, input);
+      return;
+    }
+
+    // 1. Steering
     const steerTarget = (input.steerRight ? 1 : 0) - (input.steerLeft ? 1 : 0);
     s.steering = MathUtils.damp(s.steering, steerTarget, t.steeringResponse, dt);
 
-    // 2. Speed-dependent steering: full at low speed, reduced at high speed
-    const currentSpeed = s.velocity.length();
-    const speedRatio = Math.min(currentSpeed / t.topSpeed, 1);
+    const absSpeed = Math.abs(s.speed);
+    const speedRatio = Math.min(absSpeed / t.topSpeed, 1);
     const steeringPower = MathUtils.lerp(1.0, 0.35, speedRatio);
 
-    // 3. Airbrake yaw boost
-    const airbrakeInput = (input.airbrakeLeft ? -1 : 0) + (input.airbrakeRight ? 1 : 0);
-    const isAirbraking = input.airbrakeLeft || input.airbrakeRight;
+    // 2. Steering -> lateral velocity
+    s.lateralVelocity += s.steering * t.steeringRate * steeringPower * dt;
 
-    let yawRate = s.steering * t.steeringRate * steeringPower;
-    if (isAirbraking) {
-      yawRate += airbrakeInput * t.airbrakeYawBoost;
+    // 3. Airbrakes
+    const abInput = (input.airbrakeLeft ? -1 : 0) + (input.airbrakeRight ? 1 : 0);
+    if (abInput !== 0) {
+      s.lateralVelocity += abInput * t.airbrakeYawBoost * dt;
+      s.speed *= Math.max(0, 1 - t.airbrakeDrag * dt);
     }
-    s.yaw -= yawRate * dt;
 
-    // 4. Heading vector
-    const forward = new Vector3(-Math.sin(s.yaw), 0, -Math.cos(s.yaw));
-
-    // 5. Thrust along heading
+    // 4. Thrust
     if (input.throttle) {
-      s.velocity.addScaledVector(forward, t.thrust * s.boostMultiplier * dt);
+      s.speed += t.thrust * s.boostMultiplier * dt;
     }
 
-    // 6. Drag (speed-proportional, creates natural terminal velocity)
-    let totalDrag = t.dragCoefficient;
-    if (isAirbraking) {
-      totalDrag += t.airbrakeDrag;
+    // 5. Brake
+    if (input.brake && absSpeed > 0.01) {
+      s.speed -= Math.sign(s.speed) * Math.min(t.brakeForce * dt, absSpeed);
     }
-    const dragFactor = Math.max(0, 1 - totalDrag * dt);
-    s.velocity.multiplyScalar(dragFactor);
 
-    // 7. Lateral grip - THE KEY CHANGE
-    // Decompose velocity into forward and lateral components
-    const forwardDot = s.velocity.dot(forward);
-    const forwardComponent = forward.clone().multiplyScalar(forwardDot);
-    const lateralComponent = s.velocity.clone().sub(forwardComponent);
+    // 6. Drag
+    let drag = t.dragCoefficient;
+    if (abInput !== 0) drag += t.airbrakeDrag;
+    s.speed *= Math.max(0, 1 - drag * dt);
 
-    // Dampen lateral component - creates drift/carve feel
-    const gripFactor = Math.max(0, 1 - t.lateralGrip * dt);
-    lateralComponent.multiplyScalar(gripFactor);
+    // 7. Gravity along tangent
+    const frame = this.track.getFrameAt(s.trackU);
+    s.speed += GRAVITY * (-frame.tangent.y) * dt;
 
-    // Reconstruct velocity
-    s.velocity.copy(forwardComponent).add(lateralComponent);
+    // 8. Lateral grip
+    s.lateralVelocity *= Math.max(0, 1 - t.lateralGrip * dt);
 
-    // 8. Brake along actual velocity direction
-    if (input.brake) {
-      const speed = s.velocity.length();
-      if (speed > 0.01) {
-        const reduction = Math.min(t.brakeForce * dt, speed);
-        s.velocity.addScaledVector(s.velocity.clone().normalize(), -reduction);
+    // 9. Advance along track
+    s.trackU += (s.speed * dt) / this.track.totalLength;
+    s.trackU = MathUtils.clamp(s.trackU, 0.001, 0.999);
+
+    // 10. Advance lateral
+    s.lateralOffset += s.lateralVelocity * dt;
+
+    // 11. Wall collision
+    const boundary = HALF_WIDTH - 1.0;
+    if (Math.abs(s.lateralOffset) > boundary) {
+      s.lateralOffset = MathUtils.clamp(s.lateralOffset, -boundary, boundary);
+      if (Math.sign(s.lateralVelocity) === Math.sign(s.lateralOffset)) {
+        s.lateralVelocity *= -0.15;
+        s.speed *= 0.85;
       }
     }
 
-    // 9. Integrate position
-    s.position.addScaledVector(s.velocity, dt);
+    // 12. Clamp near-zero
+    if (Math.abs(s.speed) < 0.05) s.speed = 0;
+    if (Math.abs(s.lateralVelocity) < 0.01) s.lateralVelocity = 0;
 
-    // 9b. Track interaction: physics-based surface follow, jumps, walls, respawn
-    if (this.trackQuery) {
-      // Local search using last known u to prevent snapping to wrong segment
-      const query = this.trackQuery(s.position, this.lastSafeU);
-      const trackSurfaceY = query.center.y + t.hoverHeight;
-      const GRAVITY = 35;
+    // 13. Derive world position
+    this.deriveWorldState();
+    this.lastSafeU = s.trackU;
 
-      if (this.airborne) {
-        // In the air: gravity pulls down
-        this.verticalVelocity -= GRAVITY * dt;
-        s.position.y += this.verticalVelocity * dt;
+    // 14. Visuals
+    this.updateVisuals(dt, input);
+  }
 
-        // Land when we drop to track surface (and falling)
-        if (s.position.y <= trackSurfaceY && this.verticalVelocity <= 0 &&
-            Math.abs(query.lateralOffset) < HALF_WIDTH) {
-          this.airborne = false;
-          this.verticalVelocity = 0;
-          s.position.y = trackSurfaceY;
-          this.lastTrackY = trackSurfaceY;
-          this.landingCooldown = 0.4; // prevent re-launch on downhill
-          this.lastSafeU = query.u;
-        }
-      } else {
-        // Tick down landing cooldown
-        if (this.landingCooldown > 0) {
-          this.landingCooldown -= dt;
-        }
+  private deriveWorldState(): void {
+    const s = this.state;
+    if (!this.track) return;
+    const frame = this.track.getFrameAt(s.trackU);
+    const center = this.track.getPointAt(s.trackU);
 
-        // On track: compute how fast the surface rises/falls under us
-        const surfaceDelta = trackSurfaceY - this.lastTrackY;
-        const surfaceVelocity = surfaceDelta / Math.max(dt, 0.001);
+    s.position.copy(center);
+    s.position.addScaledVector(frame.right, s.lateralOffset);
+    s.position.addScaledVector(frame.up, this.tuning.hoverHeight);
 
-        // Go airborne if surface drops away sharply (and not in cooldown)
-        if (surfaceVelocity < -15 && s.speed > 15 && this.landingCooldown <= 0) {
-          this.airborne = true;
-          this.verticalVelocity = Math.max(-surfaceVelocity * 0.3, 5);
-        } else {
-          // Stick to surface - physics Y is exact, no bob
-          s.position.y = trackSurfaceY;
-          this.lastSafeU = query.u;
-        }
+    s.forward.copy(frame.tangent);
+    s.right.copy(frame.right);
+    s.up.copy(frame.up);
+  }
 
-        // Wall collision (only when grounded)
-        const boundary = 14.0;
-        if (query.hasWalls) {
-          const penetration = Math.abs(query.lateralOffset) - boundary;
-          if (penetration > 0) {
-            const pushDir = query.lateralOffset > 0 ? -1 : 1;
-            s.position.addScaledVector(query.right, pushDir * penetration);
+  private updateAirborne(dt: number): void {
+    const s = this.state;
+    if (!this.track || !this.trackQueryFn) return;
 
-            const wallNormal = query.right.clone().multiplyScalar(pushDir);
-            const velIntoWall = s.velocity.dot(wallNormal);
-            if (velIntoWall < 0) {
-              s.velocity.addScaledVector(wallNormal, -velIntoWall);
-              s.velocity.multiplyScalar(0.85);
-            }
-          }
-        }
-      }
+    s.worldVelocity.y -= GRAVITY * dt;
+    s.worldVelocity.multiplyScalar(Math.max(0, 1 - 0.2 * dt));
+    s.position.addScaledVector(s.worldVelocity, dt);
 
-      this.lastTrackY = trackSurfaceY;
+    s.speed = s.worldVelocity.length();
 
-      // Fall-off: too far below track or way off to the side
-      const tooFarBelow = s.position.y < query.center.y - 30;
-      const tooFarAway = Math.abs(query.lateralOffset) > HALF_WIDTH * 3;
+    // Try to reattach to track
+    const query = this.trackQueryFn(s.position, this.lastSafeU);
+    const frame = this.track.getFrameAt(query.u);
+    const surfacePos = query.center.clone()
+      .addScaledVector(frame.up, this.tuning.hoverHeight);
+    const dist = s.position.clone().sub(surfacePos).dot(frame.up);
+    const velToward = -s.worldVelocity.dot(frame.up);
 
-      if ((tooFarBelow || tooFarAway) && this.respawnFn) {
-        const spawn = this.respawnFn(this.lastSafeU);
-        s.position.copy(spawn.position);
-        s.yaw = spawn.yaw;
-        s.velocity.set(0, 0, 0);
-        s.speed = 0;
-        s.forwardSpeed = 0;
-        this.airborne = false;
-        this.verticalVelocity = 0;
-        this.landingCooldown = 0;
-      }
+    if (Math.abs(dist) < 2.0 && velToward > 0 && Math.abs(query.lateralOffset) < HALF_WIDTH) {
+      s.airborne = false;
+      s.trackU = query.u;
+      s.lateralOffset = query.lateralOffset;
+      s.speed = s.worldVelocity.dot(frame.tangent);
+      s.lateralVelocity = s.worldVelocity.dot(frame.right);
+      this.lastSafeU = query.u;
+      this.deriveWorldState();
+      return;
     }
 
-    // 10. Derive speed values
-    s.forwardSpeed = s.velocity.dot(forward);
-    s.speed = s.velocity.length();
-
-    // 11. Clamp near-zero to prevent infinite micro-drift
-    if (s.speed < 0.05) {
-      s.velocity.set(0, 0, 0);
+    // Fall-off respawn
+    if (s.position.y < query.center.y - 40 || Math.abs(query.lateralOffset) > HALF_WIDTH * 4) {
+      s.trackU = this.lastSafeU;
       s.speed = 0;
-      s.forwardSpeed = 0;
+      s.lateralVelocity = 0;
+      s.lateralOffset = 0;
+      s.airborne = false;
+      s.worldVelocity.set(0, 0, 0);
+      this.deriveWorldState();
     }
 
-    // 12. Visual effects
+    // Update orientation for airborne (roughly follow velocity)
+    if (s.worldVelocity.length() > 1) {
+      s.forward.copy(s.worldVelocity).normalize();
+      const tempR = new Vector3().crossVectors(s.forward, new Vector3(0, 1, 0));
+      if (tempR.length() > 0.1) {
+        s.right.copy(tempR.normalize());
+        s.up.crossVectors(s.right, s.forward).normalize();
+      }
+    }
+  }
+
+  private updateVisuals(dt: number, input: VehicleInputState): void {
+    const s = this.state;
+    const t = this.tuning;
     this.elapsedTime += dt;
-    const visualSpeedRatio = Math.min(s.speed / t.topSpeed, 1);
 
-    // Hover bob fades out at high speed to prevent shaking
-    const bobScale = 1 - visualSpeedRatio * 0.85;
-    s.visualHoverOffset =
-      Math.sin(this.elapsedTime * t.visualHoverFrequency) *
-      t.visualHoverAmplitude *
-      bobScale;
+    const absSpeed = Math.abs(s.speed);
+    const vsr = Math.min(absSpeed / t.topSpeed, 1);
 
-    // Bank: blend steering and airbrake input
-    const totalBankInput = s.steering + (isAirbraking ? airbrakeInput * 0.6 : 0);
-    s.visualBank =
-      -MathUtils.clamp(totalBankInput, -1.3, 1.3) *
-      t.visualBankAngle *
-      (0.4 + visualSpeedRatio);
+    const bobScale = 1 - vsr * 0.85;
+    s.visualHoverOffset = Math.sin(this.elapsedTime * t.visualHoverFrequency) * t.visualHoverAmplitude * bobScale;
+
+    const abInput = (input.airbrakeLeft ? -1 : 0) + (input.airbrakeRight ? 1 : 0);
+    const isAB = input.airbrakeLeft || input.airbrakeRight;
+    const bankInput = s.steering + (isAB ? abInput * 0.6 : 0);
+    s.visualBank = -MathUtils.clamp(bankInput, -1.3, 1.3) * t.visualBankAngle * (0.4 + vsr);
 
     s.visualPitch = MathUtils.clamp(
-      ((input.throttle ? -1 : 0) + (input.brake ? 1 : 0)) *
-        t.visualPitchAngle *
-        (0.35 + visualSpeedRatio * 0.65),
-      -t.visualPitchAngle,
-      t.visualPitchAngle,
+      ((input.throttle ? -1 : 0) + (input.brake ? 1 : 0)) * t.visualPitchAngle * (0.35 + vsr * 0.65),
+      -t.visualPitchAngle, t.visualPitchAngle,
     );
-
-    // 13. Lock Y to hover height (fallback when no track query)
-    if (!this.trackQuery) {
-      s.position.y = t.hoverHeight;
-    }
   }
 }
