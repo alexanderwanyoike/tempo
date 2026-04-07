@@ -134,14 +134,16 @@ export class App {
   private updateCamera(): void {
     const state = this.vehicleController.state;
     const forward = new Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw));
+    const right = new Vector3().crossVectors(forward, new Vector3(0, 1, 0)).normalize();
     const targetPosition = state.position
       .clone()
-      .addScaledVector(forward, -6.8)
-      .add(new Vector3(0, 2.6, 0));
-    const lookTarget = state.position.clone().addScaledVector(forward, 10).add(new Vector3(0, 0.8, 0));
+      .addScaledVector(forward, -8.5)
+      .addScaledVector(right, 0)
+      .add(new Vector3(0, 3.4, 0));
+    const lookTarget = state.position.clone().addScaledVector(forward, 12).add(new Vector3(0, 1.1, 0));
 
-    this.camera.position.lerp(targetPosition, 0.08);
-    this.camera.lookAt(lookTarget);
+    this.camera.position.lerp(targetPosition, 0.12);
+    this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
   }
 
   private render = (time: number): void => {

@@ -7,10 +7,11 @@ export type VehicleTuning = {
   acceleration: number;
   drag: number;
   brakeDrag: number;
+  minSteerSpeedRatio: number;
   steeringRate: number;
   steeringResponse: number;
-  lateralGrip: number;
-  lateralGripAtSpeed: number;
+  driftFactor: number;
+  driftCorrection: number;
   visualHoverAmplitude: number;
   visualHoverFrequency: number;
   visualBankAngle: number;
@@ -34,10 +35,11 @@ export const defaultVehicleTuning: VehicleTuning = {
   acceleration: 22,
   drag: 5,
   brakeDrag: 12,
+  minSteerSpeedRatio: 0.2,
   steeringRate: 1.45,
   steeringResponse: 7,
-  lateralGrip: 16,
-  lateralGripAtSpeed: 6,
+  driftFactor: 0.12,
+  driftCorrection: 10,
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
   visualBankAngle: 0.28,
@@ -77,7 +79,6 @@ export class VehicleController {
     const right = new Vector3().crossVectors(forward, UP).normalize();
 
     const forwardSpeed = this.state.velocity.dot(forward);
-    const lateralSpeed = this.state.velocity.dot(right);
     const throttleForce = input.throttle ? this.tuning.acceleration : 0;
     const drag = input.brake ? this.tuning.brakeDrag : this.tuning.drag;
     const nextForwardSpeed = MathUtils.clamp(
@@ -87,19 +88,22 @@ export class VehicleController {
     );
 
     const speedRatio = MathUtils.clamp(nextForwardSpeed / this.tuning.maxForwardSpeed, 0, 1);
-    const steeringPower = MathUtils.lerp(0.6, 1, speedRatio);
+    const steeringPower = MathUtils.lerp(this.tuning.minSteerSpeedRatio, 1, speedRatio);
     const yawDelta = this.state.steering * this.tuning.steeringRate * steeringPower * dt;
     this.state.yaw += yawDelta;
 
-    const lateralGrip = MathUtils.lerp(
-      this.tuning.lateralGrip,
-      this.tuning.lateralGripAtSpeed,
-      speedRatio,
-    );
-    const nextLateralSpeed = MathUtils.damp(lateralSpeed, 0, lateralGrip, dt);
-
     forward.set(Math.sin(this.state.yaw), 0, -Math.cos(this.state.yaw));
     right.crossVectors(forward, UP).normalize();
+
+    const desiredLateralSpeed =
+      this.state.steering * nextForwardSpeed * this.tuning.driftFactor * speedRatio;
+    const currentLateralSpeed = this.state.velocity.dot(right);
+    const nextLateralSpeed = MathUtils.damp(
+      currentLateralSpeed,
+      desiredLateralSpeed,
+      this.tuning.driftCorrection,
+      dt,
+    );
 
     this.state.velocity
       .copy(forward)
