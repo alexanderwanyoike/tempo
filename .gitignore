@@ -11,3 +11,5 @@ coverage/
 *.log
 .netlify/
 .railway/
+package-lock.json
+tsconfig.tsbuildinfo

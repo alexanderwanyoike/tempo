@@ -4,6 +4,7 @@ import {
   Color,
   DirectionalLight,
   Group,
+  MathUtils,
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
@@ -152,25 +153,57 @@ export class App {
 
     this.carRoot.position.copy(state.position);
     this.carRoot.rotation.set(0, state.yaw, 0, "XYZ");
-    this.carBody.rotation.set(state.visualPitch, 0, state.visualBank, "XYZ");
+    const visualYaw = -state.steering * 0.15 * (0.3 + Math.min(state.speed / 32, 1) * 0.7);
+    this.carBody.rotation.set(state.visualPitch, visualYaw, state.visualBank, "XYZ");
   }
 
   private updateCamera(): void {
     const state = this.vehicleController.state;
-    const desiredForward = new Vector3(Math.sin(state.yaw), 0, -Math.cos(state.yaw)).normalize();
-    this.cameraForward.lerp(desiredForward, 0.08).normalize();
+    const speed = state.speed;
+
+    // Heading direction (where the ship points)
+    const headingDir = new Vector3(-Math.sin(state.yaw), 0, -Math.cos(state.yaw));
+
+    // Velocity direction (where the ship is actually going)
+    let velocityDir: Vector3;
+    if (speed > 1.0) {
+      velocityDir = state.velocity.clone();
+      velocityDir.y = 0;
+      velocityDir.normalize();
+    } else {
+      velocityDir = headingDir.clone();
+    }
+
+    // Camera follows VELOCITY primarily, not heading.
+    // This means when the car yaws into a turn, the camera stays aligned
+    // with the travel direction and you SEE the car rotated on screen.
+    const speedRatio = Math.min(speed / 32, 1);
+    const velocityBias = MathUtils.clamp(speedRatio, 0, 0.75);
+    const desiredForward = headingDir.clone().lerp(velocityDir, velocityBias).normalize();
+
+    // Smooth camera direction - moderate pace so turns are readable
+    this.cameraForward.lerp(desiredForward, 0.12).normalize();
+
+    // Speed-sensitive framing
+    const cameraBack = MathUtils.lerp(11, 14, speedRatio);
+    const cameraUp = MathUtils.lerp(4.5, 5.5, speedRatio);
+    const lookAhead = MathUtils.lerp(16, 22, speedRatio);
 
     const targetPosition = state.position
       .clone()
-      .addScaledVector(this.cameraForward, -12)
-      .add(new Vector3(0, 4.8, 0));
+      .addScaledVector(this.cameraForward, -cameraBack)
+      .add(new Vector3(0, cameraUp, 0));
     const lookTarget = state.position
       .clone()
-      .addScaledVector(this.cameraForward, 18)
+      .addScaledVector(this.cameraForward, lookAhead)
       .add(new Vector3(0, 1.1, 0));
 
-    this.camera.position.lerp(targetPosition, 0.12);
+    this.camera.position.lerp(targetPosition, 0.15);
     this.camera.lookAt(lookTarget.x, state.position.y + 0.9, lookTarget.z);
+
+    // Speed-based FOV
+    this.camera.fov = MathUtils.lerp(70, 78, speedRatio * speedRatio);
+    this.camera.updateProjectionMatrix();
   }
 
   private render = (time: number): void => {
