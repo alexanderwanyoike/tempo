@@ -49,29 +49,29 @@ def click_track_120bpm(fixtures_dir: str) -> str:
 
 @pytest.fixture(scope="session")
 def loud_quiet_loud(fixtures_dir: str) -> str:
-    """10-second WAV: 3 s loud white noise, 4 s near-silence, 3 s loud noise.
+    """30-second WAV: 10 s loud white noise, 10 s near-silence, 10 s loud noise.
 
-    Useful for drop-detection tests: the transition from quiet back to loud
-    around the 7 s mark should register as a drop.
+    Sections are long enough for boundary detection (min 5s sections).
+    The transition from quiet back to loud around 20 s should register as a drop.
     """
     rng = np.random.default_rng(42)
-    duration = 10.0
+    duration = 30.0
     n = int(duration * _SR)
     y = np.zeros(n, dtype=np.float32)
 
     loud_amp = 0.8
     quiet_amp = 0.02
 
-    # 0-3 s loud
-    seg1_end = int(3.0 * _SR)
+    # 0-10 s loud
+    seg1_end = int(10.0 * _SR)
     y[:seg1_end] = (rng.standard_normal(seg1_end) * loud_amp).astype(np.float32)
 
-    # 3-7 s quiet
+    # 10-20 s quiet
     seg2_start = seg1_end
-    seg2_end = int(7.0 * _SR)
+    seg2_end = int(20.0 * _SR)
     y[seg2_start:seg2_end] = (rng.standard_normal(seg2_end - seg2_start) * quiet_amp).astype(np.float32)
 
-    # 7-10 s loud
+    # 20-30 s loud
     seg3_start = seg2_end
     y[seg3_start:] = (rng.standard_normal(n - seg3_start) * loud_amp).astype(np.float32)
 

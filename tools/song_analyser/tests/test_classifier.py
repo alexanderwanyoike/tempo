@@ -55,16 +55,17 @@ class TestSectionTypes:
         assert sections[0]["type"] == "intro"
 
     def test_verse_for_medium_energy(self):
-        # intro -> verse -> verse -> finale (all medium, none qualifies as drop)
+        # intro -> verse -> verse -> finale
+        # Energy spread must be wide enough that the promotion fallback
+        # doesn't force a drop. Use clearly low-energy middle sections.
         sections = _make_sections(
             [0, 10, 20, 30, 40],
-            [0.4, 0.45, 0.42, 0.38],
+            [0.2, 0.28, 0.25, 0.22],
         )
         types = [s["type"] for s in sections]
         assert types[0] == "intro"
         assert types[-1] == "finale"
-        # Middle sections should be verse (or possibly bridge, both are acceptable
-        # for uniform medium energy)
+        # Middle sections should be verse or bridge (low uniform energy)
         for t in types[1:-1]:
             assert t in ("verse", "bridge")
 

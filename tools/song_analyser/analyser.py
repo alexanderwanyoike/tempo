@@ -68,8 +68,9 @@ def analyse_song(path: str, bpm_override: float | None = None) -> dict:
     # Section boundaries ----------------------------------------------------
     boundaries = _detect_boundaries(energy_curve, energy_times, duration)
 
-    # Per-section average energies ------------------------------------------
+    # Per-section average energies (stretched for dynamic range) -------------
     boundary_energies = _section_averages(boundaries, energy_curve, energy_times)
+    boundary_energies = _stretch_energies(boundary_energies)
     boundary_onsets = _section_averages(boundaries, onset_density, onset_times)
 
     # Drop markers ----------------------------------------------------------
@@ -140,6 +141,25 @@ def _section_averages(
         else:
             averages.append(0.0)
     return averages
+
+
+def _stretch_energies(
+    energies: list[float], lo: float = 0.15, hi: float = 0.95
+) -> list[float]:
+    """Remap section energies so the range spans [lo, hi].
+
+    Ensures songs with compressed dynamic range (e.g., consistently loud EDM)
+    still produce meaningfully different section energies.
+    """
+    if len(energies) < 2:
+        return energies
+    e_min = min(energies)
+    e_max = max(energies)
+    span = e_max - e_min
+    if span < 0.01:
+        mid = (lo + hi) / 2
+        return [mid] * len(energies)
+    return [lo + (e - e_min) / span * (hi - lo) for e in energies]
 
 
 def _detect_drops(boundaries: list[float], energies: list[float]) -> list[float]:
