@@ -1,14 +1,19 @@
 import {
+  BoxGeometry,
   CatmullRomCurve3,
   Group,
   MathUtils as TMath,
+  Matrix4,
+  Mesh,
+  MeshStandardMaterial,
   Vector3,
 } from "three";
 import type { SongDefinition } from "../../../shared/song-schema";
 import type { ChunkType } from "./chunks";
 import { chunkFns, type ChunkParams } from "./chunks";
 import { mulberry32 } from "./prng";
-import type { Track, TrackFrame, TrackQuery } from "./track-builder";
+import { pickChunkForSection, scaleChunkParams } from "./section-rules";
+import type { Track, TrackFrame, TrackObject, TrackQuery } from "./track-builder";
 import {
   buildCenterLineMesh,
   buildRoadMesh,
@@ -17,14 +22,25 @@ import {
   type FrameTable,
 } from "./track-mesh";
 
-/** Average race speed for track length calculation (m/s). */
-const BASE_SPEED = 55;
+/** Average race speed for track length calculation (m/s).
+ *  This controls track LENGTH. Higher = longer track.
+ *  Firestarter calibration target is a manual full-throttle run with corrections. */
+const BASE_SPEED = 91;
+
+/** Base top speed of the vehicle (m/s). */
+const BASE_TOP_SPEED = 90;
 
 /** Default chunk length range (meters). */
-const MIN_CHUNK_LENGTH = 80;
-const MAX_CHUNK_LENGTH = 200;
+const MIN_CHUNK_LENGTH = 70;
+const MAX_CHUNK_LENGTH = 150;
+const MIN_LOOP_CHUNK_LENGTH = 220;
 
-const HALF_WIDTH = 15;
+const HALF_WIDTH = 11;
+const GATE_LANE_FRACTIONS = [-0.62, 0, 0.62] as const;
+const BOOST_COLLISION_HALF_WIDTH = 1.7;
+const BOOST_COLLISION_LENGTH = 7.5;
+const OBSTACLE_COLLISION_HALF_WIDTH = 1.8;
+const OBSTACLE_COLLISION_LENGTH = 4.0;
 
 export interface SectionBoundary {
   u: number;
@@ -39,6 +55,8 @@ export class TrackGenerator implements Track {
   readonly sectionBoundaries: SectionBoundary[] = [];
 
   private readonly frames: FrameTable;
+  private readonly halfWidthSamples: number[];
+  private readonly trackObjects: TrackObject[];
   private readonly sampleCount: number;
 
   constructor(
@@ -55,13 +73,16 @@ export class TrackGenerator implements Track {
     // Scale samples with track length: ~1 sample per 2m
     this.sampleCount = Math.max(800, Math.ceil(this.totalLength / 2));
     this.frames = computeParallelTransportFrames(this.centerline, this.sampleCount);
+    this.halfWidthSamples = this.frames.samples.map((_, i) => this.getHalfWidthAt(i / this.sampleCount));
+    this.trackObjects = this.generateTrackObjects(seed);
 
     // Build meshes (section-aware walls)
     this.meshGroup = new Group();
-    this.meshGroup.add(buildRoadMesh(this.frames, HALF_WIDTH));
-    this.meshGroup.add(buildSectionWallMesh(this.frames, HALF_WIDTH, -1, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildSectionWallMesh(this.frames, HALF_WIDTH, 1, song.sections, this.sectionBoundaries));
+    this.meshGroup.add(buildRoadMesh(this.frames, this.halfWidthSamples));
+    this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, -1, song.sections, this.sectionBoundaries));
+    this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, 1, song.sections, this.sectionBoundaries));
     this.meshGroup.add(buildCenterLineMesh(this.frames));
+    this.meshGroup.add(this.buildTrackObjectMeshes());
   }
 
   private generateControlPoints(seed: number, targetLength: number): Vector3[] {
@@ -88,7 +109,7 @@ export class TrackGenerator implements Track {
 
       while (sectionUsed < sectionLength) {
         const remaining = sectionLength - sectionUsed;
-        const chunkLen = Math.min(
+        let chunkLen = Math.min(
           MIN_CHUNK_LENGTH + rng() * (MAX_CHUNK_LENGTH - MIN_CHUNK_LENGTH),
           remaining,
         );
@@ -96,12 +117,15 @@ export class TrackGenerator implements Track {
         // Skip tiny leftover chunks
         if (chunkLen < MIN_CHUNK_LENGTH * 0.5 && sectionUsed > 0) break;
 
-        const chunkType = this.chunkPicker(section, rng, recentChunks);
-        const params: ChunkParams = {
-          energy: section.energy,
-          density: section.density,
-          trackWidth: HALF_WIDTH * 2,
-        };
+        let chunkType = this.chunkPicker(section, rng, recentChunks);
+        if (chunkType === "loop" && remaining < MIN_LOOP_CHUNK_LENGTH) {
+          chunkType = this.chunkPicker(section, rng, [...recentChunks, "loop"]);
+        }
+        if (chunkType === "loop") {
+          chunkLen = Math.max(chunkLen, MIN_LOOP_CHUNK_LENGTH);
+          chunkLen = Math.min(chunkLen, remaining);
+        }
+        const params: ChunkParams = scaleChunkParams(section);
 
         const chunkFn = chunkFns[chunkType];
         const result = chunkFn(currentPos, currentTangent, chunkLen, rng, params);
@@ -120,7 +144,7 @@ export class TrackGenerator implements Track {
           const correctionLength = MIN_CHUNK_LENGTH;
           const correctedTangent = new Vector3(
             currentTangent.x * 0.3,
-            currentTangent.y * 0.5,
+            0,
             -Math.abs(currentTangent.z) - 0.7,
           ).normalize();
           const correctionEnd = currentPos.clone().addScaledVector(correctedTangent, correctionLength);
@@ -128,12 +152,13 @@ export class TrackGenerator implements Track {
           currentPos = correctionEnd;
           currentTangent = correctedTangent;
           sectionUsed += correctionLength;
+          usedLength += correctionLength;
         }
 
         sectionUsed += chunkLen;
         usedLength += chunkLen;
         recentChunks.push(chunkType);
-        if (recentChunks.length > 3) recentChunks.shift();
+        if (recentChunks.length > 5) recentChunks.shift();
       }
     }
 
@@ -184,29 +209,95 @@ export class TrackGenerator implements Track {
   }
 
   getHalfWidthAt(u: number): number {
-    const section = this.getSectionAt(u);
-    if (!section) return HALF_WIDTH;
-    // Build: narrows. Drop: narrow then wide. Breakdown: full width.
-    switch (section.type) {
-      case "build":
-        return TMath.lerp(HALF_WIDTH, 11, section.energy);
-      case "drop":
-        return TMath.lerp(11, HALF_WIDTH, Math.min(1, section.energy * 1.2));
-      case "breakdown":
-        return HALF_WIDTH;
-      default:
-        return TMath.lerp(HALF_WIDTH, 11, section.energy * 0.3);
+    const baseWidthAt = (sectionIndex: number): number => {
+      const section = this.song.sections[sectionIndex];
+      if (!section) return HALF_WIDTH;
+      switch (section.type) {
+        case "intro":
+          return TMath.lerp(HALF_WIDTH, 10.25, section.energy * 0.35);
+        case "verse":
+          return TMath.lerp(9.5, 8.5, section.energy);
+        case "build":
+          return TMath.lerp(8.75, 7.75, section.energy);
+        case "drop":
+          return TMath.lerp(8.25, 7.25, section.energy);
+        case "bridge":
+          return TMath.lerp(10, 9, section.energy * 0.6);
+        case "breakdown":
+          return TMath.lerp(10.25, 9.25, section.energy * 0.4);
+        case "finale":
+          return TMath.lerp(8.5, 7.25, section.energy);
+        default:
+          return HALF_WIDTH;
+      }
+    };
+
+    let sectionIndex = 0;
+    for (let i = this.sectionBoundaries.length - 1; i >= 0; i--) {
+      if (u >= this.sectionBoundaries[i].u) {
+        sectionIndex = this.sectionBoundaries[i].sectionIndex;
+        break;
+      }
     }
+
+    let width = baseWidthAt(sectionIndex);
+    const transitionWindow = 0.012;
+    let prevBoundary: SectionBoundary | undefined;
+    for (let i = this.sectionBoundaries.length - 1; i >= 0; i--) {
+      const boundary = this.sectionBoundaries[i];
+      if (boundary.u < u) {
+        prevBoundary = boundary;
+        break;
+      }
+    }
+    if (prevBoundary && u - prevBoundary.u < transitionWindow) {
+      const blend = TMath.smoothstep((u - prevBoundary.u) / transitionWindow, 0, 1);
+      width = TMath.lerp(baseWidthAt(prevBoundary.sectionIndex), width, blend);
+    }
+
+    const nextBoundary = this.sectionBoundaries.find((boundary) => boundary.u > u);
+    if (nextBoundary && nextBoundary.u - u < transitionWindow) {
+      const blend = TMath.smoothstep((nextBoundary.u - u) / transitionWindow, 0, 1);
+      width = TMath.lerp(baseWidthAt(nextBoundary.sectionIndex), width, blend);
+    }
+
+    return width;
   }
 
   getBoostAt(u: number): number {
-    // Boost zones at drop markers: 1.5x in a small window around each marker
+    // Boost zones at drop markers: sustained thrust increase right after major song drops.
     const time = this.uToSongTime(u);
     for (const marker of this.song.dropMarkers) {
-      // Boost window: 1 second after drop marker
-      if (time >= marker && time < marker + 1.0) return 1.5;
+      if (time >= marker && time < marker + 1.8) return 1.7;
     }
     return 1.0;
+  }
+
+  getTopSpeedAt(u: number): number {
+    const section = this.getSectionAt(u);
+    if (!section) return BASE_TOP_SPEED;
+    switch (section.type) {
+      case "intro":
+        return TMath.lerp(72, 84, section.energy);
+      case "verse":
+        return TMath.lerp(80, 96, section.energy);
+      case "build":
+        return TMath.lerp(88, 108, section.energy);
+      case "drop":
+        return TMath.lerp(104, 132, section.energy);
+      case "bridge":
+        return TMath.lerp(76, 90, section.energy);
+      case "breakdown":
+        return TMath.lerp(74, 86, section.energy);
+      case "finale":
+        return TMath.lerp(106, 136, section.energy);
+      default:
+        return BASE_TOP_SPEED;
+    }
+  }
+
+  getTrackObjects(): readonly TrackObject[] {
+    return this.trackObjects;
   }
 
   private getSectionAt(u: number): SongSection | null {
@@ -292,6 +383,113 @@ export class TrackGenerator implements Track {
     return u * this.song.duration;
   }
 
+  private generateTrackObjects(seed: number): TrackObject[] {
+    const objects: TrackObject[] = [];
+    let lastGateU = -1;
+
+    for (let si = 0; si < this.song.sections.length; si++) {
+      const section = this.song.sections[si];
+      const rng = mulberry32(seed ^ (si * 15485863) ^ 0x6d2b79f5);
+      const sectionStartTime = Math.max(section.startTime + 2.5, 5);
+      const sectionEndTime = section.endTime - 2.2;
+      if (sectionEndTime <= sectionStartTime) continue;
+
+      const spacingSeconds = TMath.lerp(7.2, 4.2, section.energy);
+      let gateTime = sectionStartTime + rng() * Math.min(2.4, spacingSeconds * 0.5);
+
+      while (gateTime < sectionEndTime) {
+        const gateU = this.songTimeToU(gateTime);
+        if (gateU - lastGateU < 0.018) {
+          gateTime += 1.8;
+          continue;
+        }
+
+        const halfWidth = this.getHalfWidthAt(gateU);
+        const safeLane = rng() > 0.5 ? 2 : 0;
+
+        for (let laneIndex = 0; laneIndex < GATE_LANE_FRACTIONS.length; laneIndex++) {
+          const laneFraction = GATE_LANE_FRACTIONS[laneIndex];
+          const lateralOffset = halfWidth * laneFraction;
+          if (laneIndex === safeLane) {
+            objects.push({
+              id: `boost-${si}-${gateTime.toFixed(2)}-${laneIndex}`,
+              kind: "boost",
+              u: gateU,
+              lateralOffset,
+              collisionHalfWidth: Math.min(BOOST_COLLISION_HALF_WIDTH, halfWidth * 0.24),
+              collisionLength: BOOST_COLLISION_LENGTH,
+            });
+          } else {
+            objects.push({
+              id: `obstacle-${si}-${gateTime.toFixed(2)}-${laneIndex}`,
+              kind: "obstacle",
+              u: gateU,
+              lateralOffset,
+              collisionHalfWidth: Math.min(OBSTACLE_COLLISION_HALF_WIDTH, halfWidth * 0.26),
+              collisionLength: OBSTACLE_COLLISION_LENGTH,
+            });
+          }
+        }
+
+        if (section.type === "drop" || section.type === "finale" || section.type === "build") {
+          const followU = Math.min(0.995, gateU + 18 / this.totalLength);
+          objects.push({
+            id: `boost-follow-${si}-${gateTime.toFixed(2)}`,
+            kind: "boost",
+            u: followU,
+            lateralOffset: halfWidth * GATE_LANE_FRACTIONS[safeLane],
+            collisionHalfWidth: Math.min(BOOST_COLLISION_HALF_WIDTH, halfWidth * 0.24),
+            collisionLength: BOOST_COLLISION_LENGTH,
+          });
+        }
+
+        lastGateU = gateU;
+        gateTime += spacingSeconds * (0.8 + rng() * 0.45);
+      }
+    }
+
+    return objects;
+  }
+
+  private buildTrackObjectMeshes(): Group {
+    const group = new Group();
+    const orient = new Matrix4();
+    const boostGeo = new BoxGeometry(3.2, 0.18, 7.5);
+    const boostMat = new MeshStandardMaterial({
+      color: "#8bff56",
+      emissive: "#5dff1a",
+      emissiveIntensity: 1.8,
+      metalness: 0.2,
+      roughness: 0.35,
+    });
+    const obstacleGeo = new BoxGeometry(3.6, 2.6, 3.2);
+    const obstacleMat = new MeshStandardMaterial({
+      color: "#ff6b2c",
+      emissive: "#6f1900",
+      emissiveIntensity: 1.0,
+      metalness: 0.25,
+      roughness: 0.45,
+    });
+
+    for (const object of this.trackObjects) {
+      const frame = this.getFrameAt(object.u);
+      const center = this.getPointAt(object.u);
+      const mesh = new Mesh(
+        object.kind === "boost" ? boostGeo : obstacleGeo,
+        object.kind === "boost" ? boostMat : obstacleMat,
+      );
+      const lift = object.kind === "boost" ? 0.14 : 1.35;
+      mesh.position.copy(center);
+      mesh.position.addScaledVector(frame.right, object.lateralOffset);
+      mesh.position.addScaledVector(frame.up, lift);
+      orient.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
+      mesh.setRotationFromMatrix(orient);
+      group.add(mesh);
+    }
+
+    return group;
+  }
+
   private xzDistSq(a: Vector3, b: Vector3): number {
     const dx = a.x - b.x;
     const dz = a.z - b.z;
@@ -299,10 +497,9 @@ export class TrackGenerator implements Track {
   }
 }
 
-// ---- Chunk picker (default: simple alternation, replaced by P2-04 section-rules) ----
+// ---- Chunk picker ----
 
 import type { SongSection } from "../../../shared/song-schema";
-import { pickChunkForSection } from "./section-rules";
 
 export type ChunkPicker = (
   section: SongSection,

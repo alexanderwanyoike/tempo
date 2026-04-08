@@ -17,7 +17,7 @@ import type { ClientConfig } from "./config";
 import { VehicleInput } from "./input";
 import { MusicSync } from "./music-sync";
 import { loadSongDefinition } from "./song-loader";
-import type { Track } from "./track-builder";
+import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
@@ -31,8 +31,15 @@ export class App {
   private readonly input: VehicleInput;
   private readonly vehicleController: VehicleController;
   private readonly track: Track;
+  private readonly trackObjects: readonly TrackObject[];
   private readonly musicSync: MusicSync | null;
+  private readonly songDuration: number | null;
+  private readonly debugHud: HTMLDivElement | null;
+  private readonly statusOverlay: HTMLDivElement;
+  private readonly triggeredTrackObjects = new Set<string>();
   private lastFrameTime = 0;
+  private elapsedRaceTime = 0;
+  private raceState: "running" | "won" | "lost" = "running";
   private readonly orientMat = new Matrix4();
 
   static async create(
@@ -58,7 +65,8 @@ export class App {
       try {
         musicSync = new MusicSync();
         await musicSync.load(musicUrl);
-      } catch {
+      } catch (e) {
+        console.warn("Music load failed:", e);
         musicSync = null;
       }
     } catch {
@@ -66,7 +74,7 @@ export class App {
       track = new TestTrack();
     }
 
-    return new App(root, config, track, musicSync);
+    return new App(root, config, track, musicSync, song?.duration ?? null);
   }
 
   private constructor(
@@ -74,6 +82,7 @@ export class App {
     private readonly config: ClientConfig,
     track: Track,
     musicSync: MusicSync | null,
+    songDuration: number | null,
   ) {
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -116,8 +125,12 @@ export class App {
     this.input = new VehicleInput();
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.musicSync = musicSync;
+    this.songDuration = songDuration;
+    this.debugHud = this.createDebugHud();
+    this.statusOverlay = this.createStatusOverlay();
 
     this.track = track;
+    this.trackObjects = this.track.getTrackObjects();
     this.scene.add(this.track.meshGroup);
 
     this.vehicleController.setTrack(this.track);
@@ -131,6 +144,8 @@ export class App {
 
   start(): void {
     this.root.appendChild(this.renderer.domElement);
+    if (this.debugHud) this.root.appendChild(this.debugHud);
+    this.root.appendChild(this.statusOverlay);
     this.setupScene();
     this.bindEvents();
     this.musicSync?.play();
@@ -197,13 +212,130 @@ export class App {
     this.camera.updateProjectionMatrix();
   }
 
+  private createDebugHud(): HTMLDivElement | null {
+    const params = new URL(location.href).searchParams;
+    if (params.get("debugHud") !== "1") return null;
+
+    const hud = document.createElement("div");
+    hud.style.position = "fixed";
+    hud.style.top = "16px";
+    hud.style.left = "16px";
+    hud.style.zIndex = "20";
+    hud.style.padding = "10px 12px";
+    hud.style.background = "rgba(5, 8, 14, 0.82)";
+    hud.style.border = "1px solid rgba(20, 241, 255, 0.35)";
+    hud.style.borderRadius = "8px";
+    hud.style.color = "#d7f9ff";
+    hud.style.font = "12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace";
+    hud.style.whiteSpace = "pre";
+    hud.style.pointerEvents = "none";
+    return hud;
+  }
+
+  private createStatusOverlay(): HTMLDivElement {
+    const overlay = document.createElement("div");
+    overlay.style.position = "fixed";
+    overlay.style.inset = "0";
+    overlay.style.display = "none";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+    overlay.style.background = "rgba(2, 4, 9, 0.56)";
+    overlay.style.color = "#f4fbff";
+    overlay.style.font = "700 42px/1.1 system-ui, sans-serif";
+    overlay.style.letterSpacing = "0.08em";
+    overlay.style.textTransform = "uppercase";
+    overlay.style.textAlign = "center";
+    overlay.style.pointerEvents = "none";
+    return overlay;
+  }
+
+  private setRaceState(state: "won" | "lost"): void {
+    if (this.raceState !== "running") return;
+    this.raceState = state;
+    this.statusOverlay.style.display = "flex";
+    this.statusOverlay.textContent = state === "won" ? "Track Cleared" : "Music Ended\nYou Lose";
+    this.statusOverlay.style.whiteSpace = "pre";
+    this.musicSync?.pause();
+  }
+
+  private handleTrackObjects(): void {
+    if (this.trackObjects.length === 0) return;
+
+    const state = this.vehicleController.state;
+    const uWindow = 14 / this.track.totalLength;
+
+    for (const object of this.trackObjects) {
+      if (this.triggeredTrackObjects.has(object.id)) continue;
+      if (Math.abs(object.u - state.trackU) > uWindow) continue;
+
+      const objectHalfLengthU = object.collisionLength / this.track.totalLength;
+      if (Math.abs(object.u - state.trackU) > objectHalfLengthU) continue;
+
+      const lateralDelta = Math.abs(state.lateralOffset - object.lateralOffset);
+      if (lateralDelta > object.collisionHalfWidth + 0.9) continue;
+
+      this.triggeredTrackObjects.add(object.id);
+      if (object.kind === "boost") {
+        this.vehicleController.applyPickupBoost();
+      } else {
+        this.vehicleController.applyObstacleHit();
+      }
+    }
+  }
+
+  private updateRaceState(): void {
+    if (this.raceState !== "running") return;
+
+    if (this.vehicleController.state.trackU >= 0.999) {
+      this.setRaceState("won");
+      return;
+    }
+
+    const musicTime = this.musicSync?.getCurrentTime() ?? this.elapsedRaceTime;
+    if (this.songDuration !== null && musicTime >= this.songDuration) {
+      this.setRaceState("lost");
+    }
+  }
+
+  private updateDebugHud(): void {
+    if (!this.debugHud) return;
+
+    const state = this.vehicleController.state;
+    const musicTime = this.musicSync?.getCurrentTime() ?? 0;
+    const projectedFinish = state.trackU > 0.01 ? this.elapsedRaceTime / state.trackU : null;
+    const finishDelta = projectedFinish !== null && this.songDuration !== null
+      ? projectedFinish - this.songDuration
+      : null;
+
+    this.debugHud.textContent = [
+      `race ${this.formatSeconds(this.elapsedRaceTime)}`,
+      `music ${this.formatSeconds(musicTime)}`,
+      `song ${this.songDuration !== null ? this.formatSeconds(this.songDuration) : "--:--.--"}`,
+      `trackU ${state.trackU.toFixed(3)}`,
+      `speed ${state.speed.toFixed(1)} m/s`,
+      `proj ${projectedFinish !== null ? this.formatSeconds(projectedFinish) : "--:--.--"}`,
+      `delta ${finishDelta !== null ? `${finishDelta >= 0 ? "+" : ""}${finishDelta.toFixed(2)}s` : "--"}`,
+    ].join("\n");
+  }
+
+  private formatSeconds(value: number): string {
+    const minutes = Math.floor(value / 60);
+    const seconds = value - minutes * 60;
+    return `${minutes.toString().padStart(2, "0")}:${seconds.toFixed(2).padStart(5, "0")}`;
+  }
+
   private render = (time: number): void => {
     const deltaSeconds = (time - this.lastFrameTime) / 1000;
     this.lastFrameTime = time;
-
-    this.vehicleController.update(deltaSeconds, this.input.state);
+    if (this.raceState === "running") {
+      this.elapsedRaceTime += deltaSeconds;
+      this.vehicleController.update(deltaSeconds, this.input.state);
+      this.handleTrackObjects();
+      this.updateRaceState();
+    }
     this.updateCarTransform();
     this.updateCamera();
+    this.updateDebugHud();
     this.renderer.render(this.scene, this.camera);
     window.requestAnimationFrame(this.render);
   };

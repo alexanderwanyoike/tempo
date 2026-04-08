@@ -36,6 +36,11 @@ export interface FrameTable {
   ups: Vector3[];
 }
 
+function sampleHalfWidth(halfWidths: readonly number[] | number, i: number): number {
+  if (typeof halfWidths === "number") return halfWidths;
+  return halfWidths[Math.min(i, halfWidths.length - 1)] ?? halfWidths[halfWidths.length - 1] ?? 0;
+}
+
 export function computeParallelTransportFrames(
   centerline: CatmullRomCurve3,
   sampleCount: number,
@@ -83,7 +88,7 @@ export function computeParallelTransportFrames(
 
 export function buildRoadMesh(
   frames: FrameTable,
-  halfWidth: number,
+  halfWidths: readonly number[] | number,
 ): Mesh {
   const count = frames.samples.length;
   const positions = new Float32Array(count * 2 * 3);
@@ -95,6 +100,7 @@ export function buildRoadMesh(
     const r = frames.rights[i];
     const n = frames.ups[i];
     const vi = i * 2;
+    const halfWidth = sampleHalfWidth(halfWidths, i);
 
     positions[vi * 3]     = c.x - r.x * halfWidth;
     positions[vi * 3 + 1] = c.y - r.y * halfWidth;
@@ -126,7 +132,7 @@ export function buildRoadMesh(
 
 export function buildWallMesh(
   frames: FrameTable,
-  halfWidth: number,
+  halfWidths: readonly number[] | number,
   side: -1 | 1,
 ): Mesh {
   const count = frames.samples.length;
@@ -142,6 +148,7 @@ export function buildWallMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const vi = i * 2;
+    const halfWidth = sampleHalfWidth(halfWidths, i);
 
     const ex = c.x + r.x * halfWidth * side;
     const ey = c.y + r.y * halfWidth * side;
@@ -179,7 +186,7 @@ export function buildWallMesh(
 /** Section-aware wall mesh with colors that change per song section. */
 export function buildSectionWallMesh(
   frames: FrameTable,
-  halfWidth: number,
+  halfWidths: readonly number[] | number,
   side: -1 | 1,
   sections: { type: SongSectionType }[],
   boundaries: SectionBoundary[],
@@ -204,6 +211,7 @@ export function buildSectionWallMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const vi = i * 2;
+    const halfWidth = sampleHalfWidth(halfWidths, i);
 
     const ex = c.x + r.x * halfWidth * side;
     const ey = c.y + r.y * halfWidth * side;

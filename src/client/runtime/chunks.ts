@@ -49,6 +49,16 @@ function rightFromTangent(tangent: Vector3): Vector3 {
   return r.normalize();
 }
 
+/** Flatten a direction onto the XZ plane to stop non-loop chunks carrying pitch forever. */
+function planarTangent(tangent: Vector3): Vector3 {
+  const flat = tangent.clone();
+  flat.y = 0;
+  if (flat.lengthSq() < 1e-6) {
+    flat.set(0, 0, -1);
+  }
+  return flat.normalize();
+}
+
 /** Build a result from an array of points, computing exit tangent from last two. */
 function makeResult(points: Vector3[], tags: string[]): ChunkResult {
   const n = points.length;
@@ -62,13 +72,18 @@ function advance(origin: Vector3, tangent: Vector3, dist: number): Vector3 {
   return origin.clone().addScaledVector(tangent, dist);
 }
 
+function curveScale(params: ChunkParams): number {
+  return Math.sqrt(30 / params.trackWidth);
+}
+
 // ---- Chunk functions ----
 
 export function straight(
   start: Vector3, tangent: Vector3, length: number,
   _rng: () => number, _params: ChunkParams,
 ): ChunkResult {
-  const end = advance(start, tangent, length);
+  const forward = planarTangent(tangent);
+  const end = advance(start, forward, length);
   return makeResult([start.clone(), end], []);
 }
 
@@ -76,162 +91,221 @@ export function gentleCurve(
   start: Vector3, tangent: Vector3, length: number,
   rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  const right = rightFromTangent(tangent);
+  const forward = planarTangent(tangent);
+  const right = rightFromTangent(forward);
   const sign = rng() > 0.5 ? 1 : -1;
-  const offset = length * 0.1 * (0.3 + params.energy * 0.7);
+  const offset = length * (0.068 + params.energy * 0.048) * curveScale(params);
 
-  const mid = advance(start, tangent, length * 0.5);
-  mid.addScaledVector(right, sign * offset);
+  const p1 = advance(start, forward, length * 0.24);
+  p1.addScaledVector(right, sign * offset * 0.38);
 
-  const end = advance(start, tangent, length);
-  // Slight residual lateral shift for natural feel
-  end.addScaledVector(right, sign * offset * 0.2);
+  const p2 = advance(start, forward, length * 0.5);
+  p2.addScaledVector(right, sign * offset * 0.82);
 
-  return makeResult([start.clone(), mid, end], ["curve"]);
+  const p3 = advance(start, forward, length * 0.78);
+  p3.addScaledVector(right, sign * offset * 0.72);
+
+  const end = advance(start, forward, length);
+  end.addScaledVector(right, sign * offset * 0.28);
+
+  return makeResult([start.clone(), p1, p2, p3, end], ["curve"]);
 }
 
 export function sharpTurn(
   start: Vector3, tangent: Vector3, length: number,
   rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  const right = rightFromTangent(tangent);
+  const forward = planarTangent(tangent);
+  const right = rightFromTangent(forward);
   const sign = rng() > 0.5 ? 1 : -1;
-  const offset = length * 0.25 * (0.5 + params.energy * 0.5);
+  const offset = length * (0.118 + params.energy * 0.088) * curveScale(params);
 
-  const p1 = advance(start, tangent, length * 0.3);
-  const p2 = advance(start, tangent, length * 0.5);
-  p2.addScaledVector(right, sign * offset);
-  const p3 = advance(start, tangent, length * 0.75);
-  p3.addScaledVector(right, sign * offset * 0.6);
-  const end = advance(start, tangent, length);
+  const p1 = advance(start, forward, length * 0.14);
+  p1.addScaledVector(right, sign * offset * 0.2);
 
-  return makeResult([start.clone(), p1, p2, p3, end], ["highCurvature"]);
+  const p2 = advance(start, forward, length * 0.34);
+  p2.addScaledVector(right, sign * offset * 0.68);
+
+  const p3 = advance(start, forward, length * 0.56);
+  p3.addScaledVector(right, sign * offset);
+
+  const p4 = advance(start, forward, length * 0.78);
+  p4.addScaledVector(right, sign * offset * 0.82);
+
+  const end = advance(start, forward, length);
+  end.addScaledVector(right, sign * offset * 0.26);
+
+  return makeResult([start.clone(), p1, p2, p3, p4, end], ["highCurvature"]);
 }
 
 export function sCurve(
   start: Vector3, tangent: Vector3, length: number,
   rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  const right = rightFromTangent(tangent);
+  const forward = planarTangent(tangent);
+  const right = rightFromTangent(forward);
   const sign = rng() > 0.5 ? 1 : -1;
-  const offset = length * 0.15 * (0.4 + params.energy * 0.6);
+  const offset = length * (0.086 + params.energy * 0.068) * curveScale(params);
 
-  const p1 = advance(start, tangent, length * 0.25);
-  p1.addScaledVector(right, sign * offset);
+  const p1 = advance(start, forward, length * 0.18);
+  p1.addScaledVector(right, sign * offset * 0.55);
 
-  const mid = advance(start, tangent, length * 0.5);
+  const p2 = advance(start, forward, length * 0.36);
+  p2.addScaledVector(right, sign * offset * 0.92);
 
-  const p3 = advance(start, tangent, length * 0.75);
-  p3.addScaledVector(right, -sign * offset);
+  const p3 = advance(start, forward, length * 0.52);
+  p3.addScaledVector(right, sign * offset * 0.18);
 
-  const end = advance(start, tangent, length);
+  const p4 = advance(start, forward, length * 0.68);
+  p4.addScaledVector(right, -sign * offset * 0.86);
 
-  return makeResult([start.clone(), p1, mid, p3, end], ["curve"]);
+  const p5 = advance(start, forward, length * 0.84);
+  p5.addScaledVector(right, -sign * offset * 0.22);
+
+  const end = advance(start, forward, length);
+
+  return makeResult([start.clone(), p1, p2, p3, p4, p5, end], ["curve"]);
 }
 
 export function hill(
   start: Vector3, tangent: Vector3, length: number,
   rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  const elevation = length * 0.12 * (0.3 + params.energy * 0.7);
-  const peakT = 0.35 + rng() * 0.3; // peak between 35-65%
+  const forward = planarTangent(tangent);
+  const elevation = length * 0.32 * (0.55 + params.energy * 0.45);
+  const downhillDepth = elevation * (0.65 + params.energy * 0.35);
+  const peakT = 0.24 + rng() * 0.12;
+  const baselineY = start.y;
 
-  const p1 = advance(start, tangent, length * peakT);
-  p1.y += elevation;
+  const p1 = advance(start, forward, length * 0.16);
+  p1.y = baselineY + elevation * 0.45;
 
-  const end = advance(start, tangent, length);
-  // Slight height variation at exit
-  end.y += elevation * 0.1;
+  const peak = advance(start, forward, length * peakT);
+  peak.y = baselineY + elevation;
 
-  return makeResult([start.clone(), p1, end], ["elevation"]);
+  const plunge = advance(start, forward, length * 0.68);
+  plunge.y = baselineY - downhillDepth;
+
+  const pullout = advance(start, forward, length * 0.88);
+  pullout.y = baselineY - downhillDepth * 0.55;
+
+  const settle = advance(start, forward, length * 0.97);
+  settle.y = baselineY - downhillDepth * 0.1;
+
+  const end = advance(start, forward, length);
+  end.y = baselineY;
+
+  return makeResult([start.clone(), p1, peak, plunge, pullout, settle, end], ["elevation"]);
 }
 
 export function valley(
   start: Vector3, tangent: Vector3, length: number,
   rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  const depth = length * 0.1 * (0.3 + params.energy * 0.7);
-  const troughT = 0.35 + rng() * 0.3;
+  const forward = planarTangent(tangent);
+  const depth = length * 0.34 * (0.55 + params.energy * 0.45);
+  const troughT = 0.42 + rng() * 0.12;
+  const baselineY = start.y;
 
-  const p1 = advance(start, tangent, length * troughT);
-  p1.y -= depth;
+  const p1 = advance(start, forward, length * 0.14);
+  p1.y = baselineY - depth * 0.18;
 
-  const end = advance(start, tangent, length);
-  end.y -= depth * 0.1;
+  const trough = advance(start, forward, length * troughT);
+  trough.y = baselineY - depth;
 
-  return makeResult([start.clone(), p1, end], ["elevation"]);
+  const fastLine = advance(start, forward, length * 0.76);
+  fastLine.y = baselineY - depth * 0.88;
+
+  const pullout = advance(start, forward, length * 0.92);
+  pullout.y = baselineY - depth * 0.3;
+
+  const end = advance(start, forward, length);
+  end.y = baselineY;
+
+  return makeResult([start.clone(), p1, trough, fastLine, pullout, end], ["elevation"]);
 }
 
 export function jumpRamp(
   start: Vector3, tangent: Vector3, length: number,
   rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  const rampHeight = length * 0.15 * (0.5 + params.energy * 0.5);
-  const gapFraction = 0.15 + rng() * 0.1; // 15-25% of length is airborne
+  const forward = planarTangent(tangent);
+  const rampHeight = length * 0.28 * (0.65 + params.energy * 0.35);
+  const gapFraction = 0.18 + rng() * 0.1;
+  const baselineY = start.y;
 
-  // Ramp up
-  const rampTop = advance(start, tangent, length * 0.35);
-  rampTop.y += rampHeight;
+  const rampStart = advance(start, forward, length * 0.2);
+  rampStart.y = baselineY + rampHeight * 0.25;
 
-  // Lip (launch point)
-  const lip = advance(start, tangent, length * 0.45);
-  lip.y += rampHeight * 1.1;
+  const rampTop = advance(start, forward, length * 0.36);
+  rampTop.y = baselineY + rampHeight;
 
-  // Landing (after gap)
-  const landingStart = advance(start, tangent, length * (0.45 + gapFraction));
-  landingStart.y += rampHeight * 0.3;
+  const lip = advance(start, forward, length * 0.46);
+  lip.y = baselineY + rampHeight * 1.08;
 
-  // Run-out
-  const end = advance(start, tangent, length);
+  const landingStart = advance(start, forward, length * (0.46 + gapFraction));
+  landingStart.y = baselineY - rampHeight * 0.55;
 
-  return makeResult([start.clone(), rampTop, lip, landingStart, end], ["hasJump"]);
+  const rollout = advance(start, forward, length * 0.88);
+  rollout.y = baselineY - rampHeight * 0.3;
+
+  const recover = advance(start, forward, length * 0.96);
+  recover.y = baselineY - rampHeight * 0.08;
+
+  const end = advance(start, forward, length);
+  end.y = baselineY;
+
+  return makeResult([start.clone(), rampStart, rampTop, lip, landingStart, rollout, recover, end], ["hasJump"]);
 }
 
 export function loop(
   start: Vector3, tangent: Vector3, length: number,
-  _rng: () => number, _params: ChunkParams,
+  _rng: () => number, params: ChunkParams,
 ): ChunkResult {
-  // Loop radius sized to fit within allocated length
-  // The loop occupies roughly 2*radius in the forward direction
-  const radius = Math.min(length * 0.25, 60);
-  const N = 24;
+  const forward = planarTangent(tangent);
+  const right = rightFromTangent(forward);
+  const radius = Math.min(Math.max(length * 0.22, params.trackWidth * 1.9, 42), 58);
+  const xSpread = Math.max(params.trackWidth * 2.35, radius * 1.1);
+  const loopSamples = 28;
+  const baselineY = start.y;
 
-  // Loop center is ahead of start by length*0.4, elevated by radius
-  const loopCenterForward = length * 0.4;
-  const centerPos = advance(start, tangent, loopCenterForward);
-  const cy = centerPos.y + radius;
+  // Pull the approach left before the vertical circle, matching the P1 stable shape.
+  const entryLead = advance(start, forward, length * 0.14);
+  entryLead.addScaledVector(right, -xSpread * 0.18);
 
-  // Entry approach point
-  const approach = advance(start, tangent, loopCenterForward - radius * 1.2);
+  const entryPocket = advance(start, forward, length * 0.26);
+  entryPocket.addScaledVector(right, -xSpread * 0.42);
+  entryPocket.y = baselineY;
 
-  // Build circle points in the plane defined by tangent (forward) and up
-  // The circle is in the forward-up plane
-  const right = rightFromTangent(tangent);
-  const forward2d = tangent.clone().normalize();
-  const xSpread = radius * 0.5; // pull entry/exit apart in the right direction
+  // The loop itself sits on a vertical circle in the forward/up plane.
+  const bottomPos = advance(start, forward, length * 0.43);
+  bottomPos.addScaledVector(right, -xSpread * 0.5);
+  const cy = baselineY + radius;
 
   const loopPts: Vector3[] = [];
-  for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
-    // Circle: start at bottom (-PI/2), go around 97% to avoid exact overlap
+  for (let i = 0; i < loopSamples; i++) {
+    const t = i / (loopSamples - 1);
     const angle = (-Math.PI / 2) + t * (Math.PI * 2 * 0.97);
-    const py = cy + radius * Math.sin(angle);
-    // Forward offset from center based on cos
-    const fwdOffset = radius * Math.cos(angle);
-    const pt = centerPos.clone();
-    pt.addScaledVector(forward2d, fwdOffset);
-    pt.y = py;
-    // Spread entry/exit in the right direction
+    const pt = bottomPos.clone();
+    pt.addScaledVector(forward, radius * Math.cos(angle));
+    pt.y = cy + radius * Math.sin(angle);
     pt.addScaledVector(right, (t - 0.5) * xSpread);
     loopPts.push(pt);
   }
 
-  // Exit run-out
-  const exit = advance(start, tangent, length * 0.85);
-  exit.addScaledVector(right, xSpread * 0.25);
-  const end = advance(start, tangent, length);
+  // Exit on the right and settle back toward the centerline while staying level.
+  const exitPocket = advance(start, forward, length * 0.78);
+  exitPocket.addScaledVector(right, xSpread * 0.26);
+  exitPocket.y = baselineY;
 
-  const allPoints = [start.clone(), approach, ...loopPts, exit, end];
+  const exitBlend = advance(start, forward, length * 0.9);
+  exitBlend.addScaledVector(right, xSpread * 0.1);
+  exitBlend.y = baselineY;
+
+  const end = advance(start, forward, length);
+  end.y = baselineY;
+
+  const allPoints = [start.clone(), entryLead, entryPocket, ...loopPts, exitPocket, exitBlend, end];
   return makeResult(allPoints, ["hasLoop"]);
 }
 

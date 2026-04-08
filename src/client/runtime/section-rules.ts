@@ -12,13 +12,13 @@ type ChunkWeight = {
 };
 
 const sectionChunkRules: Record<SongSectionType, ChunkWeight[]> = {
-  intro:     [{ type: "straight", weight: 4 }, { type: "gentleCurve", weight: 3 }, { type: "hill", weight: 1 }],
-  verse:     [{ type: "gentleCurve", weight: 3 }, { type: "sCurve", weight: 2 }, { type: "hill", weight: 2 }],
-  build:     [{ type: "sCurve", weight: 3 }, { type: "sharpTurn", weight: 2 }, { type: "hill", weight: 2 }, { type: "jumpRamp", weight: 1, minEnergy: 0.6 }],
-  drop:      [{ type: "sharpTurn", weight: 2 }, { type: "loop", weight: 2, minEnergy: 0.7 }, { type: "jumpRamp", weight: 3 }, { type: "sCurve", weight: 2 }],
-  bridge:    [{ type: "gentleCurve", weight: 3 }, { type: "valley", weight: 2 }, { type: "straight", weight: 2 }],
-  breakdown: [{ type: "straight", weight: 3 }, { type: "gentleCurve", weight: 3 }, { type: "valley", weight: 1 }],
-  finale:    [{ type: "sharpTurn", weight: 2 }, { type: "loop", weight: 1, minEnergy: 0.8 }, { type: "jumpRamp", weight: 2 }, { type: "sCurve", weight: 3 }],
+  intro:     [{ type: "straight", weight: 2 }, { type: "gentleCurve", weight: 3 }, { type: "sCurve", weight: 2 }, { type: "hill", weight: 1 }],
+  verse:     [{ type: "sCurve", weight: 3 }, { type: "sharpTurn", weight: 2 }, { type: "hill", weight: 2 }, { type: "jumpRamp", weight: 1, minEnergy: 0.85 }],
+  build:     [{ type: "sharpTurn", weight: 3 }, { type: "sCurve", weight: 2 }, { type: "hill", weight: 2 }, { type: "jumpRamp", weight: 4, minEnergy: 0.45 }, { type: "loop", weight: 0.8, minEnergy: 0.88 }],
+  drop:      [{ type: "sharpTurn", weight: 3 }, { type: "jumpRamp", weight: 5 }, { type: "sCurve", weight: 3 }, { type: "hill", weight: 1 }, { type: "loop", weight: 1.4, minEnergy: 0.82 }],
+  bridge:    [{ type: "sCurve", weight: 2 }, { type: "gentleCurve", weight: 2 }, { type: "valley", weight: 4 }],
+  breakdown: [{ type: "gentleCurve", weight: 2 }, { type: "sCurve", weight: 1 }, { type: "valley", weight: 4 }, { type: "straight", weight: 1 }],
+  finale:    [{ type: "sharpTurn", weight: 3 }, { type: "jumpRamp", weight: 5 }, { type: "sCurve", weight: 3 }, { type: "hill", weight: 1 }, { type: "loop", weight: 1.8, minEnergy: 0.8 }],
 };
 
 export function pickChunkForSection(
@@ -34,6 +34,9 @@ export function pickChunkForSection(
 
   for (const entry of pool) {
     if (entry.minEnergy !== undefined && section.energy < entry.minEnergy) continue;
+
+    // Loop cooldown: skip if a loop appeared in recent history
+    if (entry.type === "loop" && recentChunks.includes("loop")) continue;
 
     let w = entry.weight;
 

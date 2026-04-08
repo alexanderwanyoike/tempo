@@ -35,6 +35,15 @@ export interface TrackQuery {
   hasWalls: boolean;
 }
 
+export interface TrackObject {
+  id: string;
+  kind: "boost" | "obstacle";
+  u: number;
+  lateralOffset: number;
+  collisionHalfWidth: number;
+  collisionLength: number;
+}
+
 export interface Track {
   readonly meshGroup: Group;
   readonly totalLength: number;
@@ -47,6 +56,8 @@ export interface Track {
   queryNearest(position: Vector3, hintU?: number): TrackQuery;
   getHalfWidthAt(u: number): number;
   getBoostAt(u: number): number;
+  getTopSpeedAt(u: number): number;
+  getTrackObjects(): readonly TrackObject[];
 }
 
 /**
@@ -292,6 +303,14 @@ export class TestTrack implements Track {
 
   getBoostAt(_u: number): number {
     return 1.0;
+  }
+
+  getTopSpeedAt(_u: number): number {
+    return 90;
+  }
+
+  getTrackObjects(): readonly TrackObject[] {
+    return [];
   }
 
   private xzDistSq(a: Vector3, b: Vector3): number {

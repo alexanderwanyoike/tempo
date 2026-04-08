@@ -3,6 +3,7 @@ import type { VehicleInputState } from "./input";
 import type { Track, TrackQuery } from "./track-builder";
 
 const GRAVITY = 35;
+const CURVATURE_SAMPLE_DISTANCE = 8;
 
 export type TrackQueryFn = (position: Vector3, hintU?: number) => TrackQuery;
 
@@ -14,6 +15,7 @@ export type VehicleTuning = {
   steeringRate: number;
   steeringResponse: number;
   lateralGrip: number;
+  curveLateralForce: number;
   airbrakeYawBoost: number;
   airbrakeDrag: number;
   brakeForce: number;
@@ -50,15 +52,16 @@ export type VehicleState = {
 
 export const defaultVehicleTuning: VehicleTuning = {
   hoverHeight: 0.45,
-  thrust: 120,
+  thrust: 58,
   topSpeed: 90,
-  dragCoefficient: 1.3,
-  steeringRate: 45,
-  steeringResponse: 12,
-  lateralGrip: 5.0,
-  airbrakeYawBoost: 30,
-  airbrakeDrag: 0.4,
-  brakeForce: 35,
+  dragCoefficient: 0.26,
+  steeringRate: 62,
+  steeringResponse: 16,
+  lateralGrip: 3.2,
+  curveLateralForce: 0.38,
+  airbrakeYawBoost: 44,
+  airbrakeDrag: 0.85,
+  brakeForce: 42,
   visualHoverAmplitude: 0.06,
   visualHoverFrequency: 5.5,
   visualBankAngle: 0.45,
@@ -88,6 +91,14 @@ export class VehicleController {
   private elapsedTime = 0;
   private track: Track | null = null;
   private trackQueryFn: TrackQueryFn | null = null;
+  private effectiveTopSpeed = 90;
+  private temporaryBoostTimer = 0;
+  private temporaryBoostMultiplier = 1;
+  private temporaryTopSpeedBonus = 0;
+
+  get currentTopSpeed(): number {
+    return this.effectiveTopSpeed;
+  }
 
   constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
 
@@ -99,12 +110,48 @@ export class VehicleController {
     this.trackQueryFn = fn;
   }
 
+  applyPickupBoost(multiplier = 1.55, duration = 1.1, topSpeedBonus = 14, speedImpulse = 7): void {
+    const s = this.state;
+    this.temporaryBoostTimer = Math.max(this.temporaryBoostTimer, duration);
+    this.temporaryBoostMultiplier = Math.max(this.temporaryBoostMultiplier, multiplier);
+    this.temporaryTopSpeedBonus = Math.max(this.temporaryTopSpeedBonus, topSpeedBonus);
+    s.speed += speedImpulse;
+  }
+
+  applyObstacleHit(speedScale = 0.38): void {
+    const s = this.state;
+    s.speed *= speedScale;
+    s.lateralVelocity *= -0.45;
+    this.temporaryBoostTimer = 0;
+    this.temporaryBoostMultiplier = 1;
+    this.temporaryTopSpeedBonus = 0;
+  }
+
   update(deltaSeconds: number, input: VehicleInputState): void {
     const dt = Math.min(deltaSeconds, 1 / 30);
     if (!this.track) return;
 
     const s = this.state;
     const t = this.tuning;
+
+    if (this.temporaryBoostTimer > 0) {
+      this.temporaryBoostTimer = Math.max(0, this.temporaryBoostTimer - dt);
+      if (this.temporaryBoostTimer === 0) {
+        this.temporaryBoostMultiplier = 1;
+        this.temporaryTopSpeedBonus = 0;
+      }
+    }
+
+    const trackBoost = this.track.getBoostAt(s.trackU);
+    const activeBoostMultiplier = Math.max(
+      trackBoost,
+      this.temporaryBoostTimer > 0 ? this.temporaryBoostMultiplier : 1,
+    );
+    s.boostMultiplier = activeBoostMultiplier;
+
+    // Energy-based effective top speed
+    this.effectiveTopSpeed = this.track.getTopSpeedAt(s.trackU)
+      + (this.temporaryBoostTimer > 0 ? this.temporaryTopSpeedBonus : 0);
 
     if (s.airborne) {
       this.updateAirborne(dt);
@@ -117,7 +164,7 @@ export class VehicleController {
     s.steering = MathUtils.damp(s.steering, steerTarget, t.steeringResponse, dt);
 
     const absSpeed = Math.abs(s.speed);
-    const speedRatio = Math.min(absSpeed / t.topSpeed, 1);
+    const speedRatio = Math.min(absSpeed / this.effectiveTopSpeed, 1);
     const steeringPower = MathUtils.lerp(1.0, 0.35, speedRatio);
 
     // 2. Steering -> lateral velocity
@@ -141,49 +188,57 @@ export class VehicleController {
     }
 
     // 6. Drag
-    let drag = t.dragCoefficient;
+    let drag = input.throttle ? t.dragCoefficient * 0.42 : t.dragCoefficient;
     if (abInput !== 0) drag += t.airbrakeDrag;
-    s.speed *= Math.max(0, 1 - drag * dt);
+    const speedDrag = drag * (0.45 + Math.abs(s.speed) * 0.016);
+    s.speed *= Math.max(0, 1 - speedDrag * dt);
 
     // 7. Gravity along tangent
     const frame = this.track.getFrameAt(s.trackU);
     s.speed += GRAVITY * (-frame.tangent.y) * dt;
 
-    // 8. Lateral grip
+    // 8. Curve pressure
+    const curveAccel = MathUtils.clamp(
+      s.speed * s.speed * this.getSignedHorizontalCurvature(s.trackU) * t.curveLateralForce,
+      -120,
+      120,
+    );
+    s.lateralVelocity += curveAccel * dt;
+
+    // 9. Lateral grip
     s.lateralVelocity *= Math.max(0, 1 - t.lateralGrip * dt);
 
-    // 9. Advance along track
+    // 10. Advance along track
     s.trackU += (s.speed * dt) / this.track.totalLength;
     s.trackU = MathUtils.clamp(s.trackU, 0.001, 0.999);
 
-    // 10. Advance lateral
+    // 11. Advance lateral
     s.lateralOffset += s.lateralVelocity * dt;
 
-    // 10.5. Boost from track
-    const trackBoost = this.track.getBoostAt(s.trackU);
-    if (trackBoost > 1) s.boostMultiplier = trackBoost;
-    else s.boostMultiplier = 1;
-
-    // 11. Wall collision (dynamic width)
+    // 12. Wall collision (dynamic width)
     const currentHalfWidth = this.track.getHalfWidthAt(s.trackU);
     const boundary = currentHalfWidth - 1.0;
+    const edgeRatio = Math.abs(s.lateralOffset) / Math.max(boundary, 1);
+    if (edgeRatio > 0.78) {
+      s.speed *= Math.max(0, 1 - (edgeRatio - 0.78) * 2.2 * dt);
+    }
     if (Math.abs(s.lateralOffset) > boundary) {
       s.lateralOffset = MathUtils.clamp(s.lateralOffset, -boundary, boundary);
       if (Math.sign(s.lateralVelocity) === Math.sign(s.lateralOffset)) {
-        s.lateralVelocity *= -0.15;
-        s.speed *= 0.85;
+        s.lateralVelocity *= -0.3;
+        s.speed *= 0.55;
       }
     }
 
-    // 12. Clamp near-zero
+    // 13. Clamp near-zero
     if (Math.abs(s.speed) < 0.05) s.speed = 0;
     if (Math.abs(s.lateralVelocity) < 0.01) s.lateralVelocity = 0;
 
-    // 13. Derive world position
+    // 14. Derive world position
     this.deriveWorldState();
     this.lastSafeU = s.trackU;
 
-    // 14. Visuals
+    // 15. Visuals
     this.updateVisuals(dt, input);
   }
 
@@ -200,6 +255,34 @@ export class VehicleController {
     s.forward.copy(frame.tangent);
     s.right.copy(frame.right);
     s.up.copy(frame.up);
+  }
+
+  private getSignedHorizontalCurvature(u: number): number {
+    if (!this.track) return 0;
+
+    const sampleU = Math.min(CURVATURE_SAMPLE_DISTANCE / this.track.totalLength, 0.03);
+    const u0 = Math.max(0.001, u - sampleU);
+    const u1 = Math.min(0.999, u + sampleU);
+    const prev = this.track.getFrameAt(u0).tangent;
+    const next = this.track.getFrameAt(u1).tangent;
+    const up = this.track.getFrameAt(u).up;
+
+    const prevFlat = prev.clone();
+    prevFlat.y = 0;
+    const nextFlat = next.clone();
+    nextFlat.y = 0;
+    if (prevFlat.lengthSq() < 1e-6 || nextFlat.lengthSq() < 1e-6) return 0;
+
+    prevFlat.normalize();
+    nextFlat.normalize();
+
+    const dot = MathUtils.clamp(prevFlat.dot(nextFlat), -1, 1);
+    const angle = Math.acos(dot);
+    if (angle < 1e-4) return 0;
+
+    const turnSign = Math.sign(prevFlat.clone().cross(nextFlat).dot(up));
+    const arcLength = Math.max((u1 - u0) * this.track.totalLength, CURVATURE_SAMPLE_DISTANCE);
+    return turnSign * angle / arcLength;
   }
 
   private updateAirborne(dt: number): void {
@@ -260,7 +343,7 @@ export class VehicleController {
     this.elapsedTime += dt;
 
     const absSpeed = Math.abs(s.speed);
-    const vsr = Math.min(absSpeed / t.topSpeed, 1);
+    const vsr = Math.min(absSpeed / this.effectiveTopSpeed, 1);
 
     const bobScale = 1 - vsr * 0.85;
     s.visualHoverOffset = Math.sin(this.elapsedTime * t.visualHoverFrequency) * t.visualHoverAmplitude * bobScale;
