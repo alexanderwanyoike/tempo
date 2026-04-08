@@ -12,8 +12,10 @@ import {
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
+  Quaternion,
   Scene,
   Vector2,
+  Vector3,
   WebGLRenderer,
 } from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -31,6 +33,7 @@ import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
+  private static readonly WORLD_UP = new Vector3(0, 1, 0);
   private readonly renderer: WebGLRenderer;
   private readonly composer: EffectComposer;
   private readonly scene: Scene;
@@ -53,6 +56,17 @@ export class App {
   private raceState: "running" | "won" | "lost" = "running";
   private latestReactiveBands: ReactiveBands | null = null;
   private readonly orientMat = new Matrix4();
+  private readonly targetCarQuaternion = new Quaternion();
+  private readonly targetCameraQuaternion = new Quaternion();
+  private readonly desiredCameraPosition = new Vector3();
+  private readonly desiredCameraLookTarget = new Vector3();
+  private readonly desiredCameraUp = new Vector3();
+  private readonly smoothedCameraPosition = new Vector3();
+  private readonly smoothedCameraLookTarget = new Vector3();
+  private readonly smoothedCameraUp = new Vector3(0, 1, 0);
+  private readonly tempVector = new Vector3();
+  private readonly tempVectorB = new Vector3();
+  private visualsInitialized = false;
 
   static async create(
     root: HTMLElement,
@@ -144,8 +158,7 @@ export class App {
     cockpit.position.set(0, 0.35, 0.1);
 
     const carRoot = new Group();
-    // Camera is a CHILD of carRoot - moves/rotates rigidly with the car
-    carRoot.add(body, cockpit, this.camera);
+    carRoot.add(body, cockpit);
 
     this.carRoot = carRoot;
     this.carBody = body;
@@ -170,6 +183,7 @@ export class App {
     this.vehicleController.state.lateralOffset = 0;
 
     this.scene.add(this.carRoot);
+    this.scene.add(this.camera);
   }
 
   start(): void {
@@ -212,17 +226,24 @@ export class App {
     this.composer.setSize(window.innerWidth, window.innerHeight);
   };
 
-  private updateCarTransform(): void {
+  private updateCarTransform(deltaSeconds: number): void {
     const state = this.vehicleController.state;
+    const dt = Math.min(deltaSeconds, 1 / 30);
+    const positionAlpha = 1 - Math.exp(-12 * dt);
+    const rotationAlpha = 1 - Math.exp(-14 * dt);
+    const desiredPosition = this.tempVector.copy(state.position).addScaledVector(state.up, state.visualHoverOffset);
 
-    // Position + hover bob along track up
-    this.carRoot.position.copy(state.position);
-    this.carRoot.position.addScaledVector(state.up, state.visualHoverOffset);
-
-    // Orientation from track frame: makeBasis(right, up, -forward)
     const negFwd = state.forward.clone().negate();
     this.orientMat.makeBasis(state.right, state.up, negFwd);
-    this.carRoot.setRotationFromMatrix(this.orientMat);
+    this.targetCarQuaternion.setFromRotationMatrix(this.orientMat);
+
+    if (!this.visualsInitialized) {
+      this.carRoot.position.copy(desiredPosition);
+      this.carRoot.quaternion.copy(this.targetCarQuaternion);
+    } else {
+      this.carRoot.position.lerp(desiredPosition, positionAlpha);
+      this.carRoot.quaternion.slerp(this.targetCarQuaternion, rotationAlpha);
+    }
 
     // Body visual effects (local to car)
     const speedRatio = Math.min(Math.abs(state.speed) / 90, 1);
@@ -230,21 +251,70 @@ export class App {
     this.carBody.rotation.set(state.visualPitch, visualYaw, state.visualBank, "XYZ");
   }
 
-  private updateCamera(): void {
-    const speed = Math.abs(this.vehicleController.state.speed);
+  private updateCamera(deltaSeconds: number): void {
+    const state = this.vehicleController.state;
+    const speed = Math.abs(state.speed);
     const speedRatio = Math.min(speed / 90, 1);
+    const dt = Math.min(deltaSeconds, 1 / 30);
+    const positionAlpha = 1 - Math.exp(-6 * dt);
+    const lookAlpha = 1 - Math.exp(-8 * dt);
+    const upAlpha = 1 - Math.exp(-5 * dt);
 
-    // Camera is child of carRoot - just set local position
-    // Local: X=right, Y=up, Z=backward
-    const camBack = MathUtils.lerp(8, 14, speedRatio);
-    const camUp = MathUtils.lerp(3.5, 5.5, speedRatio);
-    this.camera.position.set(0, camUp, camBack);
-    // Default orientation looks down -Z = car's forward direction
-    this.camera.rotation.set(0, 0, 0);
+    const camBack = MathUtils.lerp(8.5, 14.5, speedRatio);
+    const camUp = MathUtils.lerp(4.2, 6.4, speedRatio);
+    const lookAhead = MathUtils.lerp(10, 18, speedRatio);
+    const lateralLead = state.steering * MathUtils.lerp(0.35, 1.2, speedRatio);
+
+    this.desiredCameraLookTarget.copy(state.position)
+      .addScaledVector(state.forward, lookAhead)
+      .addScaledVector(state.up, 1.4)
+      .addScaledVector(state.right, lateralLead);
+
+    this.desiredCameraPosition.copy(state.position)
+      .addScaledVector(state.forward, -camBack)
+      .addScaledVector(state.up, camUp)
+      .addScaledVector(state.right, lateralLead * 0.75);
+
+    this.resolveCameraRoadClip(this.desiredCameraPosition, state.trackU);
+
+    this.desiredCameraUp.copy(App.WORLD_UP).lerp(state.up, 0.42).normalize();
+
+    if (!this.visualsInitialized) {
+      this.smoothedCameraPosition.copy(this.desiredCameraPosition);
+      this.smoothedCameraLookTarget.copy(this.desiredCameraLookTarget);
+      this.smoothedCameraUp.copy(this.desiredCameraUp);
+      this.visualsInitialized = true;
+    } else {
+      this.smoothedCameraPosition.lerp(this.desiredCameraPosition, positionAlpha);
+      this.smoothedCameraLookTarget.lerp(this.desiredCameraLookTarget, lookAlpha);
+      this.smoothedCameraUp.lerp(this.desiredCameraUp, upAlpha).normalize();
+      this.resolveCameraRoadClip(this.smoothedCameraPosition, state.trackU);
+    }
+
+    this.camera.position.copy(this.smoothedCameraPosition);
+    this.orientMat.lookAt(this.smoothedCameraPosition, this.smoothedCameraLookTarget, this.smoothedCameraUp);
+    this.targetCameraQuaternion.setFromRotationMatrix(this.orientMat);
+    this.camera.quaternion.copy(this.targetCameraQuaternion);
 
     // Speed FOV
     this.camera.fov = MathUtils.lerp(70, 95, speedRatio * speedRatio);
     this.camera.updateProjectionMatrix();
+  }
+
+  private resolveCameraRoadClip(cameraPosition: Vector3, hintU: number): void {
+    const query = this.track.queryNearest(cameraPosition, hintU);
+    const clearance = this.tempVectorB.copy(cameraPosition).sub(query.center).dot(query.up);
+    const minClearance = 2.8;
+    if (clearance < minClearance) {
+      cameraPosition.addScaledVector(query.up, minClearance - clearance);
+    }
+
+    const lateral = Math.abs(query.lateralOffset);
+    const safeHalfWidth = Math.max(this.track.getHalfWidthAt(query.u) - 1.2, 2);
+    if (lateral < safeHalfWidth) {
+      const push = 1 - lateral / safeHalfWidth;
+      cameraPosition.addScaledVector(query.up, push * 0.8);
+    }
   }
 
   private createDebugHud(): HTMLDivElement | null {
@@ -371,8 +441,8 @@ export class App {
     }
     const musicTime = this.musicSync?.getCurrentTime() ?? this.elapsedRaceTime;
     this.latestReactiveBands = this.musicSync?.getReactiveBands() ?? null;
-    this.updateCarTransform();
-    this.updateCamera();
+    this.updateCarTransform(deltaSeconds);
+    this.updateCamera(deltaSeconds);
     this.environment.update(
       this.elapsedRaceTime,
       musicTime,
