@@ -1,9 +1,8 @@
 import { MathUtils, Vector3 } from "three";
 import type { VehicleInputState } from "./input";
-import type { TestTrack, TrackFrame, TrackQuery } from "./track-builder";
+import type { Track, TrackQuery } from "./track-builder";
 
 const GRAVITY = 35;
-const HALF_WIDTH = 15;
 
 export type TrackQueryFn = (position: Vector3, hintU?: number) => TrackQuery;
 
@@ -87,12 +86,12 @@ export class VehicleController {
 
   lastSafeU = 0.001;
   private elapsedTime = 0;
-  private track: TestTrack | null = null;
+  private track: Track | null = null;
   private trackQueryFn: TrackQueryFn | null = null;
 
   constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
 
-  setTrack(track: TestTrack): void {
+  setTrack(track: Track): void {
     this.track = track;
   }
 
@@ -160,8 +159,14 @@ export class VehicleController {
     // 10. Advance lateral
     s.lateralOffset += s.lateralVelocity * dt;
 
-    // 11. Wall collision
-    const boundary = HALF_WIDTH - 1.0;
+    // 10.5. Boost from track
+    const trackBoost = this.track.getBoostAt(s.trackU);
+    if (trackBoost > 1) s.boostMultiplier = trackBoost;
+    else s.boostMultiplier = 1;
+
+    // 11. Wall collision (dynamic width)
+    const currentHalfWidth = this.track.getHalfWidthAt(s.trackU);
+    const boundary = currentHalfWidth - 1.0;
     if (Math.abs(s.lateralOffset) > boundary) {
       s.lateralOffset = MathUtils.clamp(s.lateralOffset, -boundary, boundary);
       if (Math.sign(s.lateralVelocity) === Math.sign(s.lateralOffset)) {
@@ -215,7 +220,8 @@ export class VehicleController {
     const dist = s.position.clone().sub(surfacePos).dot(frame.up);
     const velToward = -s.worldVelocity.dot(frame.up);
 
-    if (Math.abs(dist) < 2.0 && velToward > 0 && Math.abs(query.lateralOffset) < HALF_WIDTH) {
+    const airHalfWidth = this.track.getHalfWidthAt(query.u);
+    if (Math.abs(dist) < 2.0 && velToward > 0 && Math.abs(query.lateralOffset) < airHalfWidth) {
       s.airborne = false;
       s.trackU = query.u;
       s.lateralOffset = query.lateralOffset;
@@ -227,7 +233,7 @@ export class VehicleController {
     }
 
     // Fall-off respawn
-    if (s.position.y < query.center.y - 40 || Math.abs(query.lateralOffset) > HALF_WIDTH * 4) {
+    if (s.position.y < query.center.y - 40 || Math.abs(query.lateralOffset) > airHalfWidth * 4) {
       s.trackU = this.lastSafeU;
       s.speed = 0;
       s.lateralVelocity = 0;

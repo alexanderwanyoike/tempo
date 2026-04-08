@@ -35,6 +35,20 @@ export interface TrackQuery {
   hasWalls: boolean;
 }
 
+export interface Track {
+  readonly meshGroup: Group;
+  readonly totalLength: number;
+  readonly halfWidth: number;
+  readonly centerline: CatmullRomCurve3;
+  getFrameAt(u: number): TrackFrame;
+  getPointAt(u: number): Vector3;
+  getStartPosition(): { position: Vector3; yaw: number };
+  getRespawnAt(u: number): { position: Vector3; yaw: number };
+  queryNearest(position: Vector3, hintU?: number): TrackQuery;
+  getHalfWidthAt(u: number): number;
+  getBoostAt(u: number): number;
+}
+
 /**
  * Generate loop: vertical circle in YZ plane.
  * Entry and exit pulled apart in X (left/right) so roads don't overlap.
@@ -57,7 +71,7 @@ function makeLoopPoints(centerX: number, bottomY: number, centerZ: number, radiu
   return pts;
 }
 
-export class TestTrack {
+export class TestTrack implements Track {
   readonly meshGroup: Group;
   readonly totalLength: number;
   readonly halfWidth = HALF_WIDTH;
@@ -270,6 +284,14 @@ export class TestTrack {
       u: uFinal,
       hasWalls: true,
     };
+  }
+
+  getHalfWidthAt(_u: number): number {
+    return HALF_WIDTH;
+  }
+
+  getBoostAt(_u: number): number {
+    return 1.0;
   }
 
   private xzDistSq(a: Vector3, b: Vector3): number {

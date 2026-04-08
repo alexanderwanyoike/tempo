@@ -10,12 +10,16 @@ import {
   MeshStandardMaterial,
   PerspectiveCamera,
   Scene,
-  Vector3,
   WebGLRenderer,
 } from "three";
+import type { SongDefinition } from "../../../shared/song-schema";
 import type { ClientConfig } from "./config";
 import { VehicleInput } from "./input";
+import { MusicSync } from "./music-sync";
+import { loadSongDefinition } from "./song-loader";
+import type { Track } from "./track-builder";
 import { TestTrack } from "./track-builder";
+import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
@@ -26,13 +30,50 @@ export class App {
   private readonly carBody: Mesh;
   private readonly input: VehicleInput;
   private readonly vehicleController: VehicleController;
-  private readonly track: TestTrack;
+  private readonly track: Track;
+  private readonly musicSync: MusicSync | null;
   private lastFrameTime = 0;
   private readonly orientMat = new Matrix4();
 
-  constructor(
+  static async create(
+    root: HTMLElement,
+    config: ClientConfig,
+  ): Promise<App> {
+    // Check URL params for song and seed
+    const params = new URL(location.href).searchParams;
+    const songUrl = params.get("song") ?? "/songs/firestarter.json";
+    const seedParam = params.get("seed");
+
+    let track: Track;
+    let musicSync: MusicSync | null = null;
+    let song: SongDefinition | null = null;
+
+    try {
+      song = await loadSongDefinition(songUrl);
+      const seed = seedParam ? parseInt(seedParam, 10) : song.baseSeed;
+      track = new TrackGenerator(song, seed);
+
+      // Try to load music (non-blocking if no MP3 available)
+      const musicUrl = songUrl.replace(/\.json$/, ".mp3").replace("/songs/", "/music/");
+      try {
+        musicSync = new MusicSync();
+        await musicSync.load(musicUrl);
+      } catch {
+        musicSync = null;
+      }
+    } catch {
+      // Fallback to test track if song loading fails
+      track = new TestTrack();
+    }
+
+    return new App(root, config, track, musicSync);
+  }
+
+  private constructor(
     private readonly root: HTMLElement,
     private readonly config: ClientConfig,
+    track: Track,
+    musicSync: MusicSync | null,
   ) {
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -74,14 +115,14 @@ export class App {
     this.carBody = body;
     this.input = new VehicleInput();
     this.vehicleController = new VehicleController(defaultVehicleTuning);
+    this.musicSync = musicSync;
 
-    this.track = new TestTrack();
+    this.track = track;
     this.scene.add(this.track.meshGroup);
 
     this.vehicleController.setTrack(this.track);
     this.vehicleController.setTrackQuery((pos, hintU) => this.track.queryNearest(pos, hintU));
 
-    const start = this.track.getStartPosition();
     this.vehicleController.state.trackU = 0.001;
     this.vehicleController.state.lateralOffset = 0;
 
@@ -92,6 +133,7 @@ export class App {
     this.root.appendChild(this.renderer.domElement);
     this.setupScene();
     this.bindEvents();
+    this.musicSync?.play();
     this.lastFrameTime = performance.now();
     this.render(this.lastFrameTime);
   }
@@ -106,6 +148,11 @@ export class App {
 
   private bindEvents(): void {
     window.addEventListener("resize", this.handleResize);
+    // Resume audio context on visibility change
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) this.musicSync?.pause();
+      else this.musicSync?.resume();
+    });
     this.input.attach();
   }
 
