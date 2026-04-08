@@ -11,6 +11,7 @@ import {
   MeshStandardMaterial,
   Vector3,
 } from "three";
+import type { SongSectionType } from "../../../shared/song-schema";
 
 const WORLD_UP = new Vector3(0, 1, 0);
 const TRACK_WIDTH = 30;
@@ -44,6 +45,14 @@ export interface TrackObject {
   collisionLength: number;
 }
 
+export interface TrackFeature {
+  id: string;
+  kind: "loop" | "jump";
+  u: number;
+  energy: number;
+  sectionType: SongSectionType;
+}
+
 export interface Track {
   readonly meshGroup: Group;
   readonly totalLength: number;
@@ -58,6 +67,7 @@ export interface Track {
   getBoostAt(u: number): number;
   getTopSpeedAt(u: number): number;
   getTrackObjects(): readonly TrackObject[];
+  getTrackFeatures(): readonly TrackFeature[];
 }
 
 /**
@@ -92,6 +102,7 @@ export class TestTrack implements Track {
   private readonly tangents: Vector3[];
   private readonly rights: Vector3[];
   private readonly ups: Vector3[];
+  private readonly trackFeatures: TrackFeature[];
 
   constructor() {
     const controlPoints = [
@@ -152,6 +163,12 @@ export class TestTrack implements Track {
 
     this.centerline = new CatmullRomCurve3(controlPoints, false, "centripetal", 0.3);
     this.totalLength = this.centerline.getLength();
+    this.trackFeatures = [
+      { id: "test-jump-1", kind: "jump", u: 0.11, energy: 0.78, sectionType: "build" },
+      { id: "test-loop-1", kind: "loop", u: 0.34, energy: 0.95, sectionType: "drop" },
+      { id: "test-jump-2", kind: "jump", u: 0.58, energy: 0.82, sectionType: "drop" },
+      { id: "test-jump-3", kind: "jump", u: 0.81, energy: 0.88, sectionType: "finale" },
+    ];
 
     // Sample points along the curve
     this.samples = this.centerline.getSpacedPoints(SAMPLE_COUNT);
@@ -311,6 +328,10 @@ export class TestTrack implements Track {
 
   getTrackObjects(): readonly TrackObject[] {
     return [];
+  }
+
+  getTrackFeatures(): readonly TrackFeature[] {
+    return this.trackFeatures;
   }
 
   private xzDistSq(a: Vector3, b: Vector3): number {

@@ -8,12 +8,12 @@ import {
   MeshStandardMaterial,
   Vector3,
 } from "three";
-import type { SongDefinition } from "../../../shared/song-schema";
+import type { SongDefinition, SongSection, SongSectionType } from "../../../shared/song-schema";
 import type { ChunkType } from "./chunks";
 import { chunkFns, type ChunkParams } from "./chunks";
 import { mulberry32 } from "./prng";
 import { pickChunkForSection, scaleChunkParams } from "./section-rules";
-import type { Track, TrackFrame, TrackObject, TrackQuery } from "./track-builder";
+import type { Track, TrackFeature, TrackFrame, TrackObject, TrackQuery } from "./track-builder";
 import {
   buildCenterLineMesh,
   buildRoadMesh,
@@ -57,6 +57,7 @@ export class TrackGenerator implements Track {
   private readonly frames: FrameTable;
   private readonly halfWidthSamples: number[];
   private readonly trackObjects: TrackObject[];
+  private readonly trackFeatures: TrackFeature[];
   private readonly sampleCount: number;
 
   constructor(
@@ -65,28 +66,30 @@ export class TrackGenerator implements Track {
     private readonly chunkPicker: ChunkPicker = defaultChunkPicker,
   ) {
     const targetLength = song.duration * BASE_SPEED;
-    const allPoints = this.generateControlPoints(seed, targetLength);
+    const generation = this.generateControlPoints(seed, targetLength);
 
-    this.centerline = new CatmullRomCurve3(allPoints, false, "centripetal", 0.3);
+    this.centerline = new CatmullRomCurve3(generation.points, false, "centripetal", 0.3);
     this.totalLength = this.centerline.getLength();
 
     // Scale samples with track length: ~1 sample per 2m
     this.sampleCount = Math.max(800, Math.ceil(this.totalLength / 2));
     this.frames = computeParallelTransportFrames(this.centerline, this.sampleCount);
     this.halfWidthSamples = this.frames.samples.map((_, i) => this.getHalfWidthAt(i / this.sampleCount));
+    this.trackFeatures = generation.features;
     this.trackObjects = this.generateTrackObjects(seed);
 
     // Build meshes (section-aware walls)
     this.meshGroup = new Group();
-    this.meshGroup.add(buildRoadMesh(this.frames, this.halfWidthSamples));
+    this.meshGroup.add(buildRoadMesh(this.frames, this.halfWidthSamples, song.sections, this.sectionBoundaries));
     this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, -1, song.sections, this.sectionBoundaries));
     this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, 1, song.sections, this.sectionBoundaries));
     this.meshGroup.add(buildCenterLineMesh(this.frames));
     this.meshGroup.add(this.buildTrackObjectMeshes());
   }
 
-  private generateControlPoints(seed: number, targetLength: number): Vector3[] {
+  private generateControlPoints(seed: number, targetLength: number): { points: Vector3[]; features: TrackFeature[] } {
     const allPoints: Vector3[] = [];
+    const features: TrackFeature[] = [];
     let currentPos = new Vector3(0, 0, 0);
     let currentTangent = new Vector3(0, 0, -1);
     let usedLength = 0;
@@ -129,6 +132,8 @@ export class TrackGenerator implements Track {
 
         const chunkFn = chunkFns[chunkType];
         const result = chunkFn(currentPos, currentTangent, chunkLen, rng, params);
+        const featureU = TMath.clamp((usedLength + chunkLen * 0.5) / targetLength, 0.001, 0.995);
+        this.captureTrackFeatures(features, result.tags, featureU, section, si, sectionUsed);
 
         // Add points (skip first if we already have points to avoid duplicates)
         const startIdx = allPoints.length > 0 ? 1 : 0;
@@ -170,7 +175,7 @@ export class TrackGenerator implements Track {
       }
     }
 
-    return allPoints;
+    return { points: allPoints, features };
   }
 
   // ---- Track interface ----
@@ -298,6 +303,10 @@ export class TrackGenerator implements Track {
 
   getTrackObjects(): readonly TrackObject[] {
     return this.trackObjects;
+  }
+
+  getTrackFeatures(): readonly TrackFeature[] {
+    return this.trackFeatures;
   }
 
   private getSectionAt(u: number): SongSection | null {
@@ -495,11 +504,34 @@ export class TrackGenerator implements Track {
     const dz = a.z - b.z;
     return dx * dx + dz * dz;
   }
+
+  private captureTrackFeatures(
+    features: TrackFeature[],
+    tags: string[],
+    u: number,
+    section: SongSection,
+    sectionIndex: number,
+    sectionUsed: number,
+  ): void {
+    const prefix = `feature-${sectionIndex}-${Math.round(sectionUsed)}`;
+    if (tags.includes("hasLoop")) {
+      features.push(this.makeTrackFeature(`${prefix}-loop`, "loop", u, section.energy, section.type));
+    }
+    if (tags.includes("hasJump")) {
+      features.push(this.makeTrackFeature(`${prefix}-jump`, "jump", u, section.energy, section.type));
+    }
+  }
+
+  private makeTrackFeature(
+    id: string,
+    kind: TrackFeature["kind"],
+    u: number,
+    energy: number,
+    sectionType: SongSectionType,
+  ): TrackFeature {
+    return { id, kind, u, energy, sectionType };
+  }
 }
-
-// ---- Chunk picker ----
-
-import type { SongSection } from "../../../shared/song-schema";
 
 export type ChunkPicker = (
   section: SongSection,

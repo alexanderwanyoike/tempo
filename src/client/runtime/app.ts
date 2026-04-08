@@ -1,21 +1,29 @@
 import {
+  ACESFilmicToneMapping,
   AmbientLight,
   BoxGeometry,
   Color,
   DirectionalLight,
+  FogExp2,
   Group,
+  HemisphereLight,
   MathUtils,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
   Scene,
+  Vector2,
   WebGLRenderer,
 } from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import type { SongDefinition } from "../../../shared/song-schema";
 import type { ClientConfig } from "./config";
+import { clampFictionId, EnvironmentRuntime, type EnvironmentFictionId } from "./environment";
 import { VehicleInput } from "./input";
-import { MusicSync } from "./music-sync";
+import { MusicSync, type ReactiveBands } from "./music-sync";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
@@ -24,6 +32,7 @@ import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
 export class App {
   private readonly renderer: WebGLRenderer;
+  private readonly composer: EffectComposer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly carRoot: Group;
@@ -34,12 +43,15 @@ export class App {
   private readonly trackObjects: readonly TrackObject[];
   private readonly musicSync: MusicSync | null;
   private readonly songDuration: number | null;
+  private readonly fictionId: EnvironmentFictionId;
+  private readonly environment: EnvironmentRuntime;
   private readonly debugHud: HTMLDivElement | null;
   private readonly statusOverlay: HTMLDivElement;
   private readonly triggeredTrackObjects = new Set<string>();
   private lastFrameTime = 0;
   private elapsedRaceTime = 0;
   private raceState: "running" | "won" | "lost" = "running";
+  private latestReactiveBands: ReactiveBands | null = null;
   private readonly orientMat = new Matrix4();
 
   static async create(
@@ -50,14 +62,17 @@ export class App {
     const params = new URL(location.href).searchParams;
     const songUrl = params.get("song") ?? "/songs/firestarter.json";
     const seedParam = params.get("seed");
+    const fictionParam = params.get("fiction");
+    const fictionId = clampFictionId(fictionParam ? parseInt(fictionParam, 10) : null);
 
     let track: Track;
     let musicSync: MusicSync | null = null;
     let song: SongDefinition | null = null;
+    let seed = 0;
 
     try {
       song = await loadSongDefinition(songUrl);
-      const seed = seedParam ? parseInt(seedParam, 10) : song.baseSeed;
+      seed = seedParam ? parseInt(seedParam, 10) : song.baseSeed;
       track = new TrackGenerator(song, seed);
 
       // Try to load music (non-blocking if no MP3 available)
@@ -74,7 +89,7 @@ export class App {
       track = new TestTrack();
     }
 
-    return new App(root, config, track, musicSync, song?.duration ?? null);
+    return new App(root, config, track, musicSync, song, seed, fictionId);
   }
 
   private constructor(
@@ -82,17 +97,29 @@ export class App {
     private readonly config: ClientConfig,
     track: Track,
     musicSync: MusicSync | null,
-    songDuration: number | null,
+    song: SongDefinition | null,
+    seed: number,
+    fictionId: EnvironmentFictionId,
   ) {
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     this.scene = new Scene();
     this.scene.background = new Color("#05070c");
 
     // Near clip at 1.0 to cull close track geometry
     this.camera = new PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1.0, 2000);
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new UnrealBloomPass(
+      new Vector2(window.innerWidth, window.innerHeight),
+      0.44,
+      0.42,
+      0.36,
+    ));
 
     const body = new Mesh(
       new BoxGeometry(1.4, 0.5, 3.2),
@@ -125,12 +152,15 @@ export class App {
     this.input = new VehicleInput();
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.musicSync = musicSync;
-    this.songDuration = songDuration;
+    this.songDuration = song?.duration ?? null;
+    this.fictionId = fictionId;
     this.debugHud = this.createDebugHud();
     this.statusOverlay = this.createStatusOverlay();
 
     this.track = track;
     this.trackObjects = this.track.getTrackObjects();
+    this.environment = new EnvironmentRuntime(this.scene, this.track, song, seed, fictionId);
+    this.scene.add(this.environment.group);
     this.scene.add(this.track.meshGroup);
 
     this.vehicleController.setTrack(this.track);
@@ -154,10 +184,14 @@ export class App {
   }
 
   private setupScene(): void {
-    const ambient = new AmbientLight("#9bc7ff", 1.4);
-    const sun = new DirectionalLight("#ff5f87", 2);
-    sun.position.set(4, 8, 6);
-    this.scene.add(ambient, sun);
+    const hemi = new HemisphereLight("#62c7ff", "#080b12", 1.1);
+    const ambient = new AmbientLight("#5b89c7", 0.7);
+    const key = new DirectionalLight("#ff658e", 1.8);
+    key.position.set(5, 9, 6);
+    const rim = new DirectionalLight("#48d6ff", 1.2);
+    rim.position.set(-6, 4, -8);
+    this.scene.add(hemi, ambient, key, rim);
+    this.scene.fog = new FogExp2("#0a1018", 0.0018);
     this.root.dataset.wsUrl = this.config.websocketUrl;
   }
 
@@ -175,6 +209,7 @@ export class App {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
   };
 
   private updateCarTransform(): void {
@@ -306,8 +341,8 @@ export class App {
     const finishDelta = projectedFinish !== null && this.songDuration !== null
       ? projectedFinish - this.songDuration
       : null;
-
     this.debugHud.textContent = [
+      `fiction ${this.fictionId}`,
       `race ${this.formatSeconds(this.elapsedRaceTime)}`,
       `music ${this.formatSeconds(musicTime)}`,
       `song ${this.songDuration !== null ? this.formatSeconds(this.songDuration) : "--:--.--"}`,
@@ -315,6 +350,7 @@ export class App {
       `speed ${state.speed.toFixed(1)} m/s`,
       `proj ${projectedFinish !== null ? this.formatSeconds(projectedFinish) : "--:--.--"}`,
       `delta ${finishDelta !== null ? `${finishDelta >= 0 ? "+" : ""}${finishDelta.toFixed(2)}s` : "--"}`,
+      `bands ${this.latestReactiveBands ? `${this.latestReactiveBands.low.toFixed(2)} ${this.latestReactiveBands.mid.toFixed(2)} ${this.latestReactiveBands.high.toFixed(2)}` : "-- -- --"}`,
     ].join("\n");
   }
 
@@ -333,10 +369,18 @@ export class App {
       this.handleTrackObjects();
       this.updateRaceState();
     }
+    const musicTime = this.musicSync?.getCurrentTime() ?? this.elapsedRaceTime;
+    this.latestReactiveBands = this.musicSync?.getReactiveBands() ?? null;
     this.updateCarTransform();
     this.updateCamera();
+    this.environment.update(
+      this.elapsedRaceTime,
+      musicTime,
+      this.vehicleController.state.trackU,
+      this.latestReactiveBands,
+    );
     this.updateDebugHud();
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
     window.requestAnimationFrame(this.render);
   };
 }
