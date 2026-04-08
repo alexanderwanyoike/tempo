@@ -79,6 +79,30 @@ export class MusicSync {
     this.ctx?.resume();
   }
 
+  stop(): void {
+    if (this.source) {
+      try {
+        this.source.stop(0);
+      } catch {
+        // Source may already be stopped.
+      }
+      this.source.disconnect();
+      this.source = null;
+    }
+    if (this.analyser) {
+      this.analyser.disconnect();
+      this.analyser = null;
+    }
+    if (this.ctx) {
+      void this.ctx.close();
+      this.ctx = null;
+    }
+    this.startCtxTime = 0;
+    this.smoothedBands.low = 0;
+    this.smoothedBands.mid = 0;
+    this.smoothedBands.high = 0;
+  }
+
   private averageBand(start: number, end: number): number {
     if (!this.analyserData || end <= start) return 0;
 

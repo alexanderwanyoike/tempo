@@ -9,6 +9,7 @@ import {
   HemisphereLight,
   MathUtils,
   Matrix4,
+  MeshBasicMaterial,
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
@@ -32,14 +33,36 @@ import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
 
+type TrailSample = {
+  position: Vector3;
+  quaternion: Quaternion;
+  boost: number;
+};
+
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
+  private static readonly BOOST_COLOR = new Color("#8bff56");
+  private static readonly BOOST_HOT_COLOR = new Color("#d8ff8a");
+  private static readonly BODY_BASE_COLOR = new Color("#14f1ff");
+  private static readonly BODY_BASE_EMISSIVE = new Color("#0f6d74");
+  private static readonly COCKPIT_BASE_COLOR = new Color("#0e1320");
+  private static readonly COCKPIT_BASE_EMISSIVE = new Color("#1b2744");
+  private static readonly WIN_SFX_URL = new URL("../../../assets/audio/Win Backspin.wav", import.meta.url).href;
+  private static readonly LOSE_SFX_URL = new URL("../../../assets/audio/Lose Backspin.wav", import.meta.url).href;
   private readonly renderer: WebGLRenderer;
   private readonly composer: EffectComposer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly carRoot: Group;
   private readonly carBody: Mesh;
+  private readonly carBodyMaterial: MeshStandardMaterial;
+  private readonly cockpitMaterial: MeshStandardMaterial;
+  private readonly boostTrailGroup = new Group();
+  private readonly boostTrailMeshes: Mesh[] = [];
+  private readonly boostTrailMaterials: MeshBasicMaterial[] = [];
+  private readonly boostTrailHistory: TrailSample[] = [];
+  private readonly winSfx = new Audio(App.WIN_SFX_URL);
+  private readonly loseSfx = new Audio(App.LOSE_SFX_URL);
   private readonly input: VehicleInput;
   private readonly vehicleController: VehicleController;
   private readonly track: Track;
@@ -135,26 +158,22 @@ export class App {
       0.36,
     ));
 
-    const body = new Mesh(
-      new BoxGeometry(1.4, 0.5, 3.2),
-      new MeshStandardMaterial({
-        color: "#14f1ff",
-        emissive: "#0f6d74",
-        metalness: 0.3,
-        roughness: 0.5,
-      }),
-    );
+    const bodyMaterial = new MeshStandardMaterial({
+      color: App.BODY_BASE_COLOR.clone(),
+      emissive: App.BODY_BASE_EMISSIVE.clone(),
+      metalness: 0.3,
+      roughness: 0.5,
+    });
+    const body = new Mesh(new BoxGeometry(1.4, 0.5, 3.2), bodyMaterial);
     body.position.y = 0.1;
 
-    const cockpit = new Mesh(
-      new BoxGeometry(0.8, 0.35, 1.15),
-      new MeshStandardMaterial({
-        color: "#0e1320",
-        emissive: "#1b2744",
-        metalness: 0.15,
-        roughness: 0.45,
-      }),
-    );
+    const cockpitMaterial = new MeshStandardMaterial({
+      color: App.COCKPIT_BASE_COLOR.clone(),
+      emissive: App.COCKPIT_BASE_EMISSIVE.clone(),
+      metalness: 0.15,
+      roughness: 0.45,
+    });
+    const cockpit = new Mesh(new BoxGeometry(0.8, 0.35, 1.15), cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
 
     const carRoot = new Group();
@@ -162,6 +181,8 @@ export class App {
 
     this.carRoot = carRoot;
     this.carBody = body;
+    this.carBodyMaterial = bodyMaterial;
+    this.cockpitMaterial = cockpitMaterial;
     this.input = new VehicleInput();
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.musicSync = musicSync;
@@ -183,7 +204,10 @@ export class App {
     this.vehicleController.state.lateralOffset = 0;
 
     this.scene.add(this.carRoot);
+    this.scene.add(this.boostTrailGroup);
     this.scene.add(this.camera);
+    this.createBoostTrailMeshes();
+    this.configureSfx();
   }
 
   start(): void {
@@ -230,10 +254,10 @@ export class App {
     const state = this.vehicleController.state;
     const dt = Math.min(deltaSeconds, 1 / 30);
     const positionAlpha = 1 - Math.exp(-12 * dt);
-    const rotationAlpha = 1 - Math.exp(-14 * dt);
+    const rotationAlpha = 1 - Math.exp(-20 * dt);
     const desiredPosition = this.tempVector.copy(state.position).addScaledVector(state.up, state.visualHoverOffset);
 
-    const negFwd = state.forward.clone().negate();
+    const negFwd = this.tempVectorB.copy(state.forward).negate();
     this.orientMat.makeBasis(state.right, state.up, negFwd);
     this.targetCarQuaternion.setFromRotationMatrix(this.orientMat);
 
@@ -242,13 +266,100 @@ export class App {
       this.carRoot.quaternion.copy(this.targetCarQuaternion);
     } else {
       this.carRoot.position.lerp(desiredPosition, positionAlpha);
-      this.carRoot.quaternion.slerp(this.targetCarQuaternion, rotationAlpha);
+      const currentUpDot = this.tempVector.copy(App.WORLD_UP).applyQuaternion(this.carRoot.quaternion).dot(state.up);
+      const currentForwardDot = this.tempVectorB.set(0, 0, -1).applyQuaternion(this.carRoot.quaternion).dot(state.forward);
+      const quaternionDot = Math.abs(this.carRoot.quaternion.dot(this.targetCarQuaternion));
+      const shouldSnapOrientation = currentUpDot < 0.15 || currentForwardDot < 0.1 || quaternionDot < 0.2;
+      if (shouldSnapOrientation) {
+        this.carRoot.quaternion.copy(this.targetCarQuaternion);
+      } else {
+        this.carRoot.quaternion.slerp(this.targetCarQuaternion, rotationAlpha);
+      }
     }
 
     // Body visual effects (local to car)
     const speedRatio = Math.min(Math.abs(state.speed) / 90, 1);
     const visualYaw = -state.steering * 0.15 * (0.3 + speedRatio * 0.7);
     this.carBody.rotation.set(state.visualPitch, visualYaw, state.visualBank, "XYZ");
+  }
+
+  private createBoostTrailMeshes(): void {
+    const trailGeometry = new BoxGeometry(1.2, 0.22, 2.8);
+    for (let i = 0; i < 10; i++) {
+      const material = new MeshBasicMaterial({
+        color: App.BOOST_COLOR.clone(),
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const mesh = new Mesh(trailGeometry, material);
+      mesh.visible = false;
+      this.boostTrailMaterials.push(material);
+      this.boostTrailMeshes.push(mesh);
+      this.boostTrailGroup.add(mesh);
+    }
+  }
+
+  private configureSfx(): void {
+    for (const sfx of [this.winSfx, this.loseSfx]) {
+      sfx.preload = "auto";
+      sfx.volume = 0.92;
+    }
+  }
+
+  private updateBoostVisuals(): void {
+    const boost = this.vehicleController.state.visualBoost;
+    const bodyColor = App.BODY_BASE_COLOR.clone().lerp(App.BOOST_HOT_COLOR, boost);
+    const bodyEmissive = App.BODY_BASE_EMISSIVE.clone().lerp(App.BOOST_HOT_COLOR, boost);
+    const cockpitColor = App.COCKPIT_BASE_COLOR.clone().lerp(new Color("#4a6a26"), boost * 0.48);
+    const cockpitEmissive = App.COCKPIT_BASE_EMISSIVE.clone().lerp(App.BOOST_COLOR, boost);
+
+    this.carBodyMaterial.color.copy(bodyColor);
+    this.carBodyMaterial.emissive.copy(bodyEmissive);
+    this.carBodyMaterial.emissiveIntensity = 0.9 + boost * 3.6;
+    this.cockpitMaterial.color.copy(cockpitColor);
+    this.cockpitMaterial.emissive.copy(cockpitEmissive);
+    this.cockpitMaterial.emissiveIntensity = 0.5 + boost * 2.1;
+
+    this.boostTrailHistory.unshift({
+      position: this.carRoot.position.clone(),
+      quaternion: this.carRoot.quaternion.clone(),
+      boost,
+    });
+    if (this.boostTrailHistory.length > 28) this.boostTrailHistory.length = 28;
+
+    for (let i = 0; i < this.boostTrailMeshes.length; i++) {
+      const sample = this.boostTrailHistory[Math.min(this.boostTrailHistory.length - 1, 2 + i * 2)];
+      const mesh = this.boostTrailMeshes[i];
+      const material = this.boostTrailMaterials[i];
+      if (!sample || sample.boost < 0.04) {
+        mesh.visible = false;
+        continue;
+      }
+
+      mesh.visible = true;
+      mesh.position.copy(sample.position);
+      mesh.quaternion.copy(sample.quaternion);
+      mesh.scale.set(
+        1 + sample.boost * (0.45 + i * 0.03),
+        1 + sample.boost * 0.25,
+        1.2 + sample.boost * (0.9 + i * 0.08),
+      );
+      material.opacity = Math.max(0, sample.boost * (0.5 - i * 0.04));
+      material.color.copy(App.BOOST_COLOR).lerp(App.BOOST_HOT_COLOR, sample.boost * 0.5);
+    }
+  }
+
+  private playRaceSfx(state: "won" | "lost"): void {
+    const target = state === "won" ? this.winSfx : this.loseSfx;
+    const other = state === "won" ? this.loseSfx : this.winSfx;
+    other.pause();
+    other.currentTime = 0;
+    target.pause();
+    target.currentTime = 0;
+    void target.play().catch((error) => {
+      console.warn(`Failed to play ${state} SFX:`, error);
+    });
   }
 
   private updateCamera(deltaSeconds: number): void {
@@ -360,7 +471,9 @@ export class App {
     this.statusOverlay.style.display = "flex";
     this.statusOverlay.textContent = state === "won" ? "Track Cleared" : "Music Ended\nYou Lose";
     this.statusOverlay.style.whiteSpace = "pre";
-    this.musicSync?.pause();
+    if (state === "won") this.musicSync?.stop();
+    else this.musicSync?.pause();
+    this.playRaceSfx(state);
   }
 
   private handleTrackObjects(): void {
@@ -442,6 +555,7 @@ export class App {
     const musicTime = this.musicSync?.getCurrentTime() ?? this.elapsedRaceTime;
     this.latestReactiveBands = this.musicSync?.getReactiveBands() ?? null;
     this.updateCarTransform(deltaSeconds);
+    this.updateBoostVisuals();
     this.updateCamera(deltaSeconds);
     this.environment.update(
       this.elapsedRaceTime,

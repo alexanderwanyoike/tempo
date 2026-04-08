@@ -48,6 +48,7 @@ export type VehicleState = {
   visualBank: number;
   visualPitch: number;
   boostMultiplier: number;
+  visualBoost: number;
 };
 
 export const defaultVehicleTuning: VehicleTuning = {
@@ -85,6 +86,7 @@ export class VehicleController {
     visualBank: 0,
     visualPitch: 0,
     boostMultiplier: 1,
+    visualBoost: 0,
   };
 
   lastSafeU = 0.001;
@@ -357,5 +359,8 @@ export class VehicleController {
       ((input.throttle ? -1 : 0) + (input.brake ? 1 : 0)) * t.visualPitchAngle * (0.35 + vsr * 0.65),
       -t.visualPitchAngle, t.visualPitchAngle,
     );
+
+    const boostTarget = this.temporaryBoostTimer > 0 ? 1 : 0;
+    s.visualBoost = MathUtils.damp(s.visualBoost, boostTarget, boostTarget > s.visualBoost ? 18 : 7, dt);
   }
 }
