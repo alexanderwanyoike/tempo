@@ -24,7 +24,8 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import type { SongDefinition } from "../../../shared/song-schema";
 import type { ClientConfig } from "./config";
-import { clampFictionId, EnvironmentRuntime, type EnvironmentFictionId } from "./environment";
+import { EnvironmentRuntime } from "./environment";
+import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
 import { loadSongDefinition } from "./song-loader";
@@ -37,6 +38,18 @@ type TrailSample = {
   position: Vector3;
   quaternion: Quaternion;
   boost: number;
+};
+
+type RaceState = "running" | "won" | "lost";
+
+export type AppLaunchOptions = {
+  songUrl?: string;
+  musicUrl?: string | null;
+  seed?: number | null;
+  fictionId?: EnvironmentFictionId;
+  debugHud?: boolean;
+  onRetry?: (() => void) | null;
+  onBackToMenu?: (() => void) | null;
 };
 
 export class App {
@@ -73,10 +86,14 @@ export class App {
   private readonly environment: EnvironmentRuntime;
   private readonly debugHud: HTMLDivElement | null;
   private readonly statusOverlay: HTMLDivElement;
+  private readonly statusTitle: HTMLDivElement;
+  private readonly statusSubtitle: HTMLDivElement;
+  private readonly retryButton: HTMLButtonElement;
+  private readonly menuButton: HTMLButtonElement;
   private readonly triggeredTrackObjects = new Set<string>();
   private lastFrameTime = 0;
   private elapsedRaceTime = 0;
-  private raceState: "running" | "won" | "lost" = "running";
+  private raceState: RaceState = "running";
   private latestReactiveBands: ReactiveBands | null = null;
   private readonly orientMat = new Matrix4();
   private readonly targetCarQuaternion = new Quaternion();
@@ -89,44 +106,67 @@ export class App {
   private readonly smoothedCameraUp = new Vector3(0, 1, 0);
   private readonly tempVector = new Vector3();
   private readonly tempVectorB = new Vector3();
+  private animationFrameId: number | null = null;
+  private destroyed = false;
   private visualsInitialized = false;
 
   static async create(
     root: HTMLElement,
     config: ClientConfig,
+    launch: AppLaunchOptions = {},
   ): Promise<App> {
-    // Check URL params for song and seed
-    const params = new URL(location.href).searchParams;
-    const songUrl = params.get("song") ?? "/songs/firestarter.json";
-    const seedParam = params.get("seed");
-    const fictionParam = params.get("fiction");
-    const fictionId = clampFictionId(fictionParam ? parseInt(fictionParam, 10) : null);
+    const songUrl = launch.songUrl;
+    const fictionId = clampFictionId(launch.fictionId ?? null);
 
     let track: Track;
     let musicSync: MusicSync | null = null;
     let song: SongDefinition | null = null;
     let seed = 0;
+    let musicLoadPromise: Promise<void> | null = null;
 
-    try {
-      song = await loadSongDefinition(songUrl);
-      seed = seedParam ? parseInt(seedParam, 10) : song.baseSeed;
-      track = new TrackGenerator(song, seed);
+    if (songUrl) {
+      const requestedMusicUrl = launch.musicUrl === null
+        ? null
+        : (launch.musicUrl ?? songUrl.replace(/\.json$/, ".mp3").replace("/songs/", "/music/"));
+      const songPromise = loadSongDefinition(songUrl);
 
-      // Try to load music (non-blocking if no MP3 available)
-      const musicUrl = songUrl.replace(/\.json$/, ".mp3").replace("/songs/", "/music/");
-      try {
+      if (requestedMusicUrl) {
         musicSync = new MusicSync();
-        await musicSync.load(musicUrl);
+        musicLoadPromise = musicSync.load(requestedMusicUrl);
+      }
+
+      try {
+        song = await songPromise;
+        seed = launch.seed ?? song.baseSeed;
+        track = new TrackGenerator(song, seed);
+      } catch {
+        track = new TestTrack();
+      }
+    } else {
+      track = new TestTrack();
+    }
+
+    if (musicLoadPromise) {
+      try {
+        await musicLoadPromise;
       } catch (e) {
         console.warn("Music load failed:", e);
         musicSync = null;
       }
-    } catch {
-      // Fallback to test track if song loading fails
-      track = new TestTrack();
     }
 
-    return new App(root, config, track, musicSync, song, seed, fictionId);
+    return new App(
+      root,
+      config,
+      track,
+      musicSync,
+      song,
+      seed,
+      fictionId,
+      launch.debugHud ?? false,
+      launch.onRetry ?? null,
+      launch.onBackToMenu ?? null,
+    );
   }
 
   private constructor(
@@ -137,6 +177,9 @@ export class App {
     song: SongDefinition | null,
     seed: number,
     fictionId: EnvironmentFictionId,
+    debugHudEnabled: boolean,
+    private readonly onRetry: (() => void) | null,
+    private readonly onBackToMenu: (() => void) | null,
   ) {
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -188,8 +231,13 @@ export class App {
     this.musicSync = musicSync;
     this.songDuration = song?.duration ?? null;
     this.fictionId = fictionId;
-    this.debugHud = this.createDebugHud();
-    this.statusOverlay = this.createStatusOverlay();
+    this.debugHud = this.createDebugHud(debugHudEnabled);
+    const statusUi = this.createStatusOverlay();
+    this.statusOverlay = statusUi.overlay;
+    this.statusTitle = statusUi.title;
+    this.statusSubtitle = statusUi.subtitle;
+    this.retryButton = statusUi.retryButton;
+    this.menuButton = statusUi.menuButton;
 
     this.track = track;
     this.trackObjects = this.track.getTrackObjects();
@@ -221,6 +269,26 @@ export class App {
     this.render(this.lastFrameTime);
   }
 
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+
+    if (this.animationFrameId !== null) {
+      window.cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+
+    window.removeEventListener("resize", this.handleResize);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.input.detach();
+    this.musicSync?.stop();
+    this.winSfx.pause();
+    this.loseSfx.pause();
+    this.renderer.dispose();
+    this.disposeSceneGraph();
+    this.root.replaceChildren();
+  }
+
   private setupScene(): void {
     const hemi = new HemisphereLight("#62c7ff", "#080b12", 1.1);
     const ambient = new AmbientLight("#5b89c7", 0.7);
@@ -235,13 +303,14 @@ export class App {
 
   private bindEvents(): void {
     window.addEventListener("resize", this.handleResize);
-    // Resume audio context on visibility change
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) this.musicSync?.pause();
-      else this.musicSync?.resume();
-    });
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.input.attach();
   }
+
+  private readonly handleVisibilityChange = (): void => {
+    if (document.hidden) this.musicSync?.pause();
+    else this.musicSync?.resume();
+  };
 
   private readonly handleResize = (): void => {
     this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -428,9 +497,8 @@ export class App {
     }
   }
 
-  private createDebugHud(): HTMLDivElement | null {
-    const params = new URL(location.href).searchParams;
-    if (params.get("debugHud") !== "1") return null;
+  private createDebugHud(enabled: boolean): HTMLDivElement | null {
+    if (!enabled) return null;
 
     const hud = document.createElement("div");
     hud.style.position = "fixed";
@@ -448,29 +516,100 @@ export class App {
     return hud;
   }
 
-  private createStatusOverlay(): HTMLDivElement {
+  private createStatusOverlay(): {
+    overlay: HTMLDivElement;
+    title: HTMLDivElement;
+    subtitle: HTMLDivElement;
+    retryButton: HTMLButtonElement;
+    menuButton: HTMLButtonElement;
+  } {
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.inset = "0";
     overlay.style.display = "none";
     overlay.style.alignItems = "center";
     overlay.style.justifyContent = "center";
-    overlay.style.background = "rgba(2, 4, 9, 0.56)";
-    overlay.style.color = "#f4fbff";
-    overlay.style.font = "700 42px/1.1 system-ui, sans-serif";
-    overlay.style.letterSpacing = "0.08em";
-    overlay.style.textTransform = "uppercase";
-    overlay.style.textAlign = "center";
+    overlay.style.background = "rgba(2, 4, 9, 0.68)";
     overlay.style.pointerEvents = "none";
-    return overlay;
+
+    const panel = document.createElement("div");
+    panel.style.minWidth = "min(420px, calc(100vw - 48px))";
+    panel.style.padding = "28px 28px 24px";
+    panel.style.borderRadius = "20px";
+    panel.style.border = "1px solid rgba(120, 230, 255, 0.18)";
+    panel.style.background = "rgba(8, 12, 20, 0.88)";
+    panel.style.boxShadow = "0 30px 120px rgba(0, 0, 0, 0.48)";
+    panel.style.textAlign = "center";
+    panel.style.pointerEvents = "auto";
+
+    const title = document.createElement("div");
+    title.style.color = "#f4fbff";
+    title.style.font = "700 40px/1.02 system-ui, sans-serif";
+    title.style.letterSpacing = "0.08em";
+    title.style.textTransform = "uppercase";
+
+    const subtitle = document.createElement("div");
+    subtitle.style.marginTop = "10px";
+    subtitle.style.color = "rgba(221, 233, 247, 0.8)";
+    subtitle.style.font = "600 13px/1.45 system-ui, sans-serif";
+    subtitle.style.letterSpacing = "0.08em";
+    subtitle.style.textTransform = "uppercase";
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.justifyContent = "center";
+    actions.style.gap = "12px";
+    actions.style.marginTop = "22px";
+
+    const retryButton = this.createOverlayButton("Retry");
+    retryButton.addEventListener("click", () => {
+      this.onRetry?.();
+    });
+
+    const menuButton = this.createOverlayButton("Back To Menu");
+    menuButton.addEventListener("click", () => {
+      this.onBackToMenu?.();
+    });
+
+    actions.append(retryButton, menuButton);
+    panel.append(title, subtitle, actions);
+    overlay.appendChild(panel);
+
+    return {
+      overlay,
+      title,
+      subtitle,
+      retryButton,
+      menuButton,
+    };
+  }
+
+  private createOverlayButton(label: string): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.style.border = "0";
+    button.style.borderRadius = "999px";
+    button.style.padding = "12px 18px";
+    button.style.background = "linear-gradient(135deg, rgba(121, 245, 255, 0.94), rgba(119, 255, 184, 0.94))";
+    button.style.color = "#071019";
+    button.style.font = "800 12px/1 system-ui, sans-serif";
+    button.style.letterSpacing = "0.12em";
+    button.style.textTransform = "uppercase";
+    button.style.cursor = "pointer";
+    return button;
   }
 
   private setRaceState(state: "won" | "lost"): void {
     if (this.raceState !== "running") return;
     this.raceState = state;
     this.statusOverlay.style.display = "flex";
-    this.statusOverlay.textContent = state === "won" ? "Track Cleared" : "Music Ended\nYou Lose";
-    this.statusOverlay.style.whiteSpace = "pre";
+    this.statusTitle.textContent = state === "won" ? "Track Cleared" : "Music Ended";
+    this.statusSubtitle.textContent = state === "won"
+      ? "Beat the song. Retry this seed or head back to the menu."
+      : "The tune ended before the finish. Retry or switch tracks.";
+    this.retryButton.style.display = this.onRetry ? "inline-flex" : "none";
+    this.menuButton.style.display = this.onBackToMenu ? "inline-flex" : "none";
     if (state === "won") this.musicSync?.stop();
     else this.musicSync?.pause();
     this.playRaceSfx(state);
@@ -544,6 +683,7 @@ export class App {
   }
 
   private render = (time: number): void => {
+    if (this.destroyed) return;
     const deltaSeconds = (time - this.lastFrameTime) / 1000;
     this.lastFrameTime = time;
     if (this.raceState === "running") {
@@ -565,6 +705,23 @@ export class App {
     );
     this.updateDebugHud();
     this.composer.render();
-    window.requestAnimationFrame(this.render);
+    this.animationFrameId = window.requestAnimationFrame(this.render);
   };
+
+  private disposeSceneGraph(): void {
+    this.scene.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      object.geometry.dispose();
+      this.disposeMaterial(object.material);
+    });
+  }
+
+  private disposeMaterial(material: Mesh["material"]): void {
+    if (Array.isArray(material)) {
+      for (const candidate of material) candidate.dispose();
+      return;
+    }
+
+    material.dispose();
+  }
 }

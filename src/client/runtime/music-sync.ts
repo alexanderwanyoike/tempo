@@ -16,7 +16,7 @@ export class MusicSync {
   private rawData: ArrayBuffer | null = null;
 
   async load(url: string): Promise<void> {
-    // Fetch the audio data but don't create AudioContext yet (needs user gesture)
+    this.primeAudioContext();
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to load music: ${response.status} ${url}`);
     this.rawData = await response.arrayBuffer();
@@ -24,31 +24,7 @@ export class MusicSync {
 
   play(): void {
     if (this.started || !this.rawData) return;
-    // Defer actual playback to the first user interaction
-    const startOnGesture = async () => {
-      if (this.started) return;
-      this.started = true;
-      try {
-        this.ctx = new AudioContext();
-        this.buffer = await this.ctx.decodeAudioData(this.rawData!);
-        this.source = this.ctx.createBufferSource();
-        this.source.buffer = this.buffer;
-        this.analyser = this.ctx.createAnalyser();
-        this.analyser.fftSize = 1024;
-        this.analyser.smoothingTimeConstant = 0.82;
-        this.analyserData = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
-        this.source.connect(this.analyser);
-        this.analyser.connect(this.ctx.destination);
-        this.source.start(0);
-        this.startCtxTime = this.ctx.currentTime;
-      } catch (e) {
-        console.warn("Music playback failed:", e);
-      }
-      window.removeEventListener("keydown", startOnGesture);
-      window.removeEventListener("click", startOnGesture);
-    };
-    window.addEventListener("keydown", startOnGesture, { once: true });
-    window.addEventListener("click", startOnGesture, { once: true });
+    void this.startPlayback();
   }
 
   getCurrentTime(): number {
@@ -80,6 +56,8 @@ export class MusicSync {
   }
 
   stop(): void {
+    window.removeEventListener("keydown", this.retryOnGesture);
+    window.removeEventListener("click", this.retryOnGesture);
     if (this.source) {
       try {
         this.source.stop(0);
@@ -101,6 +79,59 @@ export class MusicSync {
     this.smoothedBands.low = 0;
     this.smoothedBands.mid = 0;
     this.smoothedBands.high = 0;
+    this.buffer = null;
+    this.rawData = null;
+    this.started = false;
+  }
+
+  private async startPlayback(): Promise<void> {
+    if (this.started || !this.rawData) return;
+
+    try {
+      this.started = true;
+      if (!this.ctx) {
+        this.ctx = new AudioContext();
+      }
+
+      if (this.ctx.state === "suspended") {
+        await this.ctx.resume();
+      }
+
+      if (!this.buffer) {
+        this.buffer = await this.ctx.decodeAudioData(this.rawData.slice(0));
+      }
+
+      this.source = this.ctx.createBufferSource();
+      this.source.buffer = this.buffer;
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 1024;
+      this.analyser.smoothingTimeConstant = 0.82;
+      this.analyserData = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
+      this.source.connect(this.analyser);
+      this.analyser.connect(this.ctx.destination);
+      this.source.start(0);
+      this.startCtxTime = this.ctx.currentTime;
+    } catch (e) {
+      this.started = false;
+      console.warn("Music playback failed:", e);
+      window.addEventListener("keydown", this.retryOnGesture, { once: true });
+      window.addEventListener("click", this.retryOnGesture, { once: true });
+    }
+  }
+
+  private readonly retryOnGesture = (): void => {
+    window.removeEventListener("keydown", this.retryOnGesture);
+    window.removeEventListener("click", this.retryOnGesture);
+    void this.startPlayback();
+  };
+
+  private primeAudioContext(): void {
+    if (this.ctx) return;
+    try {
+      this.ctx = new AudioContext();
+    } catch {
+      this.ctx = null;
+    }
   }
 
   private averageBand(start: number, end: number): number {

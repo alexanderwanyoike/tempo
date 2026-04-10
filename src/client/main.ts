@@ -1,4 +1,3 @@
-import { App } from "./runtime/app";
 import { clientConfig } from "./runtime/config";
 
 (async () => {
@@ -8,6 +7,7 @@ import { clientConfig } from "./runtime/config";
     throw new Error("App root not found.");
   }
 
-  const app = await App.create(root, clientConfig);
-  app.start();
+  const { GameShell } = await import("./game-shell");
+  const shell = new GameShell(root, clientConfig);
+  await shell.start();
 })();
