@@ -11,3 +11,8 @@ coverage/
 *.log
 .netlify/
 .railway/
+package-lock.json
+tsconfig.tsbuildinfo
+tools/.venv/
+__pycache__/
+public/music/*.mp3

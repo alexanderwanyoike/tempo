@@ -3,6 +3,8 @@ export type VehicleInputState = {
   brake: boolean;
   steerLeft: boolean;
   steerRight: boolean;
+  airbrakeLeft: boolean;
+  airbrakeRight: boolean;
   boost: boolean;
 };
 
@@ -15,6 +17,8 @@ const bindings: Record<string, keyof VehicleInputState> = {
   KeyA: "steerLeft",
   ArrowRight: "steerRight",
   KeyD: "steerRight",
+  KeyQ: "airbrakeLeft",
+  KeyE: "airbrakeRight",
   ShiftLeft: "boost",
   ShiftRight: "boost",
 };
@@ -25,6 +29,8 @@ export class VehicleInput {
     brake: false,
     steerLeft: false,
     steerRight: false,
+    airbrakeLeft: false,
+    airbrakeRight: false,
     boost: false,
   };
 

@@ -1,0 +1,135 @@
+{
+  "id": "the-prodigy-firestarter",
+  "title": "Firestarter",
+  "artist": "The Prodigy",
+  "bpm": 143.55,
+  "duration": 225.28,
+  "baseSeed": 2013961555,
+  "sections": [
+    {
+      "id": "section-0",
+      "type": "intro",
+      "startTime": 0.0,
+      "endTime": 20.0,
+      "energy": 0.209,
+      "density": 0.862,
+      "hazardBias": 0.167,
+      "pickupBias": 0.475,
+      "tags": []
+    },
+    {
+      "id": "section-1",
+      "type": "build",
+      "startTime": 20.0,
+      "endTime": 32.7,
+      "energy": 0.46,
+      "density": 0.879,
+      "hazardBias": 0.368,
+      "pickupBias": 0.324,
+      "tags": []
+    },
+    {
+      "id": "section-2",
+      "type": "drop",
+      "startTime": 32.7,
+      "endTime": 64.6,
+      "energy": 0.542,
+      "density": 0.77,
+      "hazardBias": 0.434,
+      "pickupBias": 0.275,
+      "tags": []
+    },
+    {
+      "id": "section-3",
+      "type": "breakdown",
+      "startTime": 64.6,
+      "endTime": 70.8,
+      "energy": 0.323,
+      "density": 0.863,
+      "hazardBias": 0.258,
+      "pickupBias": 0.406,
+      "tags": []
+    },
+    {
+      "id": "section-4",
+      "type": "verse",
+      "startTime": 70.8,
+      "endTime": 96.6,
+      "energy": 0.526,
+      "density": 0.762,
+      "hazardBias": 0.421,
+      "pickupBias": 0.285,
+      "tags": []
+    },
+    {
+      "id": "section-5",
+      "type": "bridge",
+      "startTime": 96.6,
+      "endTime": 111.6,
+      "energy": 0.276,
+      "density": 0.699,
+      "hazardBias": 0.221,
+      "pickupBias": 0.435,
+      "tags": []
+    },
+    {
+      "id": "section-6",
+      "type": "verse",
+      "startTime": 111.6,
+      "endTime": 157.6,
+      "energy": 0.523,
+      "density": 0.756,
+      "hazardBias": 0.418,
+      "pickupBias": 0.286,
+      "tags": []
+    },
+    {
+      "id": "section-7",
+      "type": "bridge",
+      "startTime": 157.6,
+      "endTime": 172.3,
+      "energy": 0.211,
+      "density": 0.664,
+      "hazardBias": 0.169,
+      "pickupBias": 0.473,
+      "tags": []
+    },
+    {
+      "id": "section-8",
+      "type": "bridge",
+      "startTime": 172.3,
+      "endTime": 183.5,
+      "energy": 0.231,
+      "density": 1.0,
+      "hazardBias": 0.185,
+      "pickupBias": 0.462,
+      "tags": []
+    },
+    {
+      "id": "section-9",
+      "type": "bridge",
+      "startTime": 183.5,
+      "endTime": 196.6,
+      "energy": 0.27,
+      "density": 0.712,
+      "hazardBias": 0.216,
+      "pickupBias": 0.438,
+      "tags": []
+    },
+    {
+      "id": "section-10",
+      "type": "finale",
+      "startTime": 196.6,
+      "endTime": 225.28,
+      "energy": 0.53,
+      "density": 0.722,
+      "hazardBias": 0.424,
+      "pickupBias": 0.282,
+      "tags": []
+    }
+  ],
+  "dropMarkers": [
+    196.6
+  ],
+  "chunkBias": []
+}
