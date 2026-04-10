@@ -27,10 +27,9 @@ import {
 } from "three";
 import type { SongDefinition, SongSectionType } from "../../../shared/song-schema";
 import type { ReactiveBands } from "./music-sync";
+import type { EnvironmentFictionId } from "./fiction-id";
 import { mulberry32 } from "./prng";
 import type { Track, TrackFrame } from "./track-builder";
-
-export type EnvironmentFictionId = 1 | 2 | 3;
 
 type SectionInfo = {
   type: SongSectionType;
@@ -193,11 +192,6 @@ const MIN_ENV_CLEARANCE = 10;
 const GATE_CLEARANCE_HEIGHT = 12;
 const SKY_DOME_RADIUS = 520;
 const PHRASE_BEATS = 32;
-
-export function clampFictionId(value: number | null | undefined): EnvironmentFictionId {
-  if (value === 2 || value === 3) return value;
-  return 1;
-}
 
 export class EnvironmentRuntime {
   readonly group = new Group();

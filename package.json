@@ -11,7 +11,8 @@
     "check": "tsc --noEmit",
     "server": "node --enable-source-maps dist-server/server/index.js",
     "build:server": "tsc -p tsconfig.server.json",
-    "dev:server": "tsx watch src/server/index.ts"
+    "dev:server": "tsx watch src/server/index.ts",
+    "upload:assets": "node --env-file=.env scripts/upload-assets.mjs"
   },
   "dependencies": {
     "three": "^0.176.0",
@@ -19,6 +20,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1029.0",
     "@types/node": "^22.14.1",
     "@types/three": "^0.183.1",
     "@types/ws": "^8.18.1",

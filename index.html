@@ -3,12 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tempo</title>
+    <title>Tempo — Music Driven Racer</title>
+    <meta name="description" content="Tempo — a music driven racer. Every track is built from the song you pick." />
     <style>
       :root {
         color-scheme: dark;
         font-family: "Segoe UI", sans-serif;
-        background: #090b12;
+        background: #060a12;
         color: #f4f7ff;
       }
 
@@ -20,44 +21,19 @@
         margin: 0;
         overflow: hidden;
         background:
-          radial-gradient(circle at top, rgba(0, 255, 209, 0.16), transparent 30%),
-          radial-gradient(circle at bottom, rgba(255, 72, 120, 0.14), transparent 30%),
-          #090b12;
+          radial-gradient(circle at 20% 20%, rgba(0, 247, 255, 0.18), transparent 24%),
+          radial-gradient(circle at 80% 24%, rgba(255, 90, 132, 0.16), transparent 28%),
+          radial-gradient(circle at 50% 85%, rgba(129, 255, 192, 0.1), transparent 30%),
+          linear-gradient(180deg, #09111d 0%, #05080f 100%);
       }
 
       #app {
         width: 100vw;
         height: 100vh;
       }
-
-      .hud {
-        position: fixed;
-        top: 16px;
-        left: 16px;
-        z-index: 2;
-        padding: 12px 14px;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        background: rgba(10, 12, 20, 0.76);
-        backdrop-filter: blur(10px);
-      }
-
-      .hud h1,
-      .hud p {
-        margin: 0;
-      }
-
-      .hud p {
-        margin-top: 6px;
-        font-size: 12px;
-        opacity: 0.75;
-      }
     </style>
   </head>
   <body>
-    <div class="hud">
-      <h1>Tempo</h1>
-      <p>Scaffold build: client shell only</p>
-    </div>
     <div id="app"></div>
     <script type="module" src="/src/client/main.ts"></script>
   </body>

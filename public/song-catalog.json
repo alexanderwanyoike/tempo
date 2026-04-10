@@ -1,0 +1,49 @@
+{
+  "defaultSongId": "the-prodigy-firestarter",
+  "songs": [
+    {
+      "id": "the-prodigy-firestarter",
+      "title": "Firestarter",
+      "artist": "The Prodigy",
+      "bpm": 143.55,
+      "duration": 225.28,
+      "baseSeed": 2013961555,
+      "songPath": "/songs/firestarter.json",
+      "musicPath": "/music/firestarter.mp3",
+      "fictionIds": [1, 2, 3]
+    },
+    {
+      "id": "the-prodigy-smack-my-bitch-up",
+      "title": "Smack My Bitch Up",
+      "artist": "The Prodigy",
+      "bpm": 136,
+      "duration": 342.779,
+      "baseSeed": 2233122573,
+      "songPath": "/songs/the-prodigy-smack-my-bitch-up.json",
+      "musicPath": "/music/the-prodigy-smack-my-bitch-up.mp3",
+      "fictionIds": [1, 2, 3]
+    },
+    {
+      "id": "the-chemical-brothers-hey-boy-hey-girl-extended-remix",
+      "title": "Hey Boy, Hey Girl (Extended Remix)",
+      "artist": "The Chemical Brothers",
+      "bpm": 126.05,
+      "duration": 362.109,
+      "baseSeed": 1332601766,
+      "songPath": "/songs/the-chemical-brothers-hey-boy-hey-girl-extended-remix.json",
+      "musicPath": "/music/the-chemical-brothers-hey-boy-hey-girl-extended-remix.mp3",
+      "fictionIds": [1, 2, 3]
+    },
+    {
+      "id": "unknown-dare-dave-aude-club-mix",
+      "title": "DARE (Dave Aude Club Mix)",
+      "artist": "Unknown",
+      "bpm": 132.51,
+      "duration": 461.11,
+      "baseSeed": 1031237824,
+      "songPath": "/songs/dare-dave-aude-club-mix.json",
+      "musicPath": "/music/dare-dave-aude-club-mix.mp3",
+      "fictionIds": [1, 2, 3]
+    }
+  ]
+}
