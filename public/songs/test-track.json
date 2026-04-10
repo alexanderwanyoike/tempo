@@ -1,0 +1,100 @@
+{
+  "id": "test-track",
+  "title": "Neon Velocity",
+  "artist": "Suno AI",
+  "bpm": 140,
+  "duration": 180,
+  "baseSeed": 42,
+  "sections": [
+    {
+      "id": "section-0",
+      "type": "intro",
+      "startTime": 0,
+      "endTime": 16,
+      "energy": 0.2,
+      "density": 0.1,
+      "hazardBias": 0.1,
+      "pickupBias": 0.4,
+      "tags": ["warmup"]
+    },
+    {
+      "id": "section-1",
+      "type": "verse",
+      "startTime": 16,
+      "endTime": 48,
+      "energy": 0.4,
+      "density": 0.3,
+      "hazardBias": 0.2,
+      "pickupBias": 0.3,
+      "tags": []
+    },
+    {
+      "id": "section-2",
+      "type": "build",
+      "startTime": 48,
+      "endTime": 64,
+      "energy": 0.7,
+      "density": 0.5,
+      "hazardBias": 0.4,
+      "pickupBias": 0.2,
+      "tags": ["tension"]
+    },
+    {
+      "id": "section-3",
+      "type": "drop",
+      "startTime": 64,
+      "endTime": 96,
+      "energy": 0.95,
+      "density": 0.8,
+      "hazardBias": 0.7,
+      "pickupBias": 0.1,
+      "tags": ["peak"]
+    },
+    {
+      "id": "section-4",
+      "type": "breakdown",
+      "startTime": 96,
+      "endTime": 112,
+      "energy": 0.2,
+      "density": 0.15,
+      "hazardBias": 0.1,
+      "pickupBias": 0.5,
+      "tags": ["recovery"]
+    },
+    {
+      "id": "section-5",
+      "type": "build",
+      "startTime": 112,
+      "endTime": 128,
+      "energy": 0.65,
+      "density": 0.45,
+      "hazardBias": 0.35,
+      "pickupBias": 0.2,
+      "tags": ["tension"]
+    },
+    {
+      "id": "section-6",
+      "type": "drop",
+      "startTime": 128,
+      "endTime": 160,
+      "energy": 1.0,
+      "density": 0.9,
+      "hazardBias": 0.8,
+      "pickupBias": 0.05,
+      "tags": ["peak", "final-drop"]
+    },
+    {
+      "id": "section-7",
+      "type": "finale",
+      "startTime": 160,
+      "endTime": 180,
+      "energy": 0.85,
+      "density": 0.6,
+      "hazardBias": 0.5,
+      "pickupBias": 0.15,
+      "tags": ["ending"]
+    }
+  ],
+  "dropMarkers": [64, 128],
+  "chunkBias": []
+}

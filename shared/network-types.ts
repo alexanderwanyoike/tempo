@@ -3,6 +3,8 @@ export type ClientMessage =
       type: "input";
       throttle: number;
       steering: number;
+      airbrakeLeft: boolean;
+      airbrakeRight: boolean;
       boost: boolean;
       fire: boolean;
       shield: boolean;
