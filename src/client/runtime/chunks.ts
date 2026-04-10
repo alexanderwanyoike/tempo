@@ -32,6 +32,7 @@ export const chunkTypes = [
   "valley",
   "jumpRamp",
   "loop",
+  "barrelRoll",
 ] as const;
 
 export type ChunkType = (typeof chunkTypes)[number];
@@ -309,6 +310,53 @@ export function loop(
   return makeResult(allPoints, ["hasLoop"]);
 }
 
+export function barrelRoll(
+  start: Vector3, tangent: Vector3, length: number,
+  rng: () => number, params: ChunkParams,
+): ChunkResult {
+  const forward = planarTangent(tangent);
+  const right = rightFromTangent(forward);
+  const up = new Vector3().crossVectors(right, forward).normalize();
+  const radius = Math.max(params.trackWidth * (0.95 + params.energy * 0.25), 16);
+  const rollSpan = length * (0.48 + params.energy * 0.1);
+  const rollStartT = 0.22;
+  const rollEndT = Math.min(0.82, rollStartT + rollSpan / length);
+  const rollSamples = 18;
+  const sign = rng() > 0.5 ? 1 : -1;
+
+  const entryLead = advance(start, forward, length * 0.12);
+  const entrySet = advance(start, forward, length * rollStartT);
+
+  const rollPts: Vector3[] = [];
+  for (let i = 0; i < rollSamples; i++) {
+    const t = i / (rollSamples - 1);
+    const alongT = rollStartT + (rollEndT - rollStartT) * t;
+    const angle = t * Math.PI * 2 * sign;
+    const axisPoint = advance(start, forward, length * alongT);
+
+    const pt = axisPoint
+      .clone()
+      .addScaledVector(right, (1 - Math.cos(angle)) * radius * 0.58)
+      .addScaledVector(up, Math.sin(angle) * radius * 0.82);
+
+    // Tighten the silhouette toward the end so the exit settles smoothly.
+    const settle = t > 0.78 ? (1 - t) / 0.22 : 1;
+    if (settle < 1) {
+      pt.lerp(axisPoint, 1 - settle);
+    }
+
+    rollPts.push(pt);
+  }
+
+  const exitSet = advance(start, forward, length * 0.9);
+  const exitLead = advance(start, forward, length);
+
+  return makeResult(
+    [start.clone(), entryLead, entrySet, ...rollPts, exitSet, exitLead],
+    ["hasBarrelRoll"],
+  );
+}
+
 // ---- Registry ----
 
 export const chunkFns: Record<ChunkType, ChunkFn> = {
@@ -320,4 +368,5 @@ export const chunkFns: Record<ChunkType, ChunkFn> = {
   valley,
   jumpRamp,
   loop,
+  barrelRoll,
 };

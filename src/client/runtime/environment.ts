@@ -514,15 +514,20 @@ export class EnvironmentRuntime {
       const center = this.track.getPointAt(feature.u);
       const baseScale = feature.kind === "loop"
         ? new Vector3(this.theme.haloScale[0] + feature.energy * 12, this.theme.haloScale[1] + feature.energy * 7, 1)
-        : new Vector3(this.theme.haloScale[0] * 0.7 + feature.energy * 10, this.theme.haloScale[1] * 0.6 + feature.energy * 5, 1);
-      const ringCount = feature.kind === "loop" ? 3 : 2;
+        : feature.kind === "barrelRoll"
+          ? new Vector3(this.theme.haloScale[0] * 0.9 + feature.energy * 11, this.theme.haloScale[1] * 0.75 + feature.energy * 6, 1)
+          : new Vector3(this.theme.haloScale[0] * 0.7 + feature.energy * 10, this.theme.haloScale[1] * 0.6 + feature.energy * 5, 1);
+      const ringCount = feature.kind === "loop" ? 3 : feature.kind === "barrelRoll" ? 3 : 2;
       for (let i = 0; i < ringCount; i++) {
-        const lift = feature.kind === "loop" ? 8 + i * 6 : 5 + i * 4;
-        const forwardOffset = feature.kind === "jump" ? i * 10 : (i - 1) * 6;
+        const lift = feature.kind === "loop" ? 8 + i * 6 : feature.kind === "barrelRoll" ? 6 + i * 3.5 : 5 + i * 4;
+        const forwardOffset = feature.kind === "jump" ? i * 10 : feature.kind === "barrelRoll" ? (i - 1) * 10 : (i - 1) * 6;
         const position = center.clone()
           .addScaledVector(frame.up, lift)
           .addScaledVector(frame.tangent, forwardOffset);
         const scale = baseScale.clone().multiplyScalar(1 + i * 0.14);
+        if (feature.kind === "barrelRoll") {
+          scale.y *= 0.8;
+        }
         placements.push(this.makePlacement(position, frame, scale, feature.energy, rng(), 1.55, feature.u));
       }
 
@@ -534,6 +539,16 @@ export class EnvironmentRuntime {
           feature.energy,
           rng(),
           1.9,
+          feature.u,
+        ));
+      } else if (feature.kind === "barrelRoll") {
+        placements.push(this.makePlacement(
+          center.clone().addScaledVector(frame.up, 12),
+          frame,
+          new Vector3(baseScale.x * 0.7, baseScale.y * 0.52, 1),
+          feature.energy,
+          rng(),
+          1.75,
           feature.u,
         ));
       }

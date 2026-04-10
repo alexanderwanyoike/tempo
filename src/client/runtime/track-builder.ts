@@ -47,7 +47,7 @@ export interface TrackObject {
 
 export interface TrackFeature {
   id: string;
-  kind: "loop" | "jump";
+  kind: "loop" | "jump" | "barrelRoll";
   u: number;
   energy: number;
   sectionType: SongSectionType;

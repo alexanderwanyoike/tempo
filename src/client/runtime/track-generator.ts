@@ -34,6 +34,7 @@ const BASE_TOP_SPEED = 90;
 const MIN_CHUNK_LENGTH = 70;
 const MAX_CHUNK_LENGTH = 150;
 const MIN_LOOP_CHUNK_LENGTH = 220;
+const MIN_BARREL_ROLL_CHUNK_LENGTH = 180;
 
 const HALF_WIDTH = 11;
 const GATE_LANE_FRACTIONS = [-0.62, 0, 0.62] as const;
@@ -124,8 +125,14 @@ export class TrackGenerator implements Track {
         if (chunkType === "loop" && remaining < MIN_LOOP_CHUNK_LENGTH) {
           chunkType = this.chunkPicker(section, rng, [...recentChunks, "loop"]);
         }
+        if (chunkType === "barrelRoll" && remaining < MIN_BARREL_ROLL_CHUNK_LENGTH) {
+          chunkType = this.chunkPicker(section, rng, [...recentChunks, "barrelRoll"]);
+        }
         if (chunkType === "loop") {
           chunkLen = Math.max(chunkLen, MIN_LOOP_CHUNK_LENGTH);
+          chunkLen = Math.min(chunkLen, remaining);
+        } else if (chunkType === "barrelRoll") {
+          chunkLen = Math.max(chunkLen, MIN_BARREL_ROLL_CHUNK_LENGTH);
           chunkLen = Math.min(chunkLen, remaining);
         }
         const params: ChunkParams = scaleChunkParams(section);
@@ -519,6 +526,9 @@ export class TrackGenerator implements Track {
     }
     if (tags.includes("hasJump")) {
       features.push(this.makeTrackFeature(`${prefix}-jump`, "jump", u, section.energy, section.type));
+    }
+    if (tags.includes("hasBarrelRoll")) {
+      features.push(this.makeTrackFeature(`${prefix}-barrel`, "barrelRoll", u, section.energy, section.type));
     }
   }
 

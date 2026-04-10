@@ -14,11 +14,11 @@ type ChunkWeight = {
 const sectionChunkRules: Record<SongSectionType, ChunkWeight[]> = {
   intro:     [{ type: "straight", weight: 2 }, { type: "gentleCurve", weight: 3 }, { type: "sCurve", weight: 2 }, { type: "hill", weight: 1 }],
   verse:     [{ type: "sCurve", weight: 3 }, { type: "sharpTurn", weight: 2 }, { type: "hill", weight: 2 }, { type: "jumpRamp", weight: 1, minEnergy: 0.85 }],
-  build:     [{ type: "sharpTurn", weight: 3 }, { type: "sCurve", weight: 2 }, { type: "hill", weight: 2 }, { type: "jumpRamp", weight: 4, minEnergy: 0.45 }, { type: "loop", weight: 0.8, minEnergy: 0.88 }],
-  drop:      [{ type: "sharpTurn", weight: 3 }, { type: "jumpRamp", weight: 5 }, { type: "sCurve", weight: 3 }, { type: "hill", weight: 1 }, { type: "loop", weight: 1.4, minEnergy: 0.82 }],
+  build:     [{ type: "sharpTurn", weight: 3 }, { type: "sCurve", weight: 2 }, { type: "hill", weight: 2 }, { type: "jumpRamp", weight: 4, minEnergy: 0.45 }, { type: "loop", weight: 0.8, minEnergy: 0.88 }, { type: "barrelRoll", weight: 0.7, minEnergy: 0.84 }],
+  drop:      [{ type: "sharpTurn", weight: 3 }, { type: "jumpRamp", weight: 5 }, { type: "sCurve", weight: 3 }, { type: "hill", weight: 1 }, { type: "loop", weight: 1.4, minEnergy: 0.82 }, { type: "barrelRoll", weight: 1.1, minEnergy: 0.78 }],
   bridge:    [{ type: "sCurve", weight: 2 }, { type: "gentleCurve", weight: 2 }, { type: "valley", weight: 4 }],
   breakdown: [{ type: "gentleCurve", weight: 2 }, { type: "sCurve", weight: 1 }, { type: "valley", weight: 4 }, { type: "straight", weight: 1 }],
-  finale:    [{ type: "sharpTurn", weight: 3 }, { type: "jumpRamp", weight: 5 }, { type: "sCurve", weight: 3 }, { type: "hill", weight: 1 }, { type: "loop", weight: 1.8, minEnergy: 0.8 }],
+  finale:    [{ type: "sharpTurn", weight: 3 }, { type: "jumpRamp", weight: 5 }, { type: "sCurve", weight: 3 }, { type: "hill", weight: 1 }, { type: "loop", weight: 1.8, minEnergy: 0.8 }, { type: "barrelRoll", weight: 1.3, minEnergy: 0.76 }],
 };
 
 export function pickChunkForSection(
@@ -35,8 +35,11 @@ export function pickChunkForSection(
   for (const entry of pool) {
     if (entry.minEnergy !== undefined && section.energy < entry.minEnergy) continue;
 
-    // Loop cooldown: skip if a loop appeared in recent history
-    if (entry.type === "loop" && recentChunks.includes("loop")) continue;
+    // Setpiece cooldown: don't chain loops/barrel rolls too tightly
+    if ((entry.type === "loop" || entry.type === "barrelRoll")
+      && recentChunks.some((chunk) => chunk === "loop" || chunk === "barrelRoll")) {
+      continue;
+    }
 
     let w = entry.weight;
 
