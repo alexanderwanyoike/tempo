@@ -150,6 +150,16 @@ export class CombatVfx {
     this.pushBurst(position, now, IMPACT_DURATION_MS, MISSILE_COLOR, 0.24, 7.0, 3.4);
   }
 
+  // Local fire feedback fired the instant the player presses F/Space. Shows
+  // a bright muzzle burst at the firer's position even when the server
+  // resolves the missile to "no valid target" and broadcasts no event.
+  spawnLocalFireBlast(vehicleId: string, now: number): void {
+    const firer = this.getVehicleGroup(vehicleId);
+    if (!firer) return;
+    const position = firer.position.clone();
+    this.pushBurst(position, now, 260, "#ffe27a", 0.4, 3.6, 2.6);
+  }
+
   spawnBlock(vehicleId: string, now: number): void {
     const target = this.getVehicleGroup(vehicleId);
     const position = target?.position.clone() ?? this.tmpStart.clone();

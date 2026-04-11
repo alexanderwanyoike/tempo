@@ -3,7 +3,9 @@ import {
   AmbientLight,
   BoxGeometry,
   Color,
+  CylinderGeometry,
   DirectionalLight,
+  DoubleSide,
   FogExp2,
   Group,
   HemisphereLight,
@@ -15,6 +17,7 @@ import {
   PerspectiveCamera,
   Quaternion,
   Scene,
+  SphereGeometry,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -454,11 +457,7 @@ export class App {
   }
 
   private swapLobbyToRealScene(): void {
-    if (!this.lobbyActive || !this.deferredRaceSong) {
-      console.log(`[swap] skipped (lobbyActive=${this.lobbyActive}, deferredRaceSong=${this.deferredRaceSong !== null})`);
-      return;
-    }
-    console.log("[swap] lobby -> real scene");
+    if (!this.lobbyActive || !this.deferredRaceSong) return;
     const realSong = this.deferredRaceSong;
     const realSeed = this.deferredRaceSeed;
     const realFictionId = this.deferredRaceFictionId;
@@ -506,7 +505,6 @@ export class App {
     this.trackObjectTriggers.clear();
 
     this.lobbyActive = false;
-    console.log(`[swap] complete. realTrack totalLength=${realTrack.totalLength}, real track getPointAt(0.02)=`, realTrack.getPointAt(0.02));
   }
 
   private enterRunningPhase(): void {
@@ -883,75 +881,45 @@ export class App {
   }
 
   private syncPickupVisuals(pickups: PickupSpawnState[]): void {
-    if (pickups.length > 0 && this.pickupVisuals.size === 0) {
-      // One-shot log per race so we can tell from DevTools whether the
-      // server is actually feeding us pickups. Logs once per empty->full
-      // transition, which includes after the lobby->real swap.
-      console.log(`[pickups] populate: ${pickups.length} entries (phase=${this.phase}, lobbyActive=${this.lobbyActive})`);
-      if (pickups.length > 0) {
-        const first = pickups[0];
-        const frame = this.track.getFrameAt(first.u);
-        const center = this.track.getPointAt(first.u);
-        console.log(`[pickups] first pickup u=${first.u} lane=${first.lane} worldPos=(${center.x.toFixed(1)}, ${center.y.toFixed(1)}, ${center.z.toFixed(1)}) frameRight=(${frame.right.x.toFixed(2)}, ${frame.right.y.toFixed(2)}, ${frame.right.z.toFixed(2)})`);
-      }
-    }
+    // Lobby warmup is a hangar, not a combat arena. Don't render any
+    // pickups while lobbyActive is true. They show up the moment the
+    // swap to the real track fires at countdown.
+    const effectivePickups = this.lobbyActive ? [] : pickups;
     const nextIds = new Set<string>();
-    for (const pickup of pickups) {
+    for (const pickup of effectivePickups) {
       nextIds.add(pickup.id);
       let visual = this.pickupVisuals.get(pickup.id);
       if (!visual) {
         const isMissile = pickup.kind === "missile";
-        const coreColor = isMissile ? "#ff3d7a" : "#39e6ff";
-        const glowColor = isMissile ? "#ffb5cb" : "#bff5ff";
-        // Huge core box - this is the "no way you missed it" size. Every
-        // pickup reads from ~40m+ away at race speed.
+        // Distinct coin colors: red for missile, navy blue for shield.
+        const coreColor = isMissile ? "#ff2040" : "#1e3a8a";
+        const emissiveColor = isMissile ? "#ff2040" : "#3b63d9";
+        // Simple sphere "coin" - no orientation math, no rotation matrix,
+        // visible from any angle, bloom-friendly.
         const mesh = new Mesh(
-          new BoxGeometry(isMissile ? 4.8 : 5.2, 4.8, 4.8),
+          new SphereGeometry(2.6, 20, 14),
           new MeshStandardMaterial({
             color: coreColor,
-            emissive: coreColor,
-            emissiveIntensity: 5.5,
+            emissive: emissiveColor,
+            emissiveIntensity: 5.0,
           }),
         );
-        // Main beam - tall emissive column visible from across the track.
+        // Vertical beam for distance readability. Plain cylinder aligned
+        // along world +Y, no rotation required.
         const beam = new Mesh(
-          new BoxGeometry(1.8, 40, 1.8),
+          new CylinderGeometry(0.7, 0.7, 42, 10, 1, true),
           new MeshStandardMaterial({
-            color: glowColor,
-            emissive: coreColor,
-            emissiveIntensity: 4.2,
+            color: emissiveColor,
+            emissive: emissiveColor,
+            emissiveIntensity: 3.8,
             transparent: true,
-            opacity: 0.95,
+            opacity: 0.85,
             depthWrite: false,
+            side: DoubleSide,
           }),
         );
-        beam.position.y = 20;
-        // Wide outer halo beam for silhouette at extreme distance.
-        const haloBeam = new Mesh(
-          new BoxGeometry(5.5, 44, 5.5),
-          new MeshStandardMaterial({
-            color: glowColor,
-            emissive: coreColor,
-            emissiveIntensity: 2.0,
-            transparent: true,
-            opacity: 0.26,
-            depthWrite: false,
-          }),
-        );
-        haloBeam.position.y = 20;
-        const base = new Mesh(
-          new BoxGeometry(8.0, 0.4, 8.0),
-          new MeshStandardMaterial({
-            color: glowColor,
-            emissive: coreColor,
-            emissiveIntensity: 2.4,
-            transparent: true,
-            opacity: 0.82,
-            depthWrite: false,
-          }),
-        );
-        base.position.y = -1.8;
-        mesh.add(beam, haloBeam, base);
+        beam.position.y = 21;
+        mesh.add(beam);
         visual = { mesh, kind: pickup.kind, u: pickup.u, lane: pickup.lane };
         this.pickupVisuals.set(pickup.id, visual);
         this.pickupGroup.add(mesh);
@@ -973,29 +941,11 @@ export class App {
       if (!visual.mesh.visible) continue;
       const frame = this.track.getFrameAt(visual.u);
       const center = this.track.getPointAt(visual.u);
-      // Lateral offset along the track's right vector, vertical offset along
-      // WORLD UP so the beam is always readable as "up" in the player's
-      // frame rather than tilting into a banked surface. Old code used
-      // frame.up + a left-handed orientation matrix, which both hid the
-      // pickup on banked sections and produced a mirrored rotation matrix
-      // that setRotationFromMatrix could not extract cleanly.
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      visual.mesh.position.y += 4.0 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.55;
-      // Just spin the core around world-up. No track-follow rotation.
-      visual.mesh.rotation.set(0, timeSeconds * 1.8, 0);
-      const [beam, haloBeam, base] = visual.mesh.children;
-      if (beam) {
-        beam.scale.y = 1 + Math.sin(timeSeconds * 2.2 + visual.u * 11) * 0.08;
-      }
-      if (haloBeam) {
-        const haloPulse = 1 + Math.sin(timeSeconds * 1.7 + visual.u * 13) * 0.22;
-        haloBeam.scale.set(haloPulse, 1, haloPulse);
-      }
-      if (base) {
-        const pulse = 1 + Math.sin(timeSeconds * 4 + visual.u * 19) * 0.22;
-        base.scale.setScalar(pulse);
-      }
+      visual.mesh.position.y += 4.2 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.5;
+      // Gentle bob on the core; beam is a child and inherits transform.
+      visual.mesh.rotation.set(0, timeSeconds * 1.5, 0);
     }
   }
 
@@ -1167,6 +1117,12 @@ export class App {
     const firePressed = this.input.state.fire;
     const shieldPressed = this.input.state.shield;
     if (firePressed && !this.lastFirePressed) {
+      // Local muzzle flash as instant feedback. The server still resolves
+      // hits and broadcasts takedown/blocked events, which trigger the
+      // separate missile + impact VFX retroactively.
+      if (this.launch.localPlayerId && this.localOffensiveItem === "missile") {
+        this.combatVfx.spawnLocalFireBlast(this.launch.localPlayerId, performance.now());
+      }
       this.launch.onFire?.();
     }
     if (shieldPressed && !this.lastShieldPressed) {
