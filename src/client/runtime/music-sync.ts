@@ -73,6 +73,9 @@ export class MusicSync {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to load music: ${response.status} ${url}`);
     this.rawData = await response.arrayBuffer();
+    if (this.ctx && !this.buffer) {
+      this.buffer = await this.ctx.decodeAudioData(this.rawData.slice(0));
+    }
   }
 
   play(): void {
