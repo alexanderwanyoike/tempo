@@ -1,6 +1,6 @@
-import type { SongSectionType, SongSection } from "../../../shared/song-schema";
-import type { ChunkType } from "./chunks";
-import type { ChunkParams } from "./chunks";
+import type { SongSectionType, SongSection } from "../../../shared/song-schema.js";
+import type { ChunkType } from "./chunks.js";
+import type { ChunkParams } from "./chunks.js";
 import { MathUtils } from "three";
 
 // ---- Weighted chunk selection per section type ----

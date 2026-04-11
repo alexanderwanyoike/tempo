@@ -80,6 +80,14 @@ export type RaceEvent =
     }
   | {
       id: string;
+      kind: "fire";
+      actorId: string;
+      targetId: string | null;
+      outcome: "miss" | "blocked" | "takedown";
+      at: number;
+    }
+  | {
+      id: string;
       kind: "shield";
       actorId: string;
       at: number;

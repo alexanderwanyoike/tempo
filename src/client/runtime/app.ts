@@ -39,13 +39,8 @@ import { EnvironmentRuntime } from "./environment";
 import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
-import loadingLoopSongData from "../../../assets/audio/loading-loop.json";
 import { CombatVfx } from "./combat-vfx";
 import { TouchControls } from "./touch-controls";
-
-const LOBBY_SONG = loadingLoopSongData as unknown as SongDefinition;
-const LOBBY_SEED = 0xfade;
-const LOBBY_FICTION_ID: EnvironmentFictionId = 1;
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
@@ -117,7 +112,7 @@ const START_TRACK_U = 0.001;
 const NOMINAL_HALF_WIDTH = 11;
 // Mirrors server SHIELD_DURATION_MS. Purely cosmetic - the server is the
 // source of truth for the actual shield window.
-const SHIELD_VISUAL_DURATION_MS = 2500;
+const SHIELD_VISUAL_DURATION_MS = 120000;
 
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
@@ -150,13 +145,6 @@ export class App {
   private environment: EnvironmentRuntime;
   private fictionId: EnvironmentFictionId;
   private readonly songDuration: number | null;
-  // Real race scene parameters stashed during App.create for multiplayer
-  // warmup. Null for solo and for multiplayer sessions where no lobby swap
-  // is required (e.g., song failed to load and we fell back to TestTrack).
-  private deferredRaceSong: SongDefinition | null = null;
-  private deferredRaceSeed = 0;
-  private deferredRaceFictionId: EnvironmentFictionId = 1;
-  private lobbyActive = false;
   private readonly debugHud: HTMLDivElement | null;
   private readonly hud: HTMLDivElement;
   private readonly placementHud: HTMLDivElement;
@@ -216,16 +204,11 @@ export class App {
   ): Promise<App> {
     const songUrl = launch.songUrl;
     const fictionId = clampFictionId(launch.fictionId ?? null);
-    const isMultiplayer = launch.mode === "multiplayer";
 
     let track: Track;
     let musicSync: MusicSync | null = null;
-    let scenePlanSong: SongDefinition | null = null;
-    let sceneSeed = 0;
-    let sceneFictionId = fictionId;
-    let deferredRaceSong: SongDefinition | null = null;
-    let deferredRaceSeed = 0;
-    let deferredRaceFictionId: EnvironmentFictionId = fictionId;
+    let song: SongDefinition | null = null;
+    let seed = 0;
     let musicReadyPromise: Promise<void> | null = null;
 
     if (songUrl) {
@@ -240,26 +223,9 @@ export class App {
       }
 
       try {
-        const realSong = await songPromise;
-        const realSeed = launch.seed ?? realSong.baseSeed;
-        if (isMultiplayer) {
-          // Multiplayer boots into a lobby "warmup lane" built from the
-          // loading-loop song so the real race track stays hidden until
-          // every peer has preloaded. beginCountdown() swaps to the real
-          // scene using the stashed deferred params.
-          scenePlanSong = LOBBY_SONG;
-          sceneSeed = LOBBY_SEED;
-          sceneFictionId = LOBBY_FICTION_ID;
-          track = new TrackGenerator(LOBBY_SONG, LOBBY_SEED);
-          deferredRaceSong = realSong;
-          deferredRaceSeed = realSeed;
-          deferredRaceFictionId = fictionId;
-        } else {
-          scenePlanSong = realSong;
-          sceneSeed = realSeed;
-          sceneFictionId = fictionId;
-          track = new TrackGenerator(realSong, realSeed);
-        }
+        song = await songPromise;
+        seed = launch.seed ?? song.baseSeed;
+        track = new TrackGenerator(song, seed);
       } catch {
         track = new TestTrack();
       }
@@ -272,15 +238,12 @@ export class App {
       config,
       track,
       musicSync,
-      scenePlanSong,
-      sceneSeed,
-      sceneFictionId,
+      song,
+      seed,
+      fictionId,
       launch,
       launch.debugHud ?? false,
       musicReadyPromise,
-      deferredRaceSong,
-      deferredRaceSeed,
-      deferredRaceFictionId,
     );
   }
 
@@ -295,9 +258,6 @@ export class App {
     private readonly launch: AppLaunchOptions,
     debugHudEnabled: boolean,
     private readonly musicReadyPromise: Promise<void> | null,
-    deferredRaceSong: SongDefinition | null,
-    deferredRaceSeed: number,
-    deferredRaceFictionId: EnvironmentFictionId,
   ) {
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -328,17 +288,13 @@ export class App {
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.vehicleController.forceTrackState(START_TRACK_U);
     this.musicSync = musicSync;
-    this.songDuration = deferredRaceSong?.duration ?? song?.duration ?? null;
+    this.songDuration = song?.duration ?? null;
     this.fictionId = fictionId;
     this.track = track;
     this.trackObjects = this.track.getTrackObjects();
     this.environment = new EnvironmentRuntime(this.scene, this.track, song, seed, fictionId);
     this.scene.add(this.environment.group);
     this.scene.add(this.track.meshGroup);
-    this.deferredRaceSong = deferredRaceSong;
-    this.deferredRaceSeed = deferredRaceSeed;
-    this.deferredRaceFictionId = deferredRaceFictionId;
-    this.lobbyActive = deferredRaceSong !== null;
     this.scene.add(this.pickupGroup);
     this.scene.add(this.boostTrailGroup);
     this.scene.add(this.camera);
@@ -437,9 +393,6 @@ export class App {
 
   beginCountdown(startAt: number): void {
     if (this.phase === "finished") return;
-    if (this.lobbyActive) {
-      this.swapLobbyToRealScene();
-    }
     this.pendingStartAt = startAt;
     this.phase = "countdown";
     this.countdownStarted = false;
@@ -454,57 +407,6 @@ export class App {
     this.statusBody.style.display = "none";
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
-  }
-
-  private swapLobbyToRealScene(): void {
-    if (!this.lobbyActive || !this.deferredRaceSong) return;
-    const realSong = this.deferredRaceSong;
-    const realSeed = this.deferredRaceSeed;
-    const realFictionId = this.deferredRaceFictionId;
-
-    // Remove lobby track mesh + environment from the scene. We drop the
-    // references; the next frame will GC them. EnvironmentRuntime has no
-    // explicit dispose, and Track.meshGroup is a plain Group we can detach.
-    this.scene.remove(this.track.meshGroup);
-    this.scene.remove(this.environment.group);
-
-    // Build real track + environment in place.
-    const realTrack = new TrackGenerator(realSong, realSeed);
-    this.track = realTrack;
-    this.trackObjects = realTrack.getTrackObjects();
-    this.fictionId = realFictionId;
-    this.environment = new EnvironmentRuntime(
-      this.scene,
-      realTrack,
-      realSong,
-      realSeed,
-      realFictionId,
-    );
-    this.scene.add(this.environment.group);
-    this.scene.add(this.track.meshGroup);
-
-    // Rewire the vehicle controller to the real track and drop it back on
-    // the starting line so the first-frame physics read matches the real
-    // geometry rather than the lobby one.
-    this.vehicleController.setTrack(realTrack);
-    this.vehicleController.setTrackQuery((pos, hintU) =>
-      realTrack.queryNearest(pos, hintU),
-    );
-    this.vehicleController.forceTrackState(
-      this.countdownResetTrackU > 0 ? this.countdownResetTrackU : START_TRACK_U,
-      this.countdownResetLateralOffset,
-      0,
-    );
-
-    // Reset pickup/trigger state so the old lobby ids do not linger. The
-    // server will resend the real pickup snapshot on the next tick.
-    for (const visual of this.pickupVisuals.values()) {
-      this.pickupGroup.remove(visual.mesh);
-    }
-    this.pickupVisuals.clear();
-    this.trackObjectTriggers.clear();
-
-    this.lobbyActive = false;
   }
 
   private enterRunningPhase(): void {
@@ -562,6 +464,39 @@ export class App {
         : "Shield ready. Press R or tap Shield.";
       return;
     }
+    if (event.kind === "fire") {
+      const actorPosition = this.getVehiclePosition(event.actorId);
+      if (!actorPosition) return;
+      const actorForward = this.getVehicleForward(event.actorId);
+      const targetPosition = event.targetId
+        ? this.getVehiclePosition(event.targetId)
+        : null;
+      const endPosition = targetPosition ?? actorPosition.clone().addScaledVector(actorForward, 18);
+      this.combatVfx.spawnMissile(
+        actorPosition,
+        endPosition,
+        () => {
+          const impactNow = performance.now();
+          if (event.outcome === "blocked" && event.targetId) {
+            this.combatVfx.clearShield(event.targetId);
+            this.combatVfx.spawnBlock(event.targetId, impactNow);
+            return;
+          }
+          if (event.outcome === "takedown" && event.targetId) {
+            this.combatVfx.clearShield(event.targetId);
+            this.combatVfx.spawnImpact(event.targetId, impactNow);
+            if (event.targetId === localId) {
+              this.combatVfx.flashLocalTakedown(impactNow);
+            }
+          }
+        },
+        now,
+      );
+      if (event.actorId === localId && event.outcome === "miss") {
+        this.lastStatusMessage = "Missile fired. No lock.";
+      }
+      return;
+    }
     if (event.kind === "shield") {
       this.combatVfx.spawnShield(event.actorId, SHIELD_VISUAL_DURATION_MS, now);
       if (event.actorId === localId) {
@@ -570,39 +505,25 @@ export class App {
       return;
     }
     if (event.kind === "blocked") {
-      this.combatVfx.spawnMissile(
-        event.actorId,
-        event.targetId,
-        () => this.combatVfx.spawnBlock(event.targetId, performance.now()),
-        now,
-      );
       if (event.targetId === localId) {
         this.lastStatusMessage = "Shield cracked a missile.";
       }
       return;
     }
     if (event.kind === "takedown") {
-      this.combatVfx.spawnMissile(
-        event.actorId,
-        event.targetId,
-        () => {
-          const impactNow = performance.now();
-          this.combatVfx.spawnImpact(event.targetId, impactNow);
-          if (event.targetId === localId) {
-            this.combatVfx.flashLocalTakedown(impactNow);
-          }
-        },
-        now,
-      );
+      this.combatVfx.clearShield(event.targetId);
       if (event.actorId === localId) {
-        this.lastStatusMessage = "Direct hit.";
+        this.lastStatusMessage = "Direct hit. Target crashed.";
       } else if (event.targetId === localId) {
-        this.lastStatusMessage = "Takedown. Respawning on checkpoint.";
+        this.lastStatusMessage = "Rocket hit. Crashing out.";
       }
       return;
     }
-    if (event.kind === "respawn" && event.targetId === localId) {
-      this.lastStatusMessage = "Recovered. Rejoining the line.";
+    if (event.kind === "respawn") {
+      this.combatVfx.clearShield(event.targetId);
+      if (event.targetId === localId) {
+        this.lastStatusMessage = "Recovered. Rejoining the line.";
+      }
       return;
     }
     if (event.kind === "finish" && event.actorId === localId) {
@@ -613,6 +534,17 @@ export class App {
   private getVehicleGroup(id: string): Group | null {
     if (id === this.launch.localPlayerId) return this.localVehicle.group;
     return this.remoteCars.get(id)?.group ?? null;
+  }
+
+  private getVehiclePosition(id: string): Vector3 | null {
+    const group = this.getVehicleGroup(id);
+    return group ? group.position.clone() : null;
+  }
+
+  private getVehicleForward(id: string): Vector3 {
+    const group = this.getVehicleGroup(id);
+    if (!group) return new Vector3(0, 0, -1);
+    return new Vector3(0, 0, -1).applyQuaternion(group.quaternion).normalize();
   }
 
   showResults(results: RaceResults): void {
@@ -881,45 +813,47 @@ export class App {
   }
 
   private syncPickupVisuals(pickups: PickupSpawnState[]): void {
-    // Lobby warmup is a hangar, not a combat arena. Don't render any
-    // pickups while lobbyActive is true. They show up the moment the
-    // swap to the real track fires at countdown.
-    const effectivePickups = this.lobbyActive ? [] : pickups;
     const nextIds = new Set<string>();
-    for (const pickup of effectivePickups) {
+    for (const pickup of pickups) {
       nextIds.add(pickup.id);
       let visual = this.pickupVisuals.get(pickup.id);
       if (!visual) {
         const isMissile = pickup.kind === "missile";
-        // Distinct coin colors: red for missile, navy blue for shield.
         const coreColor = isMissile ? "#ff2040" : "#1e3a8a";
         const emissiveColor = isMissile ? "#ff2040" : "#3b63d9";
-        // Simple sphere "coin" - no orientation math, no rotation matrix,
-        // visible from any angle, bloom-friendly.
         const mesh = new Mesh(
-          new SphereGeometry(2.6, 20, 14),
+          new SphereGeometry(0.85, 20, 14),
           new MeshStandardMaterial({
             color: coreColor,
             emissive: emissiveColor,
-            emissiveIntensity: 5.0,
+            emissiveIntensity: 4.8,
           }),
         );
-        // Vertical beam for distance readability. Plain cylinder aligned
-        // along world +Y, no rotation required.
         const beam = new Mesh(
-          new CylinderGeometry(0.7, 0.7, 42, 10, 1, true),
-          new MeshStandardMaterial({
+          new CylinderGeometry(0.45, 0.45, 16, 12, 1, true),
+          new MeshBasicMaterial({
             color: emissiveColor,
-            emissive: emissiveColor,
-            emissiveIntensity: 3.8,
             transparent: true,
-            opacity: 0.85,
+            opacity: 0.88,
+            depthTest: false,
             depthWrite: false,
             side: DoubleSide,
           }),
         );
-        beam.position.y = 21;
-        mesh.add(beam);
+        beam.position.y = 8;
+        const ring = new Mesh(
+          new CylinderGeometry(2.8, 2.8, 0.08, 20, 1, true),
+          new MeshBasicMaterial({
+            color: emissiveColor,
+            transparent: true,
+            opacity: 0.72,
+            depthTest: false,
+            depthWrite: false,
+            side: DoubleSide,
+          }),
+        );
+        ring.position.y = -0.35;
+        mesh.add(beam, ring);
         visual = { mesh, kind: pickup.kind, u: pickup.u, lane: pickup.lane };
         this.pickupVisuals.set(pickup.id, visual);
         this.pickupGroup.add(mesh);
@@ -943,22 +877,25 @@ export class App {
       const center = this.track.getPointAt(visual.u);
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      // Use frame.up (matches VehicleController.deriveWorldState at ~1.6
-      // units above the track surface) so the pickup mesh sits at the car's
-      // cockpit height on flat sections AND banks correctly on loops. Using
-      // world +Y previously put the sphere meters above the car on banks
-      // and made the trigger feel miles off the visual.
-      visual.mesh.position.addScaledVector(
-        frame.up,
-        1.6 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.35,
-      );
-      visual.mesh.rotation.set(0, timeSeconds * 1.5, 0);
+      visual.mesh.position.addScaledVector(frame.up, defaultVehicleTuning.hoverHeight);
+      this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
+      visual.mesh.setRotationFromMatrix(this.orientMat);
+      const beam = visual.mesh.children[0];
+      const ring = visual.mesh.children[1];
+      if (beam) {
+        beam.scale.y = 1 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.12;
+      }
+      if (ring) {
+        const pulse = 1 + Math.sin(timeSeconds * 4.2 + visual.u * 23) * 0.16;
+        ring.scale.setScalar(pulse);
+      }
     }
   }
 
   private updateCarTransform(deltaSeconds: number): void {
     const state = this.vehicleController.state;
     const dt = Math.min(deltaSeconds, 1 / 30);
+    const now = Date.now();
     const positionAlpha = 1 - Math.exp(-12 * dt);
     const rotationAlpha = 1 - Math.exp(-20 * dt);
     const desiredPosition = this.tempVector.copy(state.position).addScaledVector(state.up, state.visualHoverOffset);
@@ -979,6 +916,9 @@ export class App {
     if (body) {
       body.rotation.set(state.visualPitch, -state.steering * 0.15, state.visualBank, "XYZ");
     }
+    if (this.localTakenDownUntil > now) {
+      this.applySpinoutVisual(this.localVehicle.group, body ?? null, state.up, now, this.localTakenDownUntil);
+    }
   }
 
   private updateRemoteCars(deltaSeconds: number): void {
@@ -987,7 +927,7 @@ export class App {
     for (const [clientId, remote] of this.remoteCars) {
       const snapshot = this.serverPlayers.get(clientId);
       if (!snapshot) continue;
-      remote.group.visible = snapshot.takenDownUntil <= now;
+      remote.group.visible = true;
       remote.currentTrackU = MathUtils.lerp(remote.currentTrackU, remote.targetTrackU, alpha);
       remote.currentLateralOffset = MathUtils.lerp(remote.currentLateralOffset, remote.targetLateralOffset, alpha);
 
@@ -998,6 +938,36 @@ export class App {
         .addScaledVector(frame.up, 0.45);
       this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
       remote.group.setRotationFromMatrix(this.orientMat);
+      const body = remote.group.children[0] ?? null;
+      if (body) {
+        body.rotation.set(0, 0, 0, "XYZ");
+      }
+      if (snapshot.takenDownUntil > now) {
+        this.applySpinoutVisual(remote.group, body, frame.up, now, snapshot.takenDownUntil);
+      }
+    }
+  }
+
+  private applySpinoutVisual(
+    group: Group,
+    body: Group["children"][number] | null,
+    up: Vector3,
+    nowMs: number,
+    takenDownUntil: number,
+  ): void {
+    const timeSeconds = nowMs / 1000;
+    const remainingRatio = Math.max(0, Math.min(1, (takenDownUntil - nowMs) / 1800));
+    const spinAngle = timeSeconds * 24;
+    group.rotateZ(spinAngle);
+    group.rotateX(Math.sin(timeSeconds * 18) * 0.35 * (0.5 + remainingRatio));
+    group.position.addScaledVector(up, 0.38 + Math.abs(Math.sin(timeSeconds * 20)) * 0.12);
+    if (body) {
+      body.rotation.set(
+        Math.sin(timeSeconds * 16) * 0.35,
+        0,
+        Math.cos(timeSeconds * 22) * 1.1 * (0.5 + remainingRatio),
+        "XYZ",
+      );
     }
   }
 
@@ -1124,11 +1094,8 @@ export class App {
     const firePressed = this.input.state.fire;
     const shieldPressed = this.input.state.shield;
     if (firePressed && !this.lastFirePressed) {
-      // Local muzzle flash as instant feedback. The server still resolves
-      // hits and broadcasts takedown/blocked events, which trigger the
-      // separate missile + impact VFX retroactively.
-      if (this.launch.localPlayerId && this.localOffensiveItem === "missile") {
-        this.combatVfx.spawnLocalFireBlast(this.launch.localPlayerId, performance.now());
+      if (this.localOffensiveItem === "missile") {
+        this.combatVfx.spawnLocalFireBlast(this.localVehicle.group.position.clone(), performance.now());
       }
       this.launch.onFire?.();
     }

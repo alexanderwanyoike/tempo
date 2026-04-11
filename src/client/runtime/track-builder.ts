@@ -11,7 +11,7 @@ import {
   MeshStandardMaterial,
   Vector3,
 } from "three";
-import type { SongSectionType } from "../../../shared/song-schema";
+import type { SongSectionType } from "../../../shared/song-schema.js";
 
 const WORLD_UP = new Vector3(0, 1, 0);
 const TRACK_WIDTH = 30;

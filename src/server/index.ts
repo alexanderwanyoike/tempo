@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { Vector3 } from "three";
 import {
   carVariants,
   type CarVariant,
@@ -19,6 +20,8 @@ import {
 } from "../../shared/network-types.js";
 import { buildCheckpointUs, checkpointIndexForU } from "../../shared/race-utils.js";
 import { songDefinitionSchema, type SongDefinition } from "../../shared/song-schema.js";
+import type { Track } from "../client/runtime/track-builder.js";
+import { TrackGenerator } from "../client/runtime/track-generator.js";
 import { serverConfig } from "./config.js";
 
 const server = createServer();
@@ -32,18 +35,17 @@ const DEFAULT_SETUP: RaceSetup = {
 };
 
 const START_TRACK_U = 0.001;
-const PICKUP_RADIUS_U = 0.018;
-const PICKUP_RADIUS_LATERAL = 6.2;
-const MISSILE_MIN_RANGE_U = 0.015;
-const MISSILE_MAX_RANGE_U = 0.16;
-const MISSILE_MAX_LATERAL = 7.5;
-const SHIELD_DURATION_MS = 2500;
+const PICKUP_WORLD_RADIUS = 1.35;
+const MISSILE_MIN_RANGE_U = 0.0;
+const MISSILE_MAX_RANGE_U = 0.75;
+const SHIELD_DURATION_MS = 120000;
 const TAKEDOWN_DURATION_MS = 1800;
 const FINISH_WINDOW_MS = 20000;
 const LOBBY_PRELOAD_TIMEOUT_MS = 120000;
 const SNAPSHOT_INTERVAL_MS = 100;
 const COUNTDOWN_MS = 4000;
 const NOMINAL_HALF_WIDTH = 11;
+const VEHICLE_HOVER_HEIGHT = 0.45;
 
 type CatalogEntry = {
   id: string;
@@ -64,6 +66,8 @@ type ClientConnection = {
 type InternalRacePlayer = RacePlayerState & {
   respawnAt: number;
   laneOffset: number;
+  respawnTrackU: number;
+  respawnLateralOffset: number;
 };
 
 type InternalPlayer = {
@@ -91,6 +95,7 @@ type Room = {
   pickups: PickupSpawnState[];
   racePlayers: Map<string, InternalRacePlayer>;
   song: SongDefinition | null;
+  collisionTrack: Track | null;
   raceStartAt: number;
   finishDeadlineAt: number;
   preloadDeadlineAt: number;
@@ -330,6 +335,7 @@ async function startRoomRace(connection: ClientConnection): Promise<void> {
 
   const song = await loadSongById(room.setup.songId);
   room.song = song;
+  room.collisionTrack = new TrackGenerator(song, room.setup.seed);
   room.phase = "staging";
   room.checkpointUs = buildCheckpointUs(song);
   room.pickups = buildPickups(song, room.setup.seed);
@@ -363,6 +369,8 @@ async function startRoomRace(connection: ClientConnection): Promise<void> {
       takedowns: 0,
       respawnAt: 0,
       laneOffset: laneOffsets[index] ?? 0,
+      respawnTrackU: START_TRACK_U,
+      respawnLateralOffset: laneOffsets[index] ?? 0,
     });
   });
 
@@ -508,17 +516,33 @@ function handleFire(connection: ClientConnection): void {
     if (candidate.finishedAt !== null || candidate.takenDownUntil > now) continue;
     const uDelta = candidate.trackU - attacker.trackU;
     if (uDelta < MISSILE_MIN_RANGE_U || uDelta > MISSILE_MAX_RANGE_U) continue;
-    const lateralDelta = Math.abs(candidate.lateralOffset - attacker.lateralOffset);
-    if (lateralDelta > MISSILE_MAX_LATERAL) continue;
     if (uDelta < bestDistance) {
       bestDistance = uDelta;
       target = candidate;
     }
   }
 
-  if (!target) return;
+  if (!target) {
+    broadcastEvent(room, {
+      id: nextEventId(room),
+      kind: "fire",
+      actorId: attacker.clientId,
+      targetId: null,
+      outcome: "miss",
+      at: now,
+    });
+    return;
+  }
 
-  if (target.defensiveItem === "shield" && target.shieldUntil > now) {
+  if (target.shieldUntil > now) {
+    broadcastEvent(room, {
+      id: nextEventId(room),
+      kind: "fire",
+      actorId: attacker.clientId,
+      targetId: target.clientId,
+      outcome: "blocked",
+      at: now,
+    });
     target.defensiveItem = null;
     target.shieldUntil = 0;
     broadcastEvent(room, {
@@ -531,8 +555,19 @@ function handleFire(connection: ClientConnection): void {
     return;
   }
 
+  broadcastEvent(room, {
+    id: nextEventId(room),
+    kind: "fire",
+    actorId: attacker.clientId,
+    targetId: target.clientId,
+    outcome: "takedown",
+    at: now,
+  });
   target.takenDownUntil = now + TAKEDOWN_DURATION_MS;
   target.respawnAt = now + TAKEDOWN_DURATION_MS;
+  target.respawnTrackU = clamp(target.trackU - 0.008, START_TRACK_U, 0.992);
+  target.respawnLateralOffset = clamp(target.lateralOffset, -10, 10);
+  target.shieldUntil = 0;
   target.speed = 0;
   attacker.takedowns += 1;
   broadcastEvent(room, {
@@ -576,11 +611,8 @@ function tickRace(room: Room): void {
       racePlayer.respawnAt = 0;
       racePlayer.takenDownUntil = 0;
       racePlayer.respawnRevision += 1;
-      const checkpointU = racePlayer.checkpointIndex > 0
-        ? room.checkpointUs[racePlayer.checkpointIndex - 1] ?? START_TRACK_U
-        : START_TRACK_U;
-      racePlayer.trackU = Math.min(0.995, checkpointU + 0.004);
-      racePlayer.lateralOffset = racePlayer.laneOffset;
+      racePlayer.trackU = racePlayer.respawnTrackU;
+      racePlayer.lateralOffset = racePlayer.respawnLateralOffset;
       racePlayer.speed = 0;
       broadcastEvent(room, {
         id: nextEventId(room),
@@ -615,6 +647,7 @@ function returnRoomToLobby(room: Room): void {
   clearTimers(room);
   room.phase = "lobby";
   room.song = null;
+  room.collisionTrack = null;
   room.checkpointUs = [];
   room.pickups = [];
   room.racePlayers.clear();
@@ -632,11 +665,13 @@ function returnRoomToLobby(room: Room): void {
 }
 
 function maybeCollectPickups(room: Room, racePlayer: InternalRacePlayer, now: number): void {
+  const track = room.collisionTrack;
+  if (!track) return;
+  const playerPosition = computeTrackWorldPosition(track, racePlayer.trackU, racePlayer.lateralOffset);
   for (const pickup of room.pickups) {
     if (pickup.collectedBy) continue;
-    if (Math.abs(pickup.u - racePlayer.trackU) > PICKUP_RADIUS_U) continue;
-    const laneOffset = pickup.lane * NOMINAL_HALF_WIDTH;
-    if (Math.abs(laneOffset - racePlayer.lateralOffset) > PICKUP_RADIUS_LATERAL) continue;
+    const pickupPosition = computeTrackWorldPosition(track, pickup.u, pickup.lane * NOMINAL_HALF_WIDTH);
+    if (pickupPosition.distanceToSquared(playerPosition) > PICKUP_WORLD_RADIUS * PICKUP_WORLD_RADIUS) continue;
 
     pickup.collectedBy = racePlayer.clientId;
     if (pickup.slot === "offensive") {
@@ -831,6 +866,7 @@ function makeRoom(params: Pick<Room, "code" | "name" | "hostId" | "phase" | "set
     pickups: [],
     racePlayers: new Map(),
     song: null,
+    collisionTrack: null,
     raceStartAt: 0,
     finishDeadlineAt: 0,
     preloadDeadlineAt: 0,
@@ -939,12 +975,13 @@ function buildLaneOffsets(count: number): number[] {
 function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
   const rng = mulberry32(seed ^ 0x51f15e);
   const pickups: PickupSpawnState[] = [];
+  const earlyTestWindows = [0.035, 0.05, 0.065] as const;
   // Dense uniform spacing along the track. Sections are a poor sampling
   // signal for combat pickups because short songs produce very few, and we
   // do not want players in long weaponless stretches. Hand-control density
   // instead: 80 windows of 3 pickups = 240 per race.
   const WINDOW_COUNT = 80;
-  const windowStart = 0.02;
+  const windowStart = 0.26;
   const windowEnd = 0.97;
   const windowStep = (windowEnd - windowStart) / WINDOW_COUNT;
   // Stagger the three pickups in each window along U so they do not all sit
@@ -952,8 +989,7 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
   // gives players a reason to pick a lane rather than hit whichever is closer.
   const windowLaneDu = [-0.0012, 0, 0.0012] as const;
 
-  for (let i = 0; i < WINDOW_COUNT; i++) {
-    const u = windowStart + i * windowStep;
+  const appendPickupWindow = (windowId: string, u: number): void => {
     const missileCenter = rng() > 0.5;
     const windowPickups: Array<Pick<PickupSpawnState, "kind" | "slot" | "lane">> = missileCenter
       ? [
@@ -970,7 +1006,7 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
     for (const [laneIndex, pickup] of windowPickups.entries()) {
       const pickupU = clamp(u + windowLaneDu[laneIndex], 0.01, 0.99);
       pickups.push({
-        id: `pickup-${i}-${laneIndex}`,
+        id: `pickup-${windowId}-${laneIndex}`,
         kind: pickup.kind,
         slot: pickup.slot,
         u: pickupU,
@@ -978,6 +1014,15 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
         collectedBy: null,
       });
     }
+  };
+
+  for (const [index, u] of earlyTestWindows.entries()) {
+    appendPickupWindow(`early-${index}`, u);
+  }
+
+  for (let i = 0; i < WINDOW_COUNT; i++) {
+    const u = windowStart + i * windowStep;
+    appendPickupWindow(`main-${i}`, u);
   }
   return pickups;
 }
@@ -1013,6 +1058,14 @@ function randomId(): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function computeTrackWorldPosition(track: Track, u: number, lateralOffset: number): Vector3 {
+  const frame = track.getFrameAt(u);
+  const center = track.getPointAt(u);
+  return center
+    .addScaledVector(frame.right, lateralOffset)
+    .addScaledVector(frame.up, VEHICLE_HOVER_HEIGHT);
 }
 
 function mulberry32(seed: number): () => number {
