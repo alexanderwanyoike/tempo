@@ -1,0 +1,23 @@
+{
+  "id": "tempo-lobby-warmup-lane",
+  "title": "Warmup Lane",
+  "artist": "Tempo Lobby",
+  "bpm": 99.38,
+  "duration": 9.665,
+  "baseSeed": 1834071127,
+  "sections": [
+    {
+      "id": "section-0",
+      "type": "intro",
+      "startTime": 0.0,
+      "endTime": 9.665,
+      "energy": 0.327,
+      "density": 1.0,
+      "hazardBias": 0.262,
+      "pickupBias": 0.404,
+      "tags": []
+    }
+  ],
+  "dropMarkers": [],
+  "chunkBias": []
+}
