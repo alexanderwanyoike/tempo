@@ -59,7 +59,6 @@ export class GameShell {
   private lastLaunch: AppLaunchOptions | null = null;
   private launchInFlight = false;
   private previewDebounce: number | null = null;
-  private readonly preloadedMusic = new Set<string>();
 
   constructor(
     private readonly root: HTMLElement,
@@ -553,7 +552,6 @@ export class GameShell {
     const fiction = FICTION_OPTIONS.find((candidate) => candidate.id === this.selectedFictionId) ?? FICTION_OPTIONS[0];
     const seed = this.seedOverride ?? song.baseSeed;
     const resolved = resolveSongLaunchUrls(this.config, song);
-    this.preloadMusic(resolved.musicUrl);
 
     this.uiLayer.dataset.fiction = String(fiction.id);
     this.songName.textContent = song.title;
@@ -653,7 +651,9 @@ export class GameShell {
 
     this.launchInFlight = true;
     this.playButton.disabled = true;
-    this.setStatus("");
+    this.playButton.style.opacity = "0.65";
+    this.playButton.textContent = "Loading...";
+    this.setStatus("Building race runtime...");
 
     try {
       await this.stopActiveRace();
@@ -677,7 +677,8 @@ export class GameShell {
     } finally {
       this.launchInFlight = false;
       this.playButton.disabled = false;
-      this.playButton.textContent = "LAUNCH";
+      this.playButton.style.opacity = "1";
+      this.playButton.textContent = "Launch Run";
     }
   }
 
@@ -738,20 +739,6 @@ export class GameShell {
 
   private setStatus(message: string): void {
     this.statusLine.textContent = message;
-  }
-
-  private preloadMusic(musicUrl: string): void {
-    if (!musicUrl || this.preloadedMusic.has(musicUrl)) return;
-    this.preloadedMusic.add(musicUrl);
-    void fetch(musicUrl).then((response) => {
-      if (!response.ok || !response.body) return;
-      const reader = response.body.getReader();
-      const drain = (): Promise<void> =>
-        reader.read().then(({ done }) => (done ? undefined : drain()));
-      return drain();
-    }).catch(() => {
-      this.preloadedMusic.delete(musicUrl);
-    });
   }
 }
 

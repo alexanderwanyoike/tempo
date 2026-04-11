@@ -26,6 +26,7 @@ const corsRules = [
   {
     AllowedOrigins: [
       "https://tempo-racer.netlify.app",
+      "https://*--tempo-racer.netlify.app",
       "https://playtempo.uk",
       "https://www.playtempo.uk",
       "http://localhost:5173",
