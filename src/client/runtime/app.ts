@@ -454,7 +454,11 @@ export class App {
   }
 
   private swapLobbyToRealScene(): void {
-    if (!this.lobbyActive || !this.deferredRaceSong) return;
+    if (!this.lobbyActive || !this.deferredRaceSong) {
+      console.log(`[swap] skipped (lobbyActive=${this.lobbyActive}, deferredRaceSong=${this.deferredRaceSong !== null})`);
+      return;
+    }
+    console.log("[swap] lobby -> real scene");
     const realSong = this.deferredRaceSong;
     const realSeed = this.deferredRaceSeed;
     const realFictionId = this.deferredRaceFictionId;
@@ -502,6 +506,7 @@ export class App {
     this.trackObjectTriggers.clear();
 
     this.lobbyActive = false;
+    console.log(`[swap] complete. realTrack totalLength=${realTrack.totalLength}, real track getPointAt(0.02)=`, realTrack.getPointAt(0.02));
   }
 
   private enterRunningPhase(): void {
@@ -880,9 +885,15 @@ export class App {
   private syncPickupVisuals(pickups: PickupSpawnState[]): void {
     if (pickups.length > 0 && this.pickupVisuals.size === 0) {
       // One-shot log per race so we can tell from DevTools whether the
-      // server is actually feeding us pickups. Safe to remove once combat
-      // visibility is confirmed working in live play.
-      console.log(`[pickups] first snapshot: ${pickups.length} entries`);
+      // server is actually feeding us pickups. Logs once per empty->full
+      // transition, which includes after the lobby->real swap.
+      console.log(`[pickups] populate: ${pickups.length} entries (phase=${this.phase}, lobbyActive=${this.lobbyActive})`);
+      if (pickups.length > 0) {
+        const first = pickups[0];
+        const frame = this.track.getFrameAt(first.u);
+        const center = this.track.getPointAt(first.u);
+        console.log(`[pickups] first pickup u=${first.u} lane=${first.lane} worldPos=(${center.x.toFixed(1)}, ${center.y.toFixed(1)}, ${center.z.toFixed(1)}) frameRight=(${frame.right.x.toFixed(2)}, ${frame.right.y.toFixed(2)}, ${frame.right.z.toFixed(2)})`);
+      }
     }
     const nextIds = new Set<string>();
     for (const pickup of pickups) {
