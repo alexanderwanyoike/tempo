@@ -552,14 +552,30 @@ export class App {
     this.musicSync?.stop();
     this.statusOverlay.style.display = "flex";
     this.statusBody.style.display = "";
-    this.statusTitle.textContent = "Results";
-    this.statusSubtitle.textContent = `${results.entries[0]?.name ?? "Winner"} takes the line first.`;
-    this.statusBody.textContent = results.entries
-      .map((entry) => {
-        const time = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
-        return `${entry.placement}. ${entry.name.padEnd(10, " ")} ${time}  TKD ${entry.takedowns}`;
-      })
-      .join("\n");
+    const winner = results.entries[0] ?? null;
+    if (this.launch.mode === "multiplayer") {
+      const winnerByFinishLine = winner?.status === "finished";
+      this.statusTitle.textContent = "Winner";
+      this.statusSubtitle.textContent = winnerByFinishLine
+        ? `${winner?.name ?? "Winner"} hit the finish line first.`
+        : `${winner?.name ?? "Winner"} was leading when the track ended.`;
+      this.statusBody.textContent = results.entries
+        .map((entry) => {
+          const role = entry.placement === 1 ? "WINNER" : "LOSER ";
+          const time = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
+          return `${role} ${entry.placement}. ${entry.name.padEnd(10, " ")} ${time}  TKD ${entry.takedowns}`;
+        })
+        .join("\n");
+    } else {
+      this.statusTitle.textContent = "Results";
+      this.statusSubtitle.textContent = `${results.entries[0]?.name ?? "Winner"} takes the line first.`;
+      this.statusBody.textContent = results.entries
+        .map((entry) => {
+          const time = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
+          return `${entry.placement}. ${entry.name.padEnd(10, " ")} ${time}  TKD ${entry.takedowns}`;
+        })
+        .join("\n");
+    }
     this.primaryButton.textContent = this.launch.mode === "multiplayer" ? "Back To Lobby" : "Retry";
     this.primaryButton.style.display = "";
     this.secondaryButton.textContent = "Back To Menu";

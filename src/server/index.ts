@@ -40,7 +40,6 @@ const MISSILE_MIN_RANGE_U = 0.0;
 const MISSILE_MAX_RANGE_U = 0.75;
 const SHIELD_DURATION_MS = 120000;
 const TAKEDOWN_DURATION_MS = 1800;
-const FINISH_WINDOW_MS = 20000;
 const LOBBY_PRELOAD_TIMEOUT_MS = 120000;
 const SNAPSHOT_INTERVAL_MS = 100;
 const COUNTDOWN_MS = 4000;
@@ -97,7 +96,6 @@ type Room = {
   song: SongDefinition | null;
   collisionTrack: Track | null;
   raceStartAt: number;
-  finishDeadlineAt: number;
   preloadDeadlineAt: number;
   stagingTimer: NodeJS.Timeout | null;
   snapshotInterval: NodeJS.Timeout | null;
@@ -340,7 +338,6 @@ async function startRoomRace(connection: ClientConnection): Promise<void> {
   room.checkpointUs = buildCheckpointUs(song);
   room.pickups = buildPickups(song, room.setup.seed);
   room.preloadDeadlineAt = Date.now() + LOBBY_PRELOAD_TIMEOUT_MS;
-  room.finishDeadlineAt = 0;
   room.raceStartAt = 0;
   room.eventSequence = 0;
   room.racePlayers.clear();
@@ -444,7 +441,7 @@ function startCountdown(room: Room): void {
     broadcastDirectory();
     startSnapshotLoop(room);
     if (room.song) {
-      const timeoutMs = Math.ceil(room.song.duration * 1000) + 10000;
+      const timeoutMs = Math.ceil(room.song.duration * 1000);
       room.songEndTimer = setTimeout(() => endRace(room), timeoutMs);
     }
   }, COUNTDOWN_MS);
@@ -462,6 +459,8 @@ function updateRaceReport(connection: ClientConnection, trackU: number, lateralO
     return;
   }
 
+  const previousTrackU = racePlayer.trackU;
+  const previousLateralOffset = racePlayer.lateralOffset;
   const floorU = racePlayer.checkpointIndex > 0
     ? room.checkpointUs[racePlayer.checkpointIndex - 1] ?? START_TRACK_U
     : START_TRACK_U;
@@ -473,15 +472,12 @@ function updateRaceReport(connection: ClientConnection, trackU: number, lateralO
     checkpointIndexForU(racePlayer.trackU, room.checkpointUs),
   );
 
-  maybeCollectPickups(room, racePlayer, now);
+  maybeCollectPickups(room, racePlayer, previousTrackU, previousLateralOffset, now);
 
   if (racePlayer.trackU >= 0.999 && racePlayer.finishedAt === null) {
     racePlayer.finishedAt = now;
     recomputePlacements(room);
     const placement = room.racePlayers.get(connection.clientId)?.placement ?? 1;
-    if (room.finishDeadlineAt === 0) {
-      room.finishDeadlineAt = now + FINISH_WINDOW_MS;
-    }
     broadcastEvent(room, {
       id: nextEventId(room),
       kind: "finish",
@@ -490,10 +486,8 @@ function updateRaceReport(connection: ClientConnection, trackU: number, lateralO
       finishTimeMs: Math.max(0, now - room.raceStartAt),
       at: now,
     });
-    if ([...room.racePlayers.values()].every((candidate) => candidate.finishedAt !== null)) {
-      endRace(room);
-      return;
-    }
+    endRace(room);
+    return;
   }
 
   recomputePlacements(room);
@@ -625,10 +619,6 @@ function tickRace(room: Room): void {
 
   recomputePlacements(room);
   broadcastRaceSnapshot(room);
-
-  if (room.finishDeadlineAt > 0 && now >= room.finishDeadlineAt) {
-    endRace(room);
-  }
 }
 
 function endRace(room: Room): void {
@@ -652,7 +642,6 @@ function returnRoomToLobby(room: Room): void {
   room.pickups = [];
   room.racePlayers.clear();
   room.raceStartAt = 0;
-  room.finishDeadlineAt = 0;
   room.preloadDeadlineAt = 0;
   for (const player of room.players.values()) {
     player.ready = false;
@@ -664,31 +653,60 @@ function returnRoomToLobby(room: Room): void {
   broadcastDirectory();
 }
 
-function maybeCollectPickups(room: Room, racePlayer: InternalRacePlayer, now: number): void {
+function maybeCollectPickups(
+  room: Room,
+  racePlayer: InternalRacePlayer,
+  previousTrackU: number,
+  previousLateralOffset: number,
+  now: number,
+): void {
   const track = room.collisionTrack;
   if (!track) return;
-  const playerPosition = computeTrackWorldPosition(track, racePlayer.trackU, racePlayer.lateralOffset);
+  const sampleCount = Math.max(
+    1,
+    Math.min(
+      8,
+      Math.ceil(Math.max(
+        Math.abs(racePlayer.trackU - previousTrackU) / 0.0025,
+        Math.abs(racePlayer.lateralOffset - previousLateralOffset) / 1.5,
+      )),
+    ),
+  );
+  let bestPickup: PickupSpawnState | null = null;
+  let bestDistanceSq = Number.POSITIVE_INFINITY;
   for (const pickup of room.pickups) {
     if (pickup.collectedBy) continue;
     const pickupPosition = computeTrackWorldPosition(track, pickup.u, pickup.lane * NOMINAL_HALF_WIDTH);
-    if (pickupPosition.distanceToSquared(playerPosition) > PICKUP_WORLD_RADIUS * PICKUP_WORLD_RADIUS) continue;
-
-    pickup.collectedBy = racePlayer.clientId;
-    if (pickup.slot === "offensive") {
-      racePlayer.offensiveItem = pickup.kind;
-    } else {
-      racePlayer.defensiveItem = pickup.kind;
+    let pickupDistanceSq = Number.POSITIVE_INFINITY;
+    for (let step = 0; step <= sampleCount; step++) {
+      const t = step / sampleCount;
+      const sampleTrackU = lerp(previousTrackU, racePlayer.trackU, t);
+      const sampleLateralOffset = lerp(previousLateralOffset, racePlayer.lateralOffset, t);
+      const playerPosition = computeTrackWorldPosition(track, sampleTrackU, sampleLateralOffset);
+      pickupDistanceSq = Math.min(pickupDistanceSq, pickupPosition.distanceToSquared(playerPosition));
     }
-    broadcastEvent(room, {
-      id: nextEventId(room),
-      kind: "pickup",
-      actorId: racePlayer.clientId,
-      item: pickup.kind,
-      slot: pickup.slot,
-      at: now,
-    });
-    return;
+    if (pickupDistanceSq > PICKUP_WORLD_RADIUS * PICKUP_WORLD_RADIUS) continue;
+    if (pickupDistanceSq >= bestDistanceSq) continue;
+    bestDistanceSq = pickupDistanceSq;
+    bestPickup = pickup;
   }
+
+  if (!bestPickup) return;
+
+  bestPickup.collectedBy = racePlayer.clientId;
+  if (bestPickup.slot === "offensive") {
+    racePlayer.offensiveItem = bestPickup.kind;
+  } else {
+    racePlayer.defensiveItem = bestPickup.kind;
+  }
+  broadcastEvent(room, {
+    id: nextEventId(room),
+    kind: "pickup",
+    actorId: racePlayer.clientId,
+    item: bestPickup.kind,
+    slot: bestPickup.slot,
+    at: now,
+  });
 }
 
 function recomputePlacements(room: Room): void {
@@ -868,7 +886,6 @@ function makeRoom(params: Pick<Room, "code" | "name" | "hostId" | "phase" | "set
     song: null,
     collisionTrack: null,
     raceStartAt: 0,
-    finishDeadlineAt: 0,
     preloadDeadlineAt: 0,
     stagingTimer: null,
     snapshotInterval: null,
@@ -975,15 +992,12 @@ function buildLaneOffsets(count: number): number[] {
 function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
   const rng = mulberry32(seed ^ 0x51f15e);
   const pickups: PickupSpawnState[] = [];
-  const earlyTestWindows = [0.035, 0.05, 0.065] as const;
-  // Dense uniform spacing along the track. Sections are a poor sampling
-  // signal for combat pickups because short songs produce very few, and we
-  // do not want players in long weaponless stretches. Hand-control density
-  // instead: 80 windows of 3 pickups = 240 per race.
+  // Spread pickup windows evenly across nearly the whole race so players get
+  // a consistent combat cadence instead of front-loaded test clusters.
   const WINDOW_COUNT = 80;
-  const windowStart = 0.26;
-  const windowEnd = 0.97;
-  const windowStep = (windowEnd - windowStart) / WINDOW_COUNT;
+  const windowStart = 0.07;
+  const windowEnd = 0.95;
+  const windowSpan = windowEnd - windowStart;
   // Stagger the three pickups in each window along U so they do not all sit
   // at the same track position - makes them easier to read at race speed and
   // gives players a reason to pick a lane rather than hit whichever is closer.
@@ -1016,12 +1030,8 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
     }
   };
 
-  for (const [index, u] of earlyTestWindows.entries()) {
-    appendPickupWindow(`early-${index}`, u);
-  }
-
   for (let i = 0; i < WINDOW_COUNT; i++) {
-    const u = windowStart + i * windowStep;
+    const u = windowStart + ((i + 0.5) / WINDOW_COUNT) * windowSpan;
     appendPickupWindow(`main-${i}`, u);
   }
   return pickups;
@@ -1058,6 +1068,10 @@ function randomId(): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }
 
 function computeTrackWorldPosition(track: Track, u: number, lateralOffset: number): Vector3 {
