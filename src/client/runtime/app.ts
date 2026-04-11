@@ -36,6 +36,7 @@ import { EnvironmentRuntime } from "./environment";
 import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
+import { CombatVfx } from "./combat-vfx";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
@@ -106,6 +107,9 @@ export type AppLaunchOptions = {
 
 const START_TRACK_U = 0.001;
 const NOMINAL_HALF_WIDTH = 11;
+// Mirrors server SHIELD_DURATION_MS. Purely cosmetic - the server is the
+// source of truth for the actual shield window.
+const SHIELD_VISUAL_DURATION_MS = 2500;
 
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
@@ -119,6 +123,7 @@ export class App {
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly localVehicle: RemoteCarVisual;
+  private readonly combatVfx: CombatVfx;
   private readonly pickupGroup = new Group();
   private readonly boostTrailGroup = new Group();
   private readonly boostTrailMeshes: Mesh[] = [];
@@ -290,6 +295,11 @@ export class App {
     this.scene.add(this.pickupGroup);
     this.scene.add(this.boostTrailGroup);
     this.scene.add(this.camera);
+    this.combatVfx = new CombatVfx(
+      this.scene,
+      (id) => this.getVehicleGroup(id),
+      this.root,
+    );
     this.createBoostTrailMeshes();
     this.configureSfx();
 
@@ -349,6 +359,7 @@ export class App {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.input.detach();
     this.touchControls?.detach();
+    this.combatVfx.dispose();
     this.musicSync?.stop();
     this.winSfx.pause();
     this.loseSfx.pause();
@@ -441,35 +452,66 @@ export class App {
   }
 
   applyRaceEvent(event: RaceEvent): void {
-    if (event.kind === "pickup" && event.actorId === this.launch.localPlayerId) {
+    const now = performance.now();
+    const localId = this.launch.localPlayerId;
+
+    if (event.kind === "pickup" && event.actorId === localId) {
       this.lastStatusMessage = event.item === "missile"
         ? "Missile ready. Press Space/F or tap Fire."
         : "Shield ready. Press R or tap Shield.";
       return;
     }
-    if (event.kind === "shield" && event.actorId === this.launch.localPlayerId) {
-      this.lastStatusMessage = "Shield active.";
+    if (event.kind === "shield") {
+      this.combatVfx.spawnShield(event.actorId, SHIELD_VISUAL_DURATION_MS, now);
+      if (event.actorId === localId) {
+        this.lastStatusMessage = "Shield active.";
+      }
       return;
     }
-    if (event.kind === "blocked" && event.targetId === this.launch.localPlayerId) {
-      this.lastStatusMessage = "Shield cracked a missile.";
+    if (event.kind === "blocked") {
+      this.combatVfx.spawnMissile(
+        event.actorId,
+        event.targetId,
+        () => this.combatVfx.spawnBlock(event.targetId, performance.now()),
+        now,
+      );
+      if (event.targetId === localId) {
+        this.lastStatusMessage = "Shield cracked a missile.";
+      }
       return;
     }
-    if (event.kind === "takedown" && event.actorId === this.launch.localPlayerId) {
-      this.lastStatusMessage = "Direct hit.";
+    if (event.kind === "takedown") {
+      this.combatVfx.spawnMissile(
+        event.actorId,
+        event.targetId,
+        () => {
+          const impactNow = performance.now();
+          this.combatVfx.spawnImpact(event.targetId, impactNow);
+          if (event.targetId === localId) {
+            this.combatVfx.flashLocalTakedown(impactNow);
+          }
+        },
+        now,
+      );
+      if (event.actorId === localId) {
+        this.lastStatusMessage = "Direct hit.";
+      } else if (event.targetId === localId) {
+        this.lastStatusMessage = "Takedown. Respawning on checkpoint.";
+      }
       return;
     }
-    if (event.kind === "takedown" && event.targetId === this.launch.localPlayerId) {
-      this.lastStatusMessage = "Takedown. Respawning on checkpoint.";
-      return;
-    }
-    if (event.kind === "respawn" && event.targetId === this.launch.localPlayerId) {
+    if (event.kind === "respawn" && event.targetId === localId) {
       this.lastStatusMessage = "Recovered. Rejoining the line.";
       return;
     }
-    if (event.kind === "finish" && event.actorId === this.launch.localPlayerId) {
+    if (event.kind === "finish" && event.actorId === localId) {
       this.lastStatusMessage = `Finish locked: P${event.placement}`;
     }
+  }
+
+  private getVehicleGroup(id: string): Group | null {
+    if (id === this.launch.localPlayerId) return this.localVehicle.group;
+    return this.remoteCars.get(id)?.group ?? null;
   }
 
   showResults(results: RaceResults): void {
@@ -1185,6 +1227,7 @@ export class App {
     this.updateRemoteCars(deltaSeconds);
     this.updateBoostVisuals();
     this.updatePickupVisuals(time / 1000);
+    this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);
     this.environment.update(this.elapsedRaceTime, musicTime, this.vehicleController.state.trackU, this.latestReactiveBands);
     this.updateHud();
