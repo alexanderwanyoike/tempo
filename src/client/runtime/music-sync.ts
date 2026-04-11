@@ -4,6 +4,59 @@ export type ReactiveBands = {
   high: number;
 };
 
+// Shared AudioContext unlocked during a user gesture. iOS Safari requires
+// either creating a context OR calling resume() inside the gesture task;
+// anything created after an await is stuck in "suspended" and will produce
+// silence even if later resumed. See unlockAudioContext() below.
+let sharedContext: AudioContext | null = null;
+
+export function unlockAudioContext(): void {
+  // Must be called synchronously inside a user gesture handler. Each step
+  // is independent and failures do not cascade, so one broken call path
+  // (e.g., closed context, unsupported API) cannot leave sharedContext in
+  // a poisoned state.
+
+  // If a previous context is closed (teardown, backgrounded tab), discard
+  // it here so we create a fresh one in the same gesture.
+  if (sharedContext && sharedContext.state === "closed") {
+    sharedContext = null;
+  }
+
+  if (!sharedContext) {
+    try {
+      sharedContext = new AudioContext();
+    } catch {
+      sharedContext = null;
+      return;
+    }
+  }
+
+  // resume() is best-effort. On desktop Chrome it's a no-op. On iOS WebKit
+  // inside a gesture it transitions suspended -> running. If it rejects,
+  // we keep the context - worst case we fall back to MusicSync's own
+  // retry-on-gesture path.
+  if (sharedContext.state === "suspended") {
+    try {
+      void sharedContext.resume().catch(() => {});
+    } catch {
+      // Fall through.
+    }
+  }
+
+  // Silent 1-sample buffer primes the output graph on older iOS versions
+  // that need an actual source.start() call inside the gesture. Failures
+  // here are non-fatal; the context itself is still usable.
+  try {
+    const buffer = sharedContext.createBuffer(1, 1, 22050);
+    const source = sharedContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(sharedContext.destination);
+    source.start(0);
+  } catch {
+    // Non-fatal.
+  }
+}
+
 export class MusicSync {
   private ctx: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
@@ -72,7 +125,11 @@ export class MusicSync {
       this.analyser = null;
     }
     if (this.ctx) {
-      void this.ctx.close();
+      // Don't close the shared unlocked context - it's reused across races
+      // and closing it would require another user gesture to unlock.
+      if (this.ctx !== sharedContext) {
+        void this.ctx.close();
+      }
       this.ctx = null;
     }
     this.startCtxTime = 0;
@@ -127,6 +184,13 @@ export class MusicSync {
 
   private primeAudioContext(): void {
     if (this.ctx) return;
+    if (sharedContext && sharedContext.state !== "closed") {
+      this.ctx = sharedContext;
+      return;
+    }
+    // No usable shared context (unlock was never called, creation failed,
+    // or a prior teardown closed it). Fall back to the legacy per-instance
+    // path so desktop and any non-iOS browser still work.
     try {
       this.ctx = new AudioContext();
     } catch {

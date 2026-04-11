@@ -2,6 +2,7 @@ import type { App, AppLaunchOptions } from "./runtime/app";
 import type { ClientConfig } from "./runtime/config";
 import { clampFictionId, type EnvironmentFictionId } from "./runtime/fiction-id";
 import { MenuPreview } from "./runtime/menu-preview";
+import { unlockAudioContext } from "./runtime/music-sync";
 import {
   clampCatalogFictions,
   loadSongCatalog,
@@ -866,6 +867,13 @@ export class GameShell {
       this.setStatus("Pick a valid circuit before launch.");
       return;
     }
+
+    // Must run while we are still synchronously inside the LAUNCH click
+    // handler. iOS WebKit (both Safari and Chrome, which uses WebKit under
+    // the hood) locks AudioContext creation to the user-gesture task;
+    // anything created after the first await below is stuck in "suspended"
+    // and produces silence even when later resumed. See music-sync.ts.
+    unlockAudioContext();
 
     this.launchInFlight = true;
     this.playButton.disabled = true;
