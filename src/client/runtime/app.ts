@@ -28,6 +28,7 @@ import { EnvironmentRuntime } from "./environment";
 import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
+import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
@@ -77,6 +78,7 @@ export class App {
   private readonly winSfx = new Audio(App.WIN_SFX_URL);
   private readonly loseSfx = new Audio(App.LOSE_SFX_URL);
   private readonly input: VehicleInput;
+  private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
   private readonly track: Track;
   private readonly trackObjects: readonly TrackObject[];
@@ -147,9 +149,12 @@ export class App {
     }
 
     if (musicLoadPromise) {
-      musicLoadPromise.catch((e) => {
+      try {
+        await musicLoadPromise;
+      } catch (e) {
         console.warn("Music load failed:", e);
-      });
+        musicSync = null;
+      }
     }
 
     return new App(
@@ -157,7 +162,6 @@ export class App {
       config,
       track,
       musicSync,
-      musicLoadPromise,
       song,
       seed,
       fictionId,
@@ -167,14 +171,11 @@ export class App {
     );
   }
 
-  private readonly musicLoadPromise: Promise<void> | null;
-
   private constructor(
     private readonly root: HTMLElement,
     private readonly config: ClientConfig,
     track: Track,
     musicSync: MusicSync | null,
-    musicLoadPromise: Promise<void> | null,
     song: SongDefinition | null,
     seed: number,
     fictionId: EnvironmentFictionId,
@@ -182,7 +183,6 @@ export class App {
     private readonly onRetry: (() => void) | null,
     private readonly onBackToMenu: (() => void) | null,
   ) {
-    this.musicLoadPromise = musicLoadPromise;
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -229,6 +229,9 @@ export class App {
     this.carBodyMaterial = bodyMaterial;
     this.cockpitMaterial = cockpitMaterial;
     this.input = new VehicleInput();
+    this.touchControls = window.matchMedia("(pointer: coarse)").matches
+      ? new TouchControls(this.input.state)
+      : null;
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.musicSync = musicSync;
     this.songDuration = song?.duration ?? null;
@@ -264,17 +267,10 @@ export class App {
     this.root.appendChild(this.renderer.domElement);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.root.appendChild(this.statusOverlay);
+    this.touchControls?.attach(this.root);
     this.setupScene();
     this.bindEvents();
-    if (this.musicLoadPromise) {
-      this.musicLoadPromise
-        .then(() => {
-          if (!this.destroyed) this.musicSync?.play();
-        })
-        .catch(() => {});
-    } else {
-      this.musicSync?.play();
-    }
+    this.musicSync?.play();
     this.lastFrameTime = performance.now();
     this.render(this.lastFrameTime);
   }
@@ -291,6 +287,7 @@ export class App {
     window.removeEventListener("resize", this.handleResize);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.input.detach();
+    this.touchControls?.detach();
     this.musicSync?.stop();
     this.winSfx.pause();
     this.loseSfx.pause();
