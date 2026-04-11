@@ -28,6 +28,7 @@ import { EnvironmentRuntime } from "./environment";
 import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
+import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
@@ -77,6 +78,7 @@ export class App {
   private readonly winSfx = new Audio(App.WIN_SFX_URL);
   private readonly loseSfx = new Audio(App.LOSE_SFX_URL);
   private readonly input: VehicleInput;
+  private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
   private readonly track: Track;
   private readonly trackObjects: readonly TrackObject[];
@@ -227,6 +229,9 @@ export class App {
     this.carBodyMaterial = bodyMaterial;
     this.cockpitMaterial = cockpitMaterial;
     this.input = new VehicleInput();
+    this.touchControls = window.matchMedia("(pointer: coarse)").matches
+      ? new TouchControls(this.input.state)
+      : null;
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.musicSync = musicSync;
     this.songDuration = song?.duration ?? null;
@@ -262,6 +267,7 @@ export class App {
     this.root.appendChild(this.renderer.domElement);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.root.appendChild(this.statusOverlay);
+    this.touchControls?.attach(this.root);
     this.setupScene();
     this.bindEvents();
     this.musicSync?.play();
@@ -281,6 +287,7 @@ export class App {
     window.removeEventListener("resize", this.handleResize);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.input.detach();
+    this.touchControls?.detach();
     this.musicSync?.stop();
     this.winSfx.pause();
     this.loseSfx.pause();

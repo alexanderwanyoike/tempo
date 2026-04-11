@@ -47,7 +47,9 @@ export class GameShell {
   private readonly previewSubline = document.createElement("div");
   private readonly shellBrand = document.createElement("div");
   private readonly fictionButtons = new Map<EnvironmentFictionId, HTMLButtonElement>();
+  private readonly rotatePrompt = document.createElement("div");
   private readonly menuPreview: MenuPreview;
+  private orientationQuery: MediaQueryList | null = null;
 
   private catalog: SongCatalog | null = null;
   private availableSongs: ShellSongEntry[] = [];
@@ -68,10 +70,12 @@ export class GameShell {
     this.configureLayout();
     this.menuPreview = new MenuPreview(this.previewHost);
     this.buildShellUi();
+    this.buildRotatePrompt();
+    this.setupOrientationWatch();
   }
 
   async start(): Promise<void> {
-    this.root.replaceChildren(this.raceHost, this.uiLayer);
+    this.root.replaceChildren(this.raceHost, this.uiLayer, this.rotatePrompt);
     this.menuPreview.start();
     this.setStatus("Loading circuit database...");
 
@@ -243,9 +247,11 @@ export class GameShell {
         transition: border-color 120ms ease, color 120ms ease;
       }
 
-      .tempo-shell-fiction:hover {
-        color: #f3f5f2;
-        border-color: rgba(243, 245, 242, 0.32);
+      @media (hover: hover) {
+        .tempo-shell-fiction:hover {
+          color: #f3f5f2;
+          border-color: rgba(243, 245, 242, 0.32);
+        }
       }
 
       .tempo-shell-fiction.is-active {
@@ -300,9 +306,11 @@ export class GameShell {
         letter-spacing: 0;
       }
 
-      .tempo-shell-play:hover:not(:disabled) {
-        background: var(--tempo-accent);
-        color: #06080b;
+      @media (hover: hover) {
+        .tempo-shell-play:hover:not(:disabled) {
+          background: var(--tempo-accent);
+          color: #06080b;
+        }
       }
 
       .tempo-shell-play:disabled {
@@ -377,6 +385,11 @@ export class GameShell {
       }
 
       @media (max-width: 980px) {
+        .tempo-shell-ui {
+          overflow-y: auto;
+          overscroll-behavior: contain;
+        }
+
         .tempo-shell {
           padding: 28px 24px;
           gap: 24px;
@@ -391,9 +404,214 @@ export class GameShell {
           min-height: 360px;
         }
       }
+
+      @media (max-width: 900px) and (orientation: landscape) {
+        .tempo-shell {
+          padding: 12px 20px 14px;
+          gap: 12px;
+          min-height: 100vh;
+        }
+
+        .tempo-shell-topline {
+          gap: 12px;
+        }
+
+        .tempo-shell-brand {
+          font-size: 22px;
+        }
+
+        .tempo-shell-tagline {
+          display: none;
+        }
+
+        .tempo-shell-main {
+          grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+          gap: 18px;
+        }
+
+        .tempo-shell-left {
+          gap: 14px;
+        }
+
+        .tempo-shell-section {
+          gap: 6px;
+        }
+
+        .tempo-shell-select,
+        .tempo-shell-input {
+          padding: 10px 12px;
+          font-size: 14px;
+        }
+
+        .tempo-shell-fiction {
+          padding: 8px 12px;
+        }
+
+        .tempo-shell-stats {
+          gap: 10px;
+        }
+
+        .tempo-shell-stat-value {
+          font-size: 14px;
+        }
+
+        .tempo-shell-play {
+          margin-top: 4px;
+          padding: 12px 16px;
+          font-size: 12px;
+          letter-spacing: 0.18em;
+        }
+
+        .tempo-shell-preview-box {
+          min-height: 0;
+          height: 100%;
+        }
+      }
+
+      .tempo-rotate-prompt {
+        position: fixed;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: #06080b;
+        color: #f3f5f2;
+        font-family: ui-sans-serif, -apple-system, "Inter", "Helvetica Neue", Arial, sans-serif;
+        z-index: 9999;
+        padding: 40px;
+        text-align: center;
+      }
+
+      .tempo-rotate-prompt.is-visible {
+        display: flex;
+      }
+
+      .tempo-rotate-prompt svg {
+        width: 88px;
+        height: 88px;
+        opacity: 0.85;
+      }
+
+      .tempo-rotate-prompt-title {
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .tempo-rotate-prompt-sub {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #8a9297;
+      }
+
+      .tempo-touch {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 2;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .tempo-touch-stick-area {
+        position: absolute;
+        left: max(24px, env(safe-area-inset-left));
+        bottom: max(24px, env(safe-area-inset-bottom));
+        width: 180px;
+        height: 180px;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .tempo-touch-stick-base {
+        width: 150px;
+        height: 150px;
+        border-radius: 50%;
+        border: 1px solid rgba(243, 245, 242, 0.24);
+        background: rgba(6, 8, 11, 0.38);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        position: relative;
+      }
+
+      .tempo-touch-stick-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 62px;
+        height: 62px;
+        margin-left: -31px;
+        margin-top: -31px;
+        border-radius: 50%;
+        background: rgba(243, 245, 242, 0.82);
+        border: 1px solid rgba(243, 245, 242, 0.4);
+        transform: translate(0, 0);
+        transition: transform 60ms linear;
+        pointer-events: none;
+      }
+
+      .tempo-touch-brake {
+        position: absolute;
+        right: max(24px, env(safe-area-inset-right));
+        bottom: max(24px, env(safe-area-inset-bottom));
+        width: 132px;
+        height: 132px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 120, 120, 0.55);
+        background: rgba(255, 70, 70, 0.18);
+        color: #ffecec;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        pointer-events: auto;
+        cursor: pointer;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+      }
+
+      .tempo-touch-brake:active {
+        background: rgba(255, 70, 70, 0.36);
+      }
     `;
 
     document.head.appendChild(style);
+  }
+
+  private buildRotatePrompt(): void {
+    this.rotatePrompt.className = "tempo-rotate-prompt";
+    this.rotatePrompt.innerHTML = `
+      <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="20" y="8" width="24" height="44" rx="4" ry="4" />
+        <line x1="28" y1="46" x2="36" y2="46" />
+        <path d="M 10 36 A 22 22 0 0 1 32 14" />
+        <polyline points="6 30 10 36 16 32" />
+      </svg>
+      <div class="tempo-rotate-prompt-title">Rotate to landscape</div>
+      <div class="tempo-rotate-prompt-sub">Tempo plays sideways</div>
+    `;
+  }
+
+  private setupOrientationWatch(): void {
+    if (typeof window.matchMedia !== "function") return;
+    const coarse = window.matchMedia("(pointer: coarse)");
+    if (!coarse.matches) return;
+
+    this.orientationQuery = window.matchMedia("(orientation: portrait)");
+    const sync = (): void => {
+      this.rotatePrompt.classList.toggle("is-visible", this.orientationQuery?.matches === true);
+    };
+    this.orientationQuery.addEventListener("change", sync);
+    sync();
   }
 
   private configureLayout(): void {
