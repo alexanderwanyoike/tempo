@@ -37,14 +37,9 @@ import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
 import loadingLoopSongData from "../../../assets/audio/loading-loop.json";
-import { AmbientAudio } from "./ambient-audio";
 import { CombatVfx } from "./combat-vfx";
 import { TouchControls } from "./touch-controls";
 
-const LOADING_LOOP_URL = new URL(
-  "../../../assets/audio/loading-loop.mp3",
-  import.meta.url,
-).href;
 const LOBBY_SONG = loadingLoopSongData as unknown as SongDefinition;
 const LOBBY_SEED = 0xfade;
 const LOBBY_FICTION_ID: EnvironmentFictionId = 1;
@@ -159,7 +154,6 @@ export class App {
   private deferredRaceSeed = 0;
   private deferredRaceFictionId: EnvironmentFictionId = 1;
   private lobbyActive = false;
-  private readonly lobbyAmbient: AmbientAudio | null;
   private readonly debugHud: HTMLDivElement | null;
   private readonly hud: HTMLDivElement;
   private readonly placementHud: HTMLDivElement;
@@ -342,7 +336,6 @@ export class App {
     this.deferredRaceSeed = deferredRaceSeed;
     this.deferredRaceFictionId = deferredRaceFictionId;
     this.lobbyActive = deferredRaceSong !== null;
-    this.lobbyAmbient = this.lobbyActive ? new AmbientAudio(LOADING_LOOP_URL) : null;
     this.scene.add(this.pickupGroup);
     this.scene.add(this.boostTrailGroup);
     this.scene.add(this.camera);
@@ -385,9 +378,6 @@ export class App {
   }
 
   start(): void {
-    if (this.lobbyActive) {
-      this.lobbyAmbient?.play();
-    }
     this.root.append(this.renderer.domElement, this.hud, this.statusOverlay);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.touchControls?.attach(this.root);
@@ -414,7 +404,6 @@ export class App {
     this.input.detach();
     this.touchControls?.detach();
     this.combatVfx.dispose();
-    this.lobbyAmbient?.pause();
     this.musicSync?.stop();
     this.winSfx.pause();
     this.loseSfx.pause();
@@ -469,8 +458,6 @@ export class App {
     const realSong = this.deferredRaceSong;
     const realSeed = this.deferredRaceSeed;
     const realFictionId = this.deferredRaceFictionId;
-
-    this.lobbyAmbient?.pause();
 
     // Remove lobby track mesh + environment from the scene. We drop the
     // references; the next frame will GC them. EnvironmentRuntime has no
