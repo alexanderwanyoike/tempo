@@ -36,8 +36,18 @@ import { EnvironmentRuntime } from "./environment";
 import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
+import loadingLoopSongData from "../../../assets/audio/loading-loop.json";
+import { AmbientAudio } from "./ambient-audio";
 import { CombatVfx } from "./combat-vfx";
 import { TouchControls } from "./touch-controls";
+
+const LOADING_LOOP_URL = new URL(
+  "../../../assets/audio/loading-loop.mp3",
+  import.meta.url,
+).href;
+const LOBBY_SONG = loadingLoopSongData as unknown as SongDefinition;
+const LOBBY_SEED = 0xfade;
+const LOBBY_FICTION_ID: EnvironmentFictionId = 1;
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
@@ -136,12 +146,20 @@ export class App {
   private readonly input: VehicleInput;
   private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
-  private readonly track: Track;
-  private readonly trackObjects: readonly TrackObject[];
+  private track: Track;
+  private trackObjects: readonly TrackObject[];
   private readonly musicSync: MusicSync | null;
-  private readonly environment: EnvironmentRuntime;
-  private readonly fictionId: EnvironmentFictionId;
+  private environment: EnvironmentRuntime;
+  private fictionId: EnvironmentFictionId;
   private readonly songDuration: number | null;
+  // Real race scene parameters stashed during App.create for multiplayer
+  // warmup. Null for solo and for multiplayer sessions where no lobby swap
+  // is required (e.g., song failed to load and we fell back to TestTrack).
+  private deferredRaceSong: SongDefinition | null = null;
+  private deferredRaceSeed = 0;
+  private deferredRaceFictionId: EnvironmentFictionId = 1;
+  private lobbyActive = false;
+  private readonly lobbyAmbient: AmbientAudio | null;
   private readonly debugHud: HTMLDivElement | null;
   private readonly hud: HTMLDivElement;
   private readonly placementHud: HTMLDivElement;
@@ -201,11 +219,16 @@ export class App {
   ): Promise<App> {
     const songUrl = launch.songUrl;
     const fictionId = clampFictionId(launch.fictionId ?? null);
+    const isMultiplayer = launch.mode === "multiplayer";
 
     let track: Track;
     let musicSync: MusicSync | null = null;
-    let song: SongDefinition | null = null;
-    let seed = 0;
+    let scenePlanSong: SongDefinition | null = null;
+    let sceneSeed = 0;
+    let sceneFictionId = fictionId;
+    let deferredRaceSong: SongDefinition | null = null;
+    let deferredRaceSeed = 0;
+    let deferredRaceFictionId: EnvironmentFictionId = fictionId;
     let musicReadyPromise: Promise<void> | null = null;
 
     if (songUrl) {
@@ -220,9 +243,26 @@ export class App {
       }
 
       try {
-        song = await songPromise;
-        seed = launch.seed ?? song.baseSeed;
-        track = new TrackGenerator(song, seed);
+        const realSong = await songPromise;
+        const realSeed = launch.seed ?? realSong.baseSeed;
+        if (isMultiplayer) {
+          // Multiplayer boots into a lobby "warmup lane" built from the
+          // loading-loop song so the real race track stays hidden until
+          // every peer has preloaded. beginCountdown() swaps to the real
+          // scene using the stashed deferred params.
+          scenePlanSong = LOBBY_SONG;
+          sceneSeed = LOBBY_SEED;
+          sceneFictionId = LOBBY_FICTION_ID;
+          track = new TrackGenerator(LOBBY_SONG, LOBBY_SEED);
+          deferredRaceSong = realSong;
+          deferredRaceSeed = realSeed;
+          deferredRaceFictionId = fictionId;
+        } else {
+          scenePlanSong = realSong;
+          sceneSeed = realSeed;
+          sceneFictionId = fictionId;
+          track = new TrackGenerator(realSong, realSeed);
+        }
       } catch {
         track = new TestTrack();
       }
@@ -235,12 +275,15 @@ export class App {
       config,
       track,
       musicSync,
-      song,
-      seed,
-      fictionId,
+      scenePlanSong,
+      sceneSeed,
+      sceneFictionId,
       launch,
       launch.debugHud ?? false,
       musicReadyPromise,
+      deferredRaceSong,
+      deferredRaceSeed,
+      deferredRaceFictionId,
     );
   }
 
@@ -255,6 +298,9 @@ export class App {
     private readonly launch: AppLaunchOptions,
     debugHudEnabled: boolean,
     private readonly musicReadyPromise: Promise<void> | null,
+    deferredRaceSong: SongDefinition | null,
+    deferredRaceSeed: number,
+    deferredRaceFictionId: EnvironmentFictionId,
   ) {
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -285,13 +331,18 @@ export class App {
     this.vehicleController = new VehicleController(defaultVehicleTuning);
     this.vehicleController.forceTrackState(START_TRACK_U);
     this.musicSync = musicSync;
-    this.songDuration = song?.duration ?? null;
+    this.songDuration = deferredRaceSong?.duration ?? song?.duration ?? null;
     this.fictionId = fictionId;
     this.track = track;
     this.trackObjects = this.track.getTrackObjects();
     this.environment = new EnvironmentRuntime(this.scene, this.track, song, seed, fictionId);
     this.scene.add(this.environment.group);
     this.scene.add(this.track.meshGroup);
+    this.deferredRaceSong = deferredRaceSong;
+    this.deferredRaceSeed = deferredRaceSeed;
+    this.deferredRaceFictionId = deferredRaceFictionId;
+    this.lobbyActive = deferredRaceSong !== null;
+    this.lobbyAmbient = this.lobbyActive ? new AmbientAudio(LOADING_LOOP_URL) : null;
     this.scene.add(this.pickupGroup);
     this.scene.add(this.boostTrailGroup);
     this.scene.add(this.camera);
@@ -334,6 +385,9 @@ export class App {
   }
 
   start(): void {
+    if (this.lobbyActive) {
+      this.lobbyAmbient?.play();
+    }
     this.root.append(this.renderer.domElement, this.hud, this.statusOverlay);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.touchControls?.attach(this.root);
@@ -360,6 +414,7 @@ export class App {
     this.input.detach();
     this.touchControls?.detach();
     this.combatVfx.dispose();
+    this.lobbyAmbient?.pause();
     this.musicSync?.stop();
     this.winSfx.pause();
     this.loseSfx.pause();
@@ -390,6 +445,9 @@ export class App {
 
   beginCountdown(startAt: number): void {
     if (this.phase === "finished") return;
+    if (this.lobbyActive) {
+      this.swapLobbyToRealScene();
+    }
     this.pendingStartAt = startAt;
     this.phase = "countdown";
     this.countdownStarted = false;
@@ -404,6 +462,59 @@ export class App {
     this.statusBody.style.display = "none";
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
+  }
+
+  private swapLobbyToRealScene(): void {
+    if (!this.lobbyActive || !this.deferredRaceSong) return;
+    const realSong = this.deferredRaceSong;
+    const realSeed = this.deferredRaceSeed;
+    const realFictionId = this.deferredRaceFictionId;
+
+    this.lobbyAmbient?.pause();
+
+    // Remove lobby track mesh + environment from the scene. We drop the
+    // references; the next frame will GC them. EnvironmentRuntime has no
+    // explicit dispose, and Track.meshGroup is a plain Group we can detach.
+    this.scene.remove(this.track.meshGroup);
+    this.scene.remove(this.environment.group);
+
+    // Build real track + environment in place.
+    const realTrack = new TrackGenerator(realSong, realSeed);
+    this.track = realTrack;
+    this.trackObjects = realTrack.getTrackObjects();
+    this.fictionId = realFictionId;
+    this.environment = new EnvironmentRuntime(
+      this.scene,
+      realTrack,
+      realSong,
+      realSeed,
+      realFictionId,
+    );
+    this.scene.add(this.environment.group);
+    this.scene.add(this.track.meshGroup);
+
+    // Rewire the vehicle controller to the real track and drop it back on
+    // the starting line so the first-frame physics read matches the real
+    // geometry rather than the lobby one.
+    this.vehicleController.setTrack(realTrack);
+    this.vehicleController.setTrackQuery((pos, hintU) =>
+      realTrack.queryNearest(pos, hintU),
+    );
+    this.vehicleController.forceTrackState(
+      this.countdownResetTrackU > 0 ? this.countdownResetTrackU : START_TRACK_U,
+      this.countdownResetLateralOffset,
+      0,
+    );
+
+    // Reset pickup/trigger state so the old lobby ids do not linger. The
+    // server will resend the real pickup snapshot on the next tick.
+    for (const visual of this.pickupVisuals.values()) {
+      this.pickupGroup.remove(visual.mesh);
+    }
+    this.pickupVisuals.clear();
+    this.trackObjectTriggers.clear();
+
+    this.lobbyActive = false;
   }
 
   private enterRunningPhase(): void {
