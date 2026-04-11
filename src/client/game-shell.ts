@@ -305,6 +305,43 @@ export class GameShell {
         .tempo-shell { padding:24px 22px; }
         .tempo-shell-main { grid-template-columns:1fr; gap:24px; }
         .tempo-shell-preview-box { min-height:340px; }
+        .tempo-shell-room-card {
+          flex-wrap:wrap;
+          padding:12px;
+          gap:10px;
+        }
+        .tempo-shell-room-card-meta {
+          font-size:12px;
+          line-height:1.55;
+          flex:1 1 100%;
+          white-space:normal;
+        }
+        .tempo-shell-room-card .tempo-shell-action,
+        .tempo-shell-room-card .tempo-shell-chip {
+          flex:1 1 100%;
+          min-height:44px;
+        }
+        .tempo-shell-directory { max-height:42vh; overflow-y:auto; }
+      }
+      @media (max-width: 900px) and (orientation: landscape) {
+        .tempo-shell { padding:12px 20px 14px; gap:12px; min-height:100vh; }
+        .tempo-shell-topline { gap:10px; }
+        .tempo-shell-brand { font-size:22px; }
+        .tempo-shell-tagline { display:none; }
+        .tempo-shell-main { grid-template-columns:minmax(220px, 300px) minmax(0, 1fr); gap:18px; }
+        .tempo-shell-left { gap:12px; }
+        .tempo-shell-section { gap:6px; }
+        .tempo-shell-select,
+        .tempo-shell-input,
+        .tempo-shell-code { padding:10px 12px; font-size:14px; }
+        .tempo-shell-chip,
+        .tempo-shell-action { padding:9px 12px; }
+        .tempo-shell-stats { gap:10px; }
+        .tempo-shell-stat-value { font-size:14px; }
+        .tempo-shell-play { margin-top:4px; padding:12px 16px; font-size:12px; letter-spacing:0.18em; }
+        .tempo-shell-preview-box { min-height:0; height:100%; }
+        .tempo-shell-directory { max-height:38vh; }
+        .tempo-shell-room-block { padding:10px; }
       }
       .tempo-rotate-prompt {
         position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
