@@ -943,7 +943,34 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
   // at the same track position - makes them easier to read at race speed and
   // gives players a reason to pick a lane rather than hit whichever is closer.
   const windowLaneDu = [-0.0015, 0, 0.0015] as const;
-  let lastWindowU = 0;
+  // Seed pickup right after the starting line so players see at least one
+  // weapon beam in the first seconds of the race, regardless of how the
+  // song happens to segment. Lane-center shield + flanking missiles.
+  pickups.push({
+    id: "pickup-start-shield",
+    kind: "shield",
+    slot: "defensive",
+    u: 0.018,
+    lane: 0,
+    collectedBy: null,
+  });
+  pickups.push({
+    id: "pickup-start-missile-l",
+    kind: "missile",
+    slot: "offensive",
+    u: 0.02,
+    lane: -0.7,
+    collectedBy: null,
+  });
+  pickups.push({
+    id: "pickup-start-missile-r",
+    kind: "missile",
+    slot: "offensive",
+    u: 0.02,
+    lane: 0.7,
+    collectedBy: null,
+  });
+  let lastWindowU = 0.02;
   // Iterate EVERY section (not odd-only) and drop the window gap so players
   // are never in a long dry stretch. Range widened at both ends too.
   for (let index = 1; index < song.sections.length - 1; index += 1) {

@@ -878,60 +878,68 @@ export class App {
   }
 
   private syncPickupVisuals(pickups: PickupSpawnState[]): void {
+    if (pickups.length > 0 && this.pickupVisuals.size === 0) {
+      // One-shot log per race so we can tell from DevTools whether the
+      // server is actually feeding us pickups. Safe to remove once combat
+      // visibility is confirmed working in live play.
+      console.log(`[pickups] first snapshot: ${pickups.length} entries`);
+    }
     const nextIds = new Set<string>();
     for (const pickup of pickups) {
       nextIds.add(pickup.id);
       let visual = this.pickupVisuals.get(pickup.id);
       if (!visual) {
         const isMissile = pickup.kind === "missile";
-        const coreColor = isMissile ? "#ff5d84" : "#7ce7ff";
-        const glowColor = isMissile ? "#ff9cb6" : "#b8f1ff";
+        const coreColor = isMissile ? "#ff3d7a" : "#39e6ff";
+        const glowColor = isMissile ? "#ffb5cb" : "#bff5ff";
+        // Huge core box - this is the "no way you missed it" size. Every
+        // pickup reads from ~40m+ away at race speed.
         const mesh = new Mesh(
-          new BoxGeometry(isMissile ? 2.7 : 3.0, 2.7, 2.7),
+          new BoxGeometry(isMissile ? 4.8 : 5.2, 4.8, 4.8),
           new MeshStandardMaterial({
             color: coreColor,
             emissive: coreColor,
-            emissiveIntensity: 3.6,
+            emissiveIntensity: 5.5,
           }),
         );
-        // Main beam - tall emissive column visible from a long way off.
+        // Main beam - tall emissive column visible from across the track.
         const beam = new Mesh(
-          new BoxGeometry(0.9, 22, 0.9),
+          new BoxGeometry(1.8, 40, 1.8),
           new MeshStandardMaterial({
             color: glowColor,
             emissive: coreColor,
-            emissiveIntensity: 2.2,
+            emissiveIntensity: 4.2,
             transparent: true,
-            opacity: 0.88,
+            opacity: 0.95,
             depthWrite: false,
           }),
         );
-        beam.position.y = 11;
+        beam.position.y = 20;
         // Wide outer halo beam for silhouette at extreme distance.
         const haloBeam = new Mesh(
-          new BoxGeometry(2.4, 24, 2.4),
+          new BoxGeometry(5.5, 44, 5.5),
           new MeshStandardMaterial({
             color: glowColor,
             emissive: coreColor,
-            emissiveIntensity: 1.1,
+            emissiveIntensity: 2.0,
             transparent: true,
-            opacity: 0.22,
+            opacity: 0.26,
             depthWrite: false,
           }),
         );
-        haloBeam.position.y = 11;
+        haloBeam.position.y = 20;
         const base = new Mesh(
-          new BoxGeometry(4.8, 0.24, 4.8),
+          new BoxGeometry(8.0, 0.4, 8.0),
           new MeshStandardMaterial({
             color: glowColor,
             emissive: coreColor,
-            emissiveIntensity: 1.6,
+            emissiveIntensity: 2.4,
             transparent: true,
-            opacity: 0.72,
+            opacity: 0.82,
             depthWrite: false,
           }),
         );
-        base.position.y = -1.1;
+        base.position.y = -1.8;
         mesh.add(beam, haloBeam, base);
         visual = { mesh, kind: pickup.kind, u: pickup.u, lane: pickup.lane };
         this.pickupVisuals.set(pickup.id, visual);
@@ -956,7 +964,7 @@ export class App {
       const center = this.track.getPointAt(visual.u);
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      visual.mesh.position.addScaledVector(frame.up, 2.4 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.55);
+      visual.mesh.position.addScaledVector(frame.up, 3.6 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.55);
       this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
       visual.mesh.setRotationFromMatrix(this.orientMat);
       visual.mesh.rotateY(timeSeconds * 1.8);
