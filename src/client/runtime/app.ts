@@ -943,8 +943,15 @@ export class App {
       const center = this.track.getPointAt(visual.u);
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      visual.mesh.position.y += 4.2 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.5;
-      // Gentle bob on the core; beam is a child and inherits transform.
+      // Use frame.up (matches VehicleController.deriveWorldState at ~1.6
+      // units above the track surface) so the pickup mesh sits at the car's
+      // cockpit height on flat sections AND banks correctly on loops. Using
+      // world +Y previously put the sphere meters above the car on banks
+      // and made the trigger feel miles off the visual.
+      visual.mesh.position.addScaledVector(
+        frame.up,
+        1.6 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.35,
+      );
       visual.mesh.rotation.set(0, timeSeconds * 1.5, 0);
     }
   }
