@@ -962,12 +962,17 @@ export class App {
       if (!visual.mesh.visible) continue;
       const frame = this.track.getFrameAt(visual.u);
       const center = this.track.getPointAt(visual.u);
+      // Lateral offset along the track's right vector, vertical offset along
+      // WORLD UP so the beam is always readable as "up" in the player's
+      // frame rather than tilting into a banked surface. Old code used
+      // frame.up + a left-handed orientation matrix, which both hid the
+      // pickup on banked sections and produced a mirrored rotation matrix
+      // that setRotationFromMatrix could not extract cleanly.
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      visual.mesh.position.addScaledVector(frame.up, 3.6 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.55);
-      this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
-      visual.mesh.setRotationFromMatrix(this.orientMat);
-      visual.mesh.rotateY(timeSeconds * 1.8);
+      visual.mesh.position.y += 4.0 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.55;
+      // Just spin the core around world-up. No track-follow rotation.
+      visual.mesh.rotation.set(0, timeSeconds * 1.8, 0);
       const [beam, haloBeam, base] = visual.mesh.children;
       if (beam) {
         beam.scale.y = 1 + Math.sin(timeSeconds * 2.2 + visual.u * 11) * 0.08;
