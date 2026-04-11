@@ -8,10 +8,16 @@ import type {
   ServerMessage,
 } from "../../shared/network-types";
 import type { App, AppLaunchOptions } from "./runtime/app";
+import { AmbientAudio } from "./runtime/ambient-audio";
 import type { ClientConfig } from "./runtime/config";
 import { clampFictionId, type EnvironmentFictionId } from "./runtime/fiction-id";
 import { MenuPreview } from "./runtime/menu-preview";
 import { unlockAudioContext } from "./runtime/music-sync";
+
+const LOADING_LOOP_URL = new URL(
+  "../../assets/audio/loading-loop.mp3",
+  import.meta.url,
+).href;
 import { RoomClient } from "./runtime/room-client";
 import {
   clampCatalogFictions,
@@ -93,6 +99,7 @@ export class GameShell {
   private readonly previewSubline = document.createElement("div");
   private readonly rotatePrompt = document.createElement("div");
   private readonly menuPreview: MenuPreview;
+  private readonly ambientAudio: AmbientAudio;
 
   private orientationQuery: MediaQueryList | null = null;
   private catalog: SongCatalog | null = null;
@@ -128,6 +135,7 @@ export class GameShell {
     this.injectStyles();
     this.configureLayout();
     this.menuPreview = new MenuPreview(this.previewHost);
+    this.ambientAudio = new AmbientAudio(LOADING_LOOP_URL);
     this.buildShellUi();
     this.buildRotatePrompt();
     this.setupOrientationWatch();
@@ -136,6 +144,7 @@ export class GameShell {
   async start(): Promise<void> {
     this.root.replaceChildren(this.raceHost, this.uiLayer, this.rotatePrompt);
     this.menuPreview.start();
+    this.ambientAudio.play();
     this.setStatus("Loading circuit database...");
 
     try {
@@ -979,6 +988,7 @@ export class GameShell {
     }
 
     unlockAudioContext();
+    this.ambientAudio.pause();
     this.launchInFlight = true;
     this.playButton.disabled = true;
     this.playButton.textContent = "Launching...";
@@ -1003,6 +1013,7 @@ export class GameShell {
       this.setStatus("Launch failed.");
       this.uiLayer.style.display = "";
       this.menuPreview.start();
+      this.ambientAudio.play();
     } finally {
       this.launchInFlight = false;
       this.playButton.disabled = false;
@@ -1038,6 +1049,7 @@ export class GameShell {
     if (!song) return;
 
     unlockAudioContext();
+    this.ambientAudio.pause();
     this.multiplayerResultsActive = false;
     this.pendingLobbyStatus = null;
     this.launchInFlight = true;
@@ -1088,6 +1100,7 @@ export class GameShell {
       this.setStatus("Failed to stage multiplayer race.");
       this.uiLayer.style.display = "";
       this.menuPreview.start();
+      this.ambientAudio.play();
     } finally {
       this.launchInFlight = false;
     }
@@ -1097,6 +1110,7 @@ export class GameShell {
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
+    this.ambientAudio.play();
     this.mode = "multiplayer";
     this.multiplayerResultsActive = false;
     this.renderMode();
@@ -1109,6 +1123,7 @@ export class GameShell {
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
+    this.ambientAudio.play();
     this.renderSelection();
     this.setStatus("Circuit select ready.");
   }
