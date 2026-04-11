@@ -265,9 +265,9 @@ export class App {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.composer.addPass(new UnrealBloomPass(
       new Vector2(window.innerWidth, window.innerHeight),
-      0.44,
+      0.58,
       0.42,
-      0.36,
+      0.3,
     ));
 
     this.localVehicle = this.createVehicleVisual(launch.carVariant ?? "vector");
@@ -743,35 +743,56 @@ export class App {
       nextIds.add(pickup.id);
       let visual = this.pickupVisuals.get(pickup.id);
       if (!visual) {
+        const isMissile = pickup.kind === "missile";
+        const coreColor = isMissile ? "#ff5d84" : "#7ce7ff";
+        const glowColor = isMissile ? "#ff9cb6" : "#b8f1ff";
         const mesh = new Mesh(
-          new BoxGeometry(pickup.kind === "missile" ? 1.7 : 1.95, 1.7, 1.7),
+          new BoxGeometry(isMissile ? 2.7 : 3.0, 2.7, 2.7),
           new MeshStandardMaterial({
-            color: pickup.kind === "missile" ? "#ff5d84" : "#7ce7ff",
-            emissive: pickup.kind === "missile" ? "#6a1730" : "#0f5b73",
-            emissiveIntensity: 1.9,
+            color: coreColor,
+            emissive: coreColor,
+            emissiveIntensity: 3.6,
           }),
         );
+        // Main beam - tall emissive column visible from a long way off.
         const beam = new Mesh(
-          new BoxGeometry(0.5, 12, 0.5),
-          new MeshBasicMaterial({
-            color: pickup.kind === "missile" ? "#ff7d9f" : "#8cefff",
+          new BoxGeometry(0.9, 22, 0.9),
+          new MeshStandardMaterial({
+            color: glowColor,
+            emissive: coreColor,
+            emissiveIntensity: 2.2,
             transparent: true,
-            opacity: 0.42,
+            opacity: 0.88,
             depthWrite: false,
           }),
         );
-        beam.position.y = 6;
+        beam.position.y = 11;
+        // Wide outer halo beam for silhouette at extreme distance.
+        const haloBeam = new Mesh(
+          new BoxGeometry(2.4, 24, 2.4),
+          new MeshStandardMaterial({
+            color: glowColor,
+            emissive: coreColor,
+            emissiveIntensity: 1.1,
+            transparent: true,
+            opacity: 0.22,
+            depthWrite: false,
+          }),
+        );
+        haloBeam.position.y = 11;
         const base = new Mesh(
-          new BoxGeometry(3.4, 0.18, 3.4),
-          new MeshBasicMaterial({
-            color: pickup.kind === "missile" ? "#ff5d84" : "#7ce7ff",
+          new BoxGeometry(4.8, 0.24, 4.8),
+          new MeshStandardMaterial({
+            color: glowColor,
+            emissive: coreColor,
+            emissiveIntensity: 1.6,
             transparent: true,
-            opacity: 0.55,
+            opacity: 0.72,
             depthWrite: false,
           }),
         );
-        base.position.y = -0.75;
-        mesh.add(beam, base);
+        base.position.y = -1.1;
+        mesh.add(beam, haloBeam, base);
         visual = { mesh, kind: pickup.kind, u: pickup.u, lane: pickup.lane };
         this.pickupVisuals.set(pickup.id, visual);
         this.pickupGroup.add(mesh);
@@ -795,17 +816,20 @@ export class App {
       const center = this.track.getPointAt(visual.u);
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      visual.mesh.position.addScaledVector(frame.up, 1.8 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.45);
+      visual.mesh.position.addScaledVector(frame.up, 2.4 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.55);
       this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
       visual.mesh.setRotationFromMatrix(this.orientMat);
       visual.mesh.rotateY(timeSeconds * 1.8);
-      const beam = visual.mesh.children[0];
-      const base = visual.mesh.children[1];
+      const [beam, haloBeam, base] = visual.mesh.children;
       if (beam) {
         beam.scale.y = 1 + Math.sin(timeSeconds * 2.2 + visual.u * 11) * 0.08;
       }
+      if (haloBeam) {
+        const haloPulse = 1 + Math.sin(timeSeconds * 1.7 + visual.u * 13) * 0.22;
+        haloBeam.scale.set(haloPulse, 1, haloPulse);
+      }
       if (base) {
-        const pulse = 1 + Math.sin(timeSeconds * 4 + visual.u * 19) * 0.16;
+        const pulse = 1 + Math.sin(timeSeconds * 4 + visual.u * 19) * 0.22;
         base.scale.setScalar(pulse);
       }
     }

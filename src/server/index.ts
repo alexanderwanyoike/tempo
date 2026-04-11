@@ -939,15 +939,21 @@ function buildLaneOffsets(count: number): number[] {
 function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
   const rng = mulberry32(seed ^ 0x51f15e);
   const pickups: PickupSpawnState[] = [];
+  // Stagger the three pickups in each window along U so they do not all sit
+  // at the same track position - makes them easier to read at race speed and
+  // gives players a reason to pick a lane rather than hit whichever is closer.
+  const windowLaneDu = [-0.0015, 0, 0.0015] as const;
   let lastWindowU = 0;
-  for (let index = 1; index < song.sections.length - 1; index += 2) {
+  // Iterate EVERY section (not odd-only) and drop the window gap so players
+  // are never in a long dry stretch. Range widened at both ends too.
+  for (let index = 1; index < song.sections.length - 1; index += 1) {
     const section = song.sections[index];
     const u = clamp(
       ((section.startTime + section.endTime) * 0.5) / song.duration,
-      0.12,
-      0.92,
+      0.08,
+      0.95,
     );
-    if (u - lastWindowU < 0.06) continue;
+    if (u - lastWindowU < 0.035) continue;
     lastWindowU = u;
 
     const missileCenter = rng() > 0.5;
@@ -964,11 +970,12 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
         ];
 
     for (const [laneIndex, pickup] of windowPickups.entries()) {
+      const pickupU = clamp(u + windowLaneDu[laneIndex], 0.05, 0.98);
       pickups.push({
-        id: `pickup-${index}-${laneIndex}-${Math.round(u * 1000)}`,
+        id: `pickup-${index}-${laneIndex}-${Math.round(pickupU * 1000)}`,
         kind: pickup.kind,
         slot: pickup.slot,
-        u,
+        u: pickupU,
         lane: pickup.lane,
         collectedBy: null,
       });
