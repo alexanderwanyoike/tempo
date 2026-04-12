@@ -963,6 +963,7 @@ function hasSongEnded(room: Room, now: number): boolean {
   return room.songEndAt > 0 && now >= room.songEndAt;
 }
 
+
 function getRoomFor(connection: ClientConnection): Room | null {
   if (!connection.roomCode) {
     sendError(connection.socket, "Not connected to a room.");
