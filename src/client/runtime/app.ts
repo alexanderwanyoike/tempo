@@ -560,8 +560,8 @@ export class App {
         ? `${winner?.name ?? "Winner"} hit the finish line first.`
         : `${winner?.name ?? "Winner"} was leading when the track ended.`;
       this.statusBody.textContent = results.entries
-        .map((entry) => {
-          const role = entry.placement === 1 ? "WINNER" : "LOSER ";
+        .map((entry, index) => {
+          const role = index === 0 ? "WINNER" : "LOSER ";
           const time = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
           return `${role} ${entry.placement}. ${entry.name.padEnd(10, " ")} ${time}  TKD ${entry.takedowns}`;
         })
