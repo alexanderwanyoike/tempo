@@ -1,6 +1,6 @@
 import type { VehicleInputState } from "./input";
 
-type TouchRole = "stick" | "brake";
+type TouchRole = "stick" | "brake" | "fire" | "shield";
 
 export class TouchControls {
   private overlay: HTMLDivElement | null = null;
@@ -36,16 +36,43 @@ export class TouchControls {
   private createOverlayDom(): HTMLDivElement {
     const wrapper = document.createElement("div");
     wrapper.className = "tempo-touch";
+    wrapper.style.position = "fixed";
+    wrapper.style.inset = "0";
+    wrapper.style.zIndex = "25";
+    wrapper.style.pointerEvents = "none";
 
     const stickArea = document.createElement("div");
     stickArea.className = "tempo-touch-stick-area";
     stickArea.dataset.role = "stick";
+    stickArea.style.position = "absolute";
+    stickArea.style.left = "18px";
+    stickArea.style.bottom = "18px";
+    stickArea.style.width = "144px";
+    stickArea.style.height = "144px";
+    stickArea.style.pointerEvents = "auto";
 
     const stickBase = document.createElement("div");
     stickBase.className = "tempo-touch-stick-base";
+    stickBase.style.position = "absolute";
+    stickBase.style.inset = "0";
+    stickBase.style.borderRadius = "999px";
+    stickBase.style.border = "1px solid rgba(130, 232, 255, 0.24)";
+    stickBase.style.background = "rgba(4, 8, 14, 0.42)";
+    stickBase.style.backdropFilter = "blur(10px)";
 
     const stickKnob = document.createElement("div");
     stickKnob.className = "tempo-touch-stick-knob";
+    stickKnob.style.position = "absolute";
+    stickKnob.style.left = "50%";
+    stickKnob.style.top = "50%";
+    stickKnob.style.width = "64px";
+    stickKnob.style.height = "64px";
+    stickKnob.style.marginLeft = "-32px";
+    stickKnob.style.marginTop = "-32px";
+    stickKnob.style.borderRadius = "999px";
+    stickKnob.style.background = "rgba(120, 230, 255, 0.24)";
+    stickKnob.style.border = "1px solid rgba(160, 245, 255, 0.55)";
+    stickKnob.style.boxShadow = "0 0 24px rgba(120, 230, 255, 0.2)";
 
     stickBase.appendChild(stickKnob);
     stickArea.appendChild(stickBase);
@@ -55,8 +82,35 @@ export class TouchControls {
     brake.type = "button";
     brake.dataset.role = "brake";
     brake.textContent = "BRAKE";
+    this.styleActionButton(brake, {
+      right: "18px",
+      bottom: "18px",
+      accent: "#ff9a7a",
+    });
+
+    const fire = document.createElement("button");
+    fire.type = "button";
+    fire.dataset.role = "fire";
+    fire.textContent = "FIRE";
+    this.styleActionButton(fire, {
+      right: "18px",
+      bottom: "92px",
+      accent: "#ff5d84",
+    });
+
+    const shield = document.createElement("button");
+    shield.type = "button";
+    shield.dataset.role = "shield";
+    shield.textContent = "SHIELD";
+    this.styleActionButton(shield, {
+      right: "18px",
+      bottom: "166px",
+      accent: "#7ce7ff",
+    });
 
     wrapper.appendChild(stickArea);
+    wrapper.appendChild(shield);
+    wrapper.appendChild(fire);
     wrapper.appendChild(brake);
 
     this.stickBase = stickBase;
@@ -75,6 +129,14 @@ export class TouchControls {
       } else if (role === "brake") {
         this.touches.set(touch.identifier, "brake");
         this.inputState.brake = true;
+        consumed = true;
+      } else if (role === "fire") {
+        this.touches.set(touch.identifier, "fire");
+        this.inputState.fire = true;
+        consumed = true;
+      } else if (role === "shield") {
+        this.touches.set(touch.identifier, "shield");
+        this.inputState.shield = true;
         consumed = true;
       }
     }
@@ -109,6 +171,10 @@ export class TouchControls {
         this.resetKnobVisual();
       } else if (role === "brake") {
         this.inputState.brake = false;
+      } else if (role === "fire") {
+        this.inputState.fire = false;
+      } else if (role === "shield") {
+        this.inputState.shield = false;
       }
     }
     if (consumed) event.preventDefault();
@@ -118,7 +184,7 @@ export class TouchControls {
     if (!(target instanceof HTMLElement)) return null;
     const roleEl = target.closest<HTMLElement>("[data-role]");
     const value = roleEl?.dataset.role;
-    return value === "stick" || value === "brake" ? value : null;
+    return value === "stick" || value === "brake" || value === "fire" || value === "shield" ? value : null;
   }
 
   private updateStickFromTouch(touch: Touch): void {
@@ -158,5 +224,28 @@ export class TouchControls {
     this.inputState.steerRight = false;
     this.inputState.throttle = false;
     this.inputState.brake = false;
+    this.inputState.fire = false;
+    this.inputState.shield = false;
+  }
+
+  private styleActionButton(
+    button: HTMLButtonElement,
+    options: { right: string; bottom: string; accent: string },
+  ): void {
+    button.style.position = "absolute";
+    button.style.right = options.right;
+    button.style.bottom = options.bottom;
+    button.style.width = "112px";
+    button.style.height = "58px";
+    button.style.borderRadius = "18px";
+    button.style.border = `1px solid ${options.accent}`;
+    button.style.background = "rgba(4, 8, 14, 0.62)";
+    button.style.backdropFilter = "blur(10px)";
+    button.style.boxShadow = "0 0 24px rgba(0, 0, 0, 0.24)";
+    button.style.color = options.accent;
+    button.style.font = "800 12px/1 system-ui, sans-serif";
+    button.style.letterSpacing = "0.14em";
+    button.style.textTransform = "uppercase";
+    button.style.pointerEvents = "auto";
   }
 }

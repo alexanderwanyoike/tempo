@@ -68,9 +68,13 @@ The client now boots into a lightweight menu shell that:
 - supports `songId`, `fiction`, `seed`, and `debugHud=1` query params
 - still accepts legacy deep links with `song=/songs/...json`
 
-## Deploy (single player)
+## Deploy
 
-Target stack for the jam submission: Netlify for the static site, Cloudflare R2 for music and analysis JSON. The WebSocket server is not deployed yet — multiplayer comes after submission.
+Target stack for the jam submission:
+
+- Netlify for the static site
+- Railway for the realtime websocket server
+- Cloudflare R2 for music and analysis JSON
 
 ### 1. Cloudflare R2 bucket
 
@@ -86,12 +90,29 @@ Target stack for the jam submission: Netlify for the static site, Cloudflare R2 
 3. Run `yarn upload:assets`. This walks `public/music/` and `public/songs/`, skips files already in the bucket, and uploads the rest. Pass `--force` to overwrite.
 4. Verify in the browser: open `<r2-public-url>/music/firestarter.mp3` — it should stream.
 
-### 3. Netlify site
+### 3. Railway realtime server
+
+1. Railway → New Project → Deploy from GitHub repo → pick this repo.
+2. Create a dedicated service for the websocket server using the repo root as the source.
+3. Railway will pick up [`railway.json`](./railway.json), which sets:
+   - build command: `yarn build:server`
+   - start command: `yarn start`
+   - healthcheck path: `/health`
+4. Ensure the service has public networking enabled. Railway injects `PORT`; the server already listens on `process.env.PORT`.
+5. Deploy once and copy the public domain, for example `tempo-room-server.up.railway.app`.
+6. Verify the healthcheck in a browser:
+   - `https://<railway-domain>/health` should return `ok`
+7. Verify websocket reachability with a real client after Netlify is pointed at it.
+
+### 4. Netlify site
 
 1. Netlify → Add new site → Import from Git → pick this repo.
 2. Build command: `yarn build`. Publish directory: `dist`. (`netlify.toml` already sets these.)
-3. Site settings → Environment variables → add `VITE_ASSET_BASE_URL` with the R2 public base URL from step 1. **Set this before the first deploy** — Vite inlines env vars at build time, so a build done without it will fetch audio from the Netlify origin (which has no MP3s) and break on launch.
-4. Trigger the deploy. Open the Netlify URL. Menu should load, preview should render, LAUNCH should stream audio from `pub-<hash>.r2.dev`.
+3. Site settings → Environment variables:
+   - `VITE_ASSET_BASE_URL` = the R2 public base URL from step 1
+   - `VITE_WS_URL` = `wss://<railway-domain>`
+4. **Set both before the first deploy** — Vite inlines env vars at build time, so a build done without them will point at the wrong asset or websocket origin.
+5. Trigger the deploy. Open the Netlify URL. Menu should load, preview should render, solo should stream audio from `pub-<hash>.r2.dev`, and multiplayer should connect to Railway.
 
 ### Changing songs later
 
@@ -106,4 +127,5 @@ Phase 2 gameplay is in place and Phase 2.5 submission hardening is underway:
 - boosts, obstacles, loops, and reactive visual fictions
 - win/lose race loop without a full page refresh
 - deploy-ready asset base indirection for moving audio off the main site
-- Netlify + R2 deploy config for single-player submission
+- Netlify + R2 deploy config for the client
+- Railway config for the realtime multiplayer server

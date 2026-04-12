@@ -12,8 +12,8 @@ import {
   Vector3,
 } from "three";
 
-import type { SongSectionType } from "../../../shared/song-schema";
-import type { SectionBoundary } from "./track-generator";
+import type { SongSectionType } from "../../../shared/song-schema.js";
+import type { SectionBoundary } from "./track-generator.js";
 
 const WORLD_UP = new Vector3(0, 1, 0);
 const WALL_HEIGHT = 2.0;

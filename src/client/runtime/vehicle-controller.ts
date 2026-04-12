@@ -112,6 +112,18 @@ export class VehicleController {
     this.trackQueryFn = fn;
   }
 
+  forceTrackState(trackU: number, lateralOffset = 0, speed = 0): void {
+    const s = this.state;
+    s.trackU = MathUtils.clamp(trackU, 0.001, 0.999);
+    s.lateralOffset = lateralOffset;
+    s.speed = speed;
+    s.lateralVelocity = 0;
+    s.airborne = false;
+    s.worldVelocity.set(0, 0, 0);
+    this.lastSafeU = s.trackU;
+    this.deriveWorldState();
+  }
+
   applyPickupBoost(multiplier = 1.55, duration = 1.1, topSpeedBonus = 14, speedImpulse = 7): void {
     const s = this.state;
     this.temporaryBoostTimer = Math.max(this.temporaryBoostTimer, duration);
