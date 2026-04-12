@@ -822,8 +822,8 @@ export class GameShell {
           : "Race complete.",
       );
       lines.push("");
-      for (const entry of this.latestRaceResults.entries) {
-        const role = entry.placement === 1 ? "WINNER" : "LOSER ";
+      for (const [index, entry] of this.latestRaceResults.entries.entries()) {
+        const role = index === 0 ? "WINNER" : "LOSER ";
         const time = entry.finishTimeMs === null ? "DNF" : formatDuration(entry.finishTimeMs / 1000);
         lines.push(`${role} ${entry.placement}. ${entry.name.padEnd(8, " ")} ${time}`);
       }
