@@ -6,6 +6,8 @@ export type VehicleInputState = {
   airbrakeLeft: boolean;
   airbrakeRight: boolean;
   boost: boolean;
+  fire: boolean;
+  shield: boolean;
 };
 
 const bindings: Record<string, keyof VehicleInputState> = {
@@ -21,6 +23,9 @@ const bindings: Record<string, keyof VehicleInputState> = {
   KeyE: "airbrakeRight",
   ShiftLeft: "boost",
   ShiftRight: "boost",
+  Space: "fire",
+  KeyF: "fire",
+  KeyR: "shield",
 };
 
 export class VehicleInput {
@@ -32,6 +37,8 @@ export class VehicleInput {
     airbrakeLeft: false,
     airbrakeRight: false,
     boost: false,
+    fire: false,
+    shield: false,
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {

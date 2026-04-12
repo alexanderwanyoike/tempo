@@ -8,19 +8,19 @@ import {
   MeshStandardMaterial,
   Vector3,
 } from "three";
-import type { SongDefinition, SongSection, SongSectionType } from "../../../shared/song-schema";
-import type { ChunkType } from "./chunks";
-import { chunkFns, type ChunkParams } from "./chunks";
-import { mulberry32 } from "./prng";
-import { pickChunkForSection, scaleChunkParams } from "./section-rules";
-import type { Track, TrackFeature, TrackFrame, TrackObject, TrackQuery } from "./track-builder";
+import type { SongDefinition, SongSection, SongSectionType } from "../../../shared/song-schema.js";
+import type { ChunkType } from "./chunks.js";
+import { chunkFns, type ChunkParams } from "./chunks.js";
+import { mulberry32 } from "./prng.js";
+import { pickChunkForSection, scaleChunkParams } from "./section-rules.js";
+import type { Track, TrackFeature, TrackFrame, TrackObject, TrackQuery } from "./track-builder.js";
 import {
   buildCenterLineMesh,
   buildRoadMesh,
   buildSectionWallMesh,
   computeParallelTransportFrames,
   type FrameTable,
-} from "./track-mesh";
+} from "./track-mesh.js";
 
 /** Average race speed for track length calculation (m/s).
  *  This controls track LENGTH. Higher = longer track.
@@ -75,7 +75,7 @@ export class TrackGenerator implements Track {
     // Scale samples with track length: ~1 sample per 2m
     this.sampleCount = Math.max(800, Math.ceil(this.totalLength / 2));
     this.frames = computeParallelTransportFrames(this.centerline, this.sampleCount);
-    this.halfWidthSamples = this.frames.samples.map((_, i) => this.getHalfWidthAt(i / this.sampleCount));
+    this.halfWidthSamples = this.frames.samples.map((_: Vector3, i: number) => this.getHalfWidthAt(i / this.sampleCount));
     this.trackFeatures = generation.features;
     this.trackObjects = this.generateTrackObjects(seed);
 
