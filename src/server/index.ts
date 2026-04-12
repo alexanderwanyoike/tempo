@@ -96,11 +96,11 @@ type Room = {
   song: SongDefinition | null;
   collisionTrack: Track | null;
   raceStartAt: number;
+  songEndAt: number;
   preloadDeadlineAt: number;
   stagingTimer: NodeJS.Timeout | null;
   snapshotInterval: NodeJS.Timeout | null;
   countdownTimer: NodeJS.Timeout | null;
-  songEndTimer: NodeJS.Timeout | null;
   eventSequence: number;
 };
 
@@ -336,9 +336,10 @@ async function startRoomRace(connection: ClientConnection): Promise<void> {
   room.collisionTrack = new TrackGenerator(song, room.setup.seed);
   room.phase = "staging";
   room.checkpointUs = buildCheckpointUs(song);
-  room.pickups = buildPickups(song, room.setup.seed);
+  room.pickups = buildPickups(room.collisionTrack, room.setup.seed);
   room.preloadDeadlineAt = Date.now() + LOBBY_PRELOAD_TIMEOUT_MS;
   room.raceStartAt = 0;
+  room.songEndAt = 0;
   room.eventSequence = 0;
   room.racePlayers.clear();
 
@@ -423,6 +424,7 @@ function startCountdown(room: Room): void {
   room.phase = "countdown";
   const startAt = Date.now() + COUNTDOWN_MS;
   room.raceStartAt = startAt;
+  room.songEndAt = room.song ? startAt + Math.ceil(room.song.duration * 1000) : 0;
   broadcastRoomState(room);
   broadcastRaceSnapshot(room);
   broadcastDirectory();
@@ -440,16 +442,16 @@ function startCountdown(room: Room): void {
     broadcastRoomState(room);
     broadcastDirectory();
     startSnapshotLoop(room);
-    if (room.song) {
-      const timeoutMs = Math.ceil(room.song.duration * 1000);
-      room.songEndTimer = setTimeout(() => endRace(room), timeoutMs);
-    }
   }, COUNTDOWN_MS);
 }
 
 function updateRaceReport(connection: ClientConnection, trackU: number, lateralOffset: number, speed: number): void {
   const room = getRoomFor(connection);
   if (!room || room.phase !== "running") return;
+  if (hasSongEnded(room, Date.now())) {
+    endRace(room);
+    return;
+  }
   const player = room.players.get(connection.clientId);
   const racePlayer = room.racePlayers.get(connection.clientId);
   if (!player || !racePlayer || !player.isActiveRacer) return;
@@ -496,6 +498,10 @@ function updateRaceReport(connection: ClientConnection, trackU: number, lateralO
 function handleFire(connection: ClientConnection): void {
   const room = getRoomFor(connection);
   if (!room || room.phase !== "running") return;
+  if (hasSongEnded(room, Date.now())) {
+    endRace(room);
+    return;
+  }
   const attacker = room.racePlayers.get(connection.clientId);
   if (!attacker || attacker.offensiveItem !== "missile") return;
   const now = Date.now();
@@ -576,6 +582,10 @@ function handleFire(connection: ClientConnection): void {
 function handleShield(connection: ClientConnection): void {
   const room = getRoomFor(connection);
   if (!room || room.phase !== "running") return;
+  if (hasSongEnded(room, Date.now())) {
+    endRace(room);
+    return;
+  }
   const racePlayer = room.racePlayers.get(connection.clientId);
   if (!racePlayer || racePlayer.defensiveItem !== "shield") return;
   const now = Date.now();
@@ -600,6 +610,11 @@ function startSnapshotLoop(room: Room): void {
 
 function tickRace(room: Room): void {
   const now = Date.now();
+  if (hasSongEnded(room, now)) {
+    endRace(room);
+    return;
+  }
+
   for (const racePlayer of room.racePlayers.values()) {
     if (racePlayer.respawnAt > 0 && now >= racePlayer.respawnAt) {
       racePlayer.respawnAt = 0;
@@ -642,6 +657,7 @@ function returnRoomToLobby(room: Room): void {
   room.pickups = [];
   room.racePlayers.clear();
   room.raceStartAt = 0;
+  room.songEndAt = 0;
   room.preloadDeadlineAt = 0;
   for (const player of room.players.values()) {
     player.ready = false;
@@ -886,11 +902,11 @@ function makeRoom(params: Pick<Room, "code" | "name" | "hostId" | "phase" | "set
     song: null,
     collisionTrack: null,
     raceStartAt: 0,
+    songEndAt: 0,
     preloadDeadlineAt: 0,
     stagingTimer: null,
     snapshotInterval: null,
     countdownTimer: null,
-    songEndTimer: null,
     eventSequence: 0,
   };
 }
@@ -941,10 +957,10 @@ function clearTimers(room: Room): void {
     clearTimeout(room.countdownTimer);
     room.countdownTimer = null;
   }
-  if (room.songEndTimer) {
-    clearTimeout(room.songEndTimer);
-    room.songEndTimer = null;
-  }
+}
+
+function hasSongEnded(room: Room, now: number): boolean {
+  return room.songEndAt > 0 && now >= room.songEndAt;
 }
 
 function getRoomFor(connection: ClientConnection): Room | null {
@@ -989,32 +1005,47 @@ function buildLaneOffsets(count: number): number[] {
   return Array.from({ length: count }, (_, index) => start + index * step);
 }
 
-function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
+function buildPickups(track: Track, seed: number): PickupSpawnState[] {
   const rng = mulberry32(seed ^ 0x51f15e);
   const pickups: PickupSpawnState[] = [];
   // Spread pickup windows evenly across nearly the whole race so players get
   // a consistent combat cadence instead of front-loaded test clusters.
-  const WINDOW_COUNT = 80;
+  const WINDOW_COUNT = 96;
   const windowStart = 0.07;
   const windowEnd = 0.95;
   const windowSpan = windowEnd - windowStart;
+  const laneFractions = [-0.45, 0, 0.45] as const;
+  const blockedObjects = track.getTrackObjects();
+  const blockedFeatures = track.getTrackFeatures();
   // Stagger the three pickups in each window along U so they do not all sit
   // at the same track position - makes them easier to read at race speed and
   // gives players a reason to pick a lane rather than hit whichever is closer.
   const windowLaneDu = [-0.0012, 0, 0.0012] as const;
 
+  const overlapsBlockedZone = (u: number): boolean => {
+    for (const object of blockedObjects) {
+      const objectPaddingU = (object.collisionLength + 12) / track.totalLength;
+      if (Math.abs(object.u - u) <= objectPaddingU) return true;
+    }
+    for (const feature of blockedFeatures) {
+      const featurePaddingU = feature.kind === "jump" ? 0.03 : 0.05;
+      if (Math.abs(feature.u - u) <= featurePaddingU) return true;
+    }
+    return false;
+  };
+
   const appendPickupWindow = (windowId: string, u: number): void => {
     const missileCenter = rng() > 0.5;
     const windowPickups: Array<Pick<PickupSpawnState, "kind" | "slot" | "lane">> = missileCenter
       ? [
-          { kind: "shield", slot: "defensive", lane: -0.7 },
-          { kind: "missile", slot: "offensive", lane: 0 },
-          { kind: "shield", slot: "defensive", lane: 0.7 },
+          { kind: "shield", slot: "defensive", lane: laneFractions[0] },
+          { kind: "missile", slot: "offensive", lane: laneFractions[1] },
+          { kind: "shield", slot: "defensive", lane: laneFractions[2] },
         ]
       : [
-          { kind: "missile", slot: "offensive", lane: -0.7 },
-          { kind: "shield", slot: "defensive", lane: 0 },
-          { kind: "missile", slot: "offensive", lane: 0.7 },
+          { kind: "missile", slot: "offensive", lane: laneFractions[0] },
+          { kind: "shield", slot: "defensive", lane: laneFractions[1] },
+          { kind: "missile", slot: "offensive", lane: laneFractions[2] },
         ];
 
     for (const [laneIndex, pickup] of windowPickups.entries()) {
@@ -1032,6 +1063,7 @@ function buildPickups(song: SongDefinition, seed: number): PickupSpawnState[] {
 
   for (let i = 0; i < WINDOW_COUNT; i++) {
     const u = windowStart + ((i + 0.5) / WINDOW_COUNT) * windowSpan;
+    if (overlapsBlockedZone(u)) continue;
     appendPickupWindow(`main-${i}`, u);
   }
   return pickups;

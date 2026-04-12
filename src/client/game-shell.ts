@@ -1,4 +1,5 @@
 import type {
+  RaceResults,
   RaceSetup,
   RoomDirectoryEntry,
   RoomPhase,
@@ -51,6 +52,8 @@ const CAR_VARIANTS: Array<{ id: CarVariant; label: string }> = [
 ];
 
 export class GameShell {
+  private static readonly MULTIPLAYER_RESULTS_DWELL_MS = 4500;
+
   private readonly raceHost = document.createElement("div");
   private readonly uiLayer = document.createElement("div");
   private readonly shell = document.createElement("div");
@@ -116,6 +119,8 @@ export class GameShell {
   private roomBrowserReady = false;
   private multiplayerResultsActive = false;
   private pendingLobbyStatus: string | null = null;
+  private latestRaceResults: RaceResults | null = null;
+  private resultsReturnTimer: number | null = null;
   private activeApp: App | null = null;
   private lastLaunch: AppLaunchOptions | null = null;
   private previewDebounce: number | null = null;
@@ -775,14 +780,32 @@ export class GameShell {
       return;
     }
 
-    const lines = this.roomPlayers.map((player) => {
+    const lines: string[] = [];
+    if (this.latestRaceResults && this.latestRaceResults.roomCode === this.roomCode) {
+      const winner = this.latestRaceResults.entries[0];
+      lines.push("Latest Results");
+      lines.push(
+        winner
+          ? `${winner.name} won the race.`
+          : "Race complete.",
+      );
+      lines.push("");
+      for (const entry of this.latestRaceResults.entries) {
+        const role = entry.placement === 1 ? "WINNER" : "LOSER ";
+        const time = entry.finishTimeMs === null ? "DNF" : formatDuration(entry.finishTimeMs / 1000);
+        lines.push(`${role} ${entry.placement}. ${entry.name.padEnd(8, " ")} ${time}`);
+      }
+      lines.push("");
+    }
+
+    lines.push(...this.roomPlayers.map((player) => {
       const flags = [
         player.clientId === this.roomHostId ? "HOST" : "    ",
         player.ready ? "RDY" : "   ",
         player.isActiveRacer ? "GRID" : "----",
       ];
       return `${flags.join(" ")}  ${player.name.padEnd(8, " ")} ${player.carVariant.toUpperCase()}`;
-    });
+    }));
     this.roomMeta.textContent = `${this.roomName || "Room"} / ${this.roomPhase?.toUpperCase() ?? "LOBBY"}`;
     this.rosterPanel.textContent = lines.join("\n");
     this.renderDirectory();
@@ -976,6 +999,7 @@ export class GameShell {
   }
 
   private async leaveRoom(): Promise<void> {
+    this.clearResultsReturnTimer();
     this.roomClient?.send({ type: "room.leave" });
     this.roomCode = null;
     this.roomName = "";
@@ -1009,6 +1033,7 @@ export class GameShell {
 
   private async launchSoloRace(reuseLastLaunch = false): Promise<void> {
     if (this.launchInFlight) return;
+    this.clearResultsReturnTimer();
     const song = this.getSelectedSong();
     if (!song && !reuseLastLaunch) {
       this.setStatus("Pick a valid circuit before launch.");
@@ -1071,6 +1096,7 @@ export class GameShell {
 
   private async startMultiplayerRace(): Promise<void> {
     if (this.launchInFlight || !this.roomCode) return;
+    this.clearResultsReturnTimer();
     const song = this.getSelectedSong();
     if (!song) return;
 
@@ -1131,6 +1157,7 @@ export class GameShell {
   }
 
   private async showLobby(statusMessage?: string): Promise<void> {
+    this.clearResultsReturnTimer();
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
@@ -1143,6 +1170,7 @@ export class GameShell {
   }
 
   private async showMenu(): Promise<void> {
+    this.clearResultsReturnTimer();
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
@@ -1155,6 +1183,12 @@ export class GameShell {
     this.activeApp.destroy();
     this.activeApp = null;
     this.raceHost.replaceChildren();
+  }
+
+  private clearResultsReturnTimer(): void {
+    if (this.resultsReturnTimer === null) return;
+    window.clearTimeout(this.resultsReturnTimer);
+    this.resultsReturnTimer = null;
   }
 
   private handleServerMessage(message: ServerMessage): void {
@@ -1187,6 +1221,9 @@ export class GameShell {
         this.renderFictionButtons();
         this.renderSelection();
         this.renderRoomState();
+        if (message.phase === "staging" || message.phase === "countdown" || message.phase === "running") {
+          this.latestRaceResults = null;
+        }
         if (
           this.activeApp
           && this.mode === "multiplayer"
@@ -1203,7 +1240,7 @@ export class GameShell {
         if ((message.phase === "staging" || message.phase === "countdown" || message.phase === "running") && !this.activeApp) {
           void this.startMultiplayerRace();
         }
-        if (this.activeApp && this.mode === "multiplayer") {
+        if (this.activeApp && this.mode === "multiplayer" && !this.multiplayerResultsActive) {
           this.activeApp.setRoomState(message.players, this.mapAppPhase(message.phase));
         }
         return;
@@ -1230,8 +1267,14 @@ export class GameShell {
       case "race.results":
         if (this.mode === "multiplayer") {
           this.multiplayerResultsActive = true;
-          this.activeApp?.showResults(message.results);
+          this.latestRaceResults = message.results;
           this.setStatus("Race complete. Winner locked.");
+          this.activeApp?.showResults(message.results);
+          this.clearResultsReturnTimer();
+          this.resultsReturnTimer = window.setTimeout(() => {
+            this.resultsReturnTimer = null;
+            void this.showLobby("Race complete. Winner locked.");
+          }, GameShell.MULTIPLAYER_RESULTS_DWELL_MS);
         }
         return;
       case "pong":
