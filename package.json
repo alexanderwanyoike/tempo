@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
+    "start": "node --enable-source-maps dist-server/src/server/index.js",
     "server": "node --enable-source-maps dist-server/src/server/index.js",
     "build:server": "tsc -p tsconfig.server.json",
     "dev:server": "tsx watch src/server/index.ts",

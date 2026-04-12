@@ -152,6 +152,9 @@ export type ClientMessage =
       type: "room.leave";
     }
   | {
+      type: "room.directory.request";
+    }
+  | {
       type: "room.updateSetup";
       setup: RaceSetup;
     }

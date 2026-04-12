@@ -24,7 +24,16 @@ import type { Track } from "../client/runtime/track-builder.js";
 import { TrackGenerator } from "../client/runtime/track-generator.js";
 import { serverConfig } from "./config.js";
 
-const server = createServer();
+const server = createServer((request, response) => {
+  if (request.url === "/health") {
+    response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    response.end("ok");
+    return;
+  }
+
+  response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+  response.end("Tempo realtime server");
+});
 const wss = new WebSocketServer({ server });
 
 const DEFAULT_SETUP: RaceSetup = {
@@ -163,6 +172,9 @@ async function handleMessage(connection: ClientConnection, raw: string): Promise
       return;
     case "room.leave":
       await leaveCurrentRoom(connection);
+      return;
+    case "room.directory.request":
+      sendDirectory(connection.socket);
       return;
     case "room.updateSetup":
       updateRoomSetup(connection, message.setup);

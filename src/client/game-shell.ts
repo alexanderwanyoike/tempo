@@ -53,6 +53,8 @@ const CAR_VARIANTS: Array<{ id: CarVariant; label: string }> = [
 
 export class GameShell {
   private static readonly MULTIPLAYER_RESULTS_DWELL_MS = 4500;
+  private static readonly DIRECTORY_PAGE_SIZE = 5;
+  private static readonly DIRECTORY_POLL_MS = 20000;
 
   private readonly raceHost = document.createElement("div");
   private readonly uiLayer = document.createElement("div");
@@ -87,6 +89,7 @@ export class GameShell {
   private readonly browseRoomsSection = document.createElement("div");
   private readonly roomActionRow = document.createElement("div");
   private readonly directoryPanel = document.createElement("div");
+  private readonly directoryPager = document.createElement("div");
   private readonly rosterPanel = document.createElement("div");
   private readonly roomMeta = document.createElement("div");
   private readonly trackStats = document.createElement("div");
@@ -121,6 +124,8 @@ export class GameShell {
   private pendingLobbyStatus: string | null = null;
   private latestRaceResults: RaceResults | null = null;
   private resultsReturnTimer: number | null = null;
+  private directoryPollTimer: number | null = null;
+  private currentDirectoryPage = 1;
   private activeApp: App | null = null;
   private lastLaunch: AppLaunchOptions | null = null;
   private previewDebounce: number | null = null;
@@ -269,18 +274,43 @@ export class GameShell {
       }
       .tempo-shell-directory { display:flex; flex-direction:column; gap:8px; }
       .tempo-shell-room-card {
-        display:flex;
+        display:grid;
+        grid-template-columns:minmax(0, 1fr) auto;
         align-items:center;
-        justify-content:space-between;
         gap:12px;
         padding:10px 12px;
         border:1px solid rgba(243,245,242,0.1);
         background:rgba(243,245,242,0.03);
       }
       .tempo-shell-room-card-meta {
+        min-width:0;
+        display:flex;
+        flex-direction:column;
+        gap:4px;
+      }
+      .tempo-shell-room-card-title {
+        font:700 12px/1.35 ui-sans-serif, -apple-system, "Inter", "Helvetica Neue", Arial, sans-serif;
+        color:#f3f5f2;
+        word-break:break-word;
+      }
+      .tempo-shell-room-card-summary {
         font:600 11px/1.45 ui-monospace, monospace;
         color:#d9f7ff;
-        white-space:pre;
+        word-break:break-word;
+      }
+      .tempo-shell-directory-pager {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:10px;
+        padding-top:8px;
+      }
+      .tempo-shell-directory-page {
+        font-size:10px;
+        font-weight:600;
+        letter-spacing:0.16em;
+        text-transform:uppercase;
+        color:#7f8b91;
       }
       .tempo-shell-room-meta { font-size:11px; line-height:1.55; color:#98a5ab; text-transform:uppercase; letter-spacing:0.12em; min-height:16px; }
       .tempo-shell-stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
@@ -302,19 +332,17 @@ export class GameShell {
         .tempo-shell-main { grid-template-columns:1fr; gap:24px; }
         .tempo-shell-preview-box { min-height:340px; }
         .tempo-shell-room-card {
-          flex-wrap:wrap;
+          grid-template-columns:1fr;
           padding:12px;
           gap:10px;
         }
         .tempo-shell-room-card-meta {
           font-size:12px;
           line-height:1.55;
-          flex:1 1 100%;
-          white-space:normal;
         }
         .tempo-shell-room-card .tempo-shell-action,
         .tempo-shell-room-card .tempo-shell-chip {
-          flex:1 1 100%;
+          width:100%;
           min-height:44px;
         }
         .tempo-shell-directory { max-height:42vh; overflow-y:auto; }
@@ -551,6 +579,7 @@ export class GameShell {
     this.roomSearchInput.className = "tempo-shell-code";
     this.roomSearchInput.placeholder = "Search Rooms";
     this.roomSearchInput.addEventListener("input", () => {
+      this.currentDirectoryPage = 1;
       this.renderDirectory();
     });
     this.browseRoomsSection.append(browseSubhead, this.roomSearchInput);
@@ -578,6 +607,7 @@ export class GameShell {
 
     this.roomMeta.className = "tempo-shell-room-meta";
     this.directoryPanel.className = "tempo-shell-directory";
+    this.directoryPager.className = "tempo-shell-directory-pager";
     this.rosterPanel.className = "tempo-shell-roster";
     this.multiplayerPanel.append(
       this.roomMeta,
@@ -587,6 +617,7 @@ export class GameShell {
       this.hostRoomSection,
       this.browseRoomsSection,
       this.directoryPanel,
+      this.directoryPager,
     );
     this.roomSection.append(roomLabel, this.multiplayerPanel);
 
@@ -696,6 +727,7 @@ export class GameShell {
     this.hostRoomSection.classList.toggle("tempo-hidden", !showHostSetup || inRoom || this.mode !== "multiplayer");
     this.browseRoomsSection.classList.toggle("tempo-hidden", !showJoinBrowser);
     this.directoryPanel.classList.toggle("tempo-hidden", !showJoinBrowser);
+    this.directoryPager.classList.toggle("tempo-hidden", !showJoinBrowser);
     this.roomActionRow.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !inRoom);
     this.rosterPanel.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !inRoom);
     this.playerCapSelect.disabled = this.mode !== "multiplayer" || !showHostSetup || setupLocked;
@@ -814,6 +846,7 @@ export class GameShell {
 
   private renderDirectory(): void {
     this.directoryPanel.replaceChildren();
+    this.directoryPager.replaceChildren();
     if (!this.roomBrowserReady) {
       const connecting = document.createElement("div");
       connecting.className = "tempo-shell-room-meta";
@@ -831,6 +864,10 @@ export class GameShell {
         || room.hostName.toLowerCase().includes(query)
         || room.songId.toLowerCase().includes(query)
       );
+    const pageCount = Math.max(1, Math.ceil(waitingRooms.length / GameShell.DIRECTORY_PAGE_SIZE));
+    this.currentDirectoryPage = Math.min(this.currentDirectoryPage, pageCount);
+    const pageStart = (this.currentDirectoryPage - 1) * GameShell.DIRECTORY_PAGE_SIZE;
+    const visibleRooms = waitingRooms.slice(pageStart, pageStart + GameShell.DIRECTORY_PAGE_SIZE);
     if (waitingRooms.length === 0) {
       const empty = document.createElement("div");
       empty.className = "tempo-shell-room-meta";
@@ -841,12 +878,18 @@ export class GameShell {
       return;
     }
 
-    for (const room of waitingRooms) {
+    for (const room of visibleRooms) {
       const row = document.createElement("div");
       row.className = "tempo-shell-room-card";
       const meta = document.createElement("div");
       meta.className = "tempo-shell-room-card-meta";
-      meta.textContent = `${room.roomName}\nHOST ${room.hostName} / ${room.playerCount}/${room.playerCap} / ${room.songId}`;
+      const title = document.createElement("div");
+      title.className = "tempo-shell-room-card-title";
+      title.textContent = room.roomName;
+      const summary = document.createElement("div");
+      summary.className = "tempo-shell-room-card-summary";
+      summary.textContent = `Host ${room.hostName} / ${room.playerCount}/${room.playerCap} / ${room.songId}`;
+      meta.append(title, summary);
       const joinButton = document.createElement("button");
       joinButton.type = "button";
       joinButton.className = "tempo-shell-action";
@@ -858,6 +901,34 @@ export class GameShell {
       row.append(meta, joinButton);
       this.directoryPanel.appendChild(row);
     }
+
+    const prevButton = document.createElement("button");
+    prevButton.type = "button";
+    prevButton.className = "tempo-shell-action";
+    prevButton.textContent = "Prev";
+    prevButton.disabled = this.currentDirectoryPage <= 1;
+    prevButton.addEventListener("click", () => {
+      if (this.currentDirectoryPage <= 1) return;
+      this.currentDirectoryPage -= 1;
+      this.renderDirectory();
+    });
+
+    const pageLabel = document.createElement("div");
+    pageLabel.className = "tempo-shell-directory-page";
+    pageLabel.textContent = `${waitingRooms.length} rooms / page ${this.currentDirectoryPage} of ${pageCount}`;
+
+    const nextButton = document.createElement("button");
+    nextButton.type = "button";
+    nextButton.className = "tempo-shell-action";
+    nextButton.textContent = "Next";
+    nextButton.disabled = this.currentDirectoryPage >= pageCount;
+    nextButton.addEventListener("click", () => {
+      if (this.currentDirectoryPage >= pageCount) return;
+      this.currentDirectoryPage += 1;
+      this.renderDirectory();
+    });
+
+    this.directoryPager.append(prevButton, pageLabel, nextButton);
   }
 
   private readQueryState(): QueryState {
@@ -958,11 +1029,14 @@ export class GameShell {
         this.roomDirectory = [];
         this.roomHostId = null;
         this.roomBrowserReady = false;
+        this.currentDirectoryPage = 1;
         this.renderRoomState();
         this.setStatus("Room connection closed.");
       };
     }
     await this.roomClient.ensureConnected();
+    this.startDirectoryPolling();
+    this.requestDirectoryRefresh();
     return this.roomClient;
   }
 
@@ -1009,6 +1083,7 @@ export class GameShell {
     this.multiplayerView = "join";
     this.multiplayerResultsActive = false;
     this.pendingLobbyStatus = null;
+    this.currentDirectoryPage = 1;
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
@@ -1191,6 +1266,17 @@ export class GameShell {
     this.resultsReturnTimer = null;
   }
 
+  private startDirectoryPolling(): void {
+    if (this.directoryPollTimer !== null) return;
+    this.directoryPollTimer = window.setInterval(() => {
+      this.requestDirectoryRefresh();
+    }, GameShell.DIRECTORY_POLL_MS);
+  }
+
+  private requestDirectoryRefresh(): void {
+    this.roomClient?.send({ type: "room.directory.request" });
+  }
+
   private handleServerMessage(message: ServerMessage): void {
     switch (message.type) {
       case "server.ready":
@@ -1247,6 +1333,12 @@ export class GameShell {
       case "room.directory":
         this.roomBrowserReady = true;
         this.roomDirectory = message.rooms;
+        this.currentDirectoryPage = Math.min(
+          this.currentDirectoryPage,
+          Math.max(1, Math.ceil(
+            this.roomDirectory.filter((room) => room.phase === "lobby").length / GameShell.DIRECTORY_PAGE_SIZE,
+          )),
+        );
         this.renderRoomState();
         return;
       case "race.countdown":
