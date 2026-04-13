@@ -23,8 +23,10 @@ const ROAD_GRID_LIFT = 0.06;
 const ROAD_EDGE_LIFT = 0.09;
 const ROAD_GRID_WIDTH = 0.085;
 const ROAD_EDGE_WIDTH = 0.26;
+const ROAD_EDGE_INSET = 0.06;
 const ROAD_SURFACE_COLUMNS = 10;
 const ROAD_EDGE_COLUMNS = 3;
+const WALL_BASE_OVERLAP = 0.08;
 const WALL_SURFACE_ROWS = 5;
 const WALL_RAIL_ROWS = 2;
 const WALL_HOLO_OPACITY = 0.34;
@@ -423,9 +425,10 @@ function buildRoadEdgeGlowMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const halfWidth = sampleHalfWidth(halfWidths, i);
-    const edgeOffset = halfWidth - ROAD_EDGE_WIDTH * 0.85;
-    const inner = edgeOffset * side;
-    const outer = (edgeOffset + ROAD_EDGE_WIDTH) * side;
+    const outerAbs = Math.max(0, halfWidth - ROAD_EDGE_INSET);
+    const innerAbs = Math.max(0, outerAbs - ROAD_EDGE_WIDTH);
+    const inner = innerAbs * side;
+    const outer = outerAbs * side;
     const palette = getRoadPalette(sections, sampleSection, i);
     const edgeColor = side === 1 ? new Color().copy(palette.glow).lerp(new Color("#ff5ea2"), 0.35) : palette.edge;
 
@@ -496,10 +499,11 @@ export function buildWallMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const halfWidth = sampleHalfWidth(halfWidths, i);
+    const wallOffset = Math.max(0, halfWidth - WALL_BASE_OVERLAP);
 
-    const ex = c.x + r.x * halfWidth * side;
-    const ey = c.y + r.y * halfWidth * side;
-    const ez = c.z + r.z * halfWidth * side;
+    const ex = c.x + r.x * wallOffset * side;
+    const ey = c.y + r.y * wallOffset * side;
+    const ez = c.z + r.z * wallOffset * side;
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
     const col = Math.floor(i / 8) % 2 === 0 ? colStripe : colBase;
 
@@ -590,10 +594,11 @@ function buildSectionWallSurfaceMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const halfWidth = sampleHalfWidth(halfWidths, i);
+    const wallOffset = Math.max(0, halfWidth - WALL_BASE_OVERLAP);
 
-    const ex = c.x + r.x * halfWidth * side;
-    const ey = c.y + r.y * halfWidth * side;
-    const ez = c.z + r.z * halfWidth * side;
+    const ex = c.x + r.x * wallOffset * side;
+    const ey = c.y + r.y * wallOffset * side;
+    const ez = c.z + r.z * wallOffset * side;
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
 
     const palette = sectionWallColors[sections[sampleSection[i]]?.type ?? "intro"];
@@ -673,10 +678,11 @@ function buildSectionWallRailMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const halfWidth = sampleHalfWidth(halfWidths, i);
+    const wallOffset = Math.max(0, halfWidth - WALL_BASE_OVERLAP);
 
-    const ex = c.x + r.x * halfWidth * side;
-    const ey = c.y + r.y * halfWidth * side;
-    const ez = c.z + r.z * halfWidth * side;
+    const ex = c.x + r.x * wallOffset * side;
+    const ey = c.y + r.y * wallOffset * side;
+    const ez = c.z + r.z * wallOffset * side;
     const offsetA = WALL_HEIGHT * heightFraction;
     const offsetB = WALL_HEIGHT * Math.min(1, heightFraction + thickness);
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
