@@ -8,7 +8,10 @@ export class TouchControls {
   private stickKnob: HTMLDivElement | null = null;
   private readonly touches = new Map<number, TouchRole>();
 
-  constructor(private readonly inputState: VehicleInputState) {}
+  constructor(
+    private readonly inputState: VehicleInputState,
+    private readonly steeringSensitivity = 1,
+  ) {}
 
   attach(root: HTMLElement): void {
     if (this.overlay) return;
@@ -193,7 +196,8 @@ export class TouchControls {
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     const radius = rect.width / 2;
-    const deadZone = radius * 0.3;
+    const deadZoneScale = 0.3 / Math.max(0.75, Math.min(this.steeringSensitivity, 2.5));
+    const deadZone = radius * Math.max(0.16, Math.min(deadZoneScale, 0.34));
 
     let dx = touch.clientX - cx;
     let dy = touch.clientY - cy;
