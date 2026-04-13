@@ -179,7 +179,7 @@ export class VehicleController {
 
     const absSpeed = Math.abs(s.speed);
     const speedRatio = Math.min(absSpeed / this.effectiveTopSpeed, 1);
-    const steeringPower = MathUtils.lerp(1.0, 0.35, speedRatio);
+    const steeringPower = MathUtils.lerp(1.0, 0.78, speedRatio);
 
     // 2. Steering -> lateral velocity
     s.lateralVelocity += s.steering * t.steeringRate * steeringPower * dt;

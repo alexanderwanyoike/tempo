@@ -45,7 +45,7 @@ import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
-import { VehicleController, defaultVehicleTuning } from "./vehicle-controller";
+import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
 
 type TrailSample = {
   position: Vector3;
@@ -55,6 +55,7 @@ type TrailSample = {
 
 type AppPhase = "staging" | "countdown" | "running" | "finished";
 type AppMode = "solo" | "multiplayer";
+type CameraMode = "stable" | "wild";
 
 type RemoteCarVisual = {
   id: string;
@@ -94,6 +95,7 @@ export type AppLaunchOptions = {
   seed?: number | null;
   fictionId?: EnvironmentFictionId;
   debugHud?: boolean;
+  steeringSensitivity?: number;
   mode?: AppMode;
   localPlayerId?: string | null;
   carVariant?: CarVariant;
@@ -139,6 +141,7 @@ export class App {
   private readonly input: VehicleInput;
   private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
+  private readonly cameraMode: CameraMode;
   private track: Track;
   private trackObjects: readonly TrackObject[];
   private readonly musicSync: MusicSync | null;
@@ -163,6 +166,9 @@ export class App {
   private readonly desiredCameraPosition = new Vector3();
   private readonly desiredCameraLookTarget = new Vector3();
   private readonly desiredCameraUp = new Vector3();
+  private readonly stableCameraForward = new Vector3(0, 0, -1);
+  private readonly stableCameraRight = new Vector3(1, 0, 0);
+  private readonly stableCameraLift = new Vector3(0, 1, 0);
   private readonly smoothedCameraPosition = new Vector3();
   private readonly smoothedCameraLookTarget = new Vector3();
   private readonly smoothedCameraUp = new Vector3(0, 1, 0);
@@ -282,13 +288,15 @@ export class App {
     this.scene.add(this.localVehicle.group);
 
     this.input = new VehicleInput();
+    const steeringSensitivity = MathUtils.clamp(launch.steeringSensitivity ?? 1.18, 0.85, 2.5);
     this.touchControls = window.matchMedia("(pointer: coarse)").matches
-      ? new TouchControls(this.input.state)
+      ? new TouchControls(this.input.state, steeringSensitivity)
       : null;
-    this.vehicleController = new VehicleController(defaultVehicleTuning);
+    this.vehicleController = new VehicleController(buildVehicleTuning(steeringSensitivity));
     this.vehicleController.forceTrackState(START_TRACK_U);
     this.musicSync = musicSync;
     this.songDuration = song?.duration ?? null;
+    this.cameraMode = "wild";
     this.fictionId = fictionId;
     this.track = track;
     this.trackObjects = this.track.getTrackObjects();
@@ -1039,24 +1047,66 @@ export class App {
     const positionAlpha = 1 - Math.exp(-6 * dt);
     const lookAlpha = 1 - Math.exp(-8 * dt);
     const upAlpha = 1 - Math.exp(-5 * dt);
+    if (this.cameraMode === "wild") {
+      const wildCamBack = MathUtils.lerp(9.5, 14.5, speedRatio);
+      const wildCamUp = MathUtils.lerp(5.2, 7.4, speedRatio);
+      const wildLookAhead = MathUtils.lerp(12, 18, speedRatio);
+      const wildLateralLead = state.steering * MathUtils.lerp(0.06, 0.2, speedRatio);
+      const wildAlpha = 1 - Math.exp(-10 * dt);
+      this.stableCameraForward.lerp(state.forward, wildAlpha).normalize();
+      this.stableCameraRight.lerp(state.right, wildAlpha).normalize();
 
-    const camBack = MathUtils.lerp(8.5, 14.5, speedRatio);
-    const camUp = MathUtils.lerp(4.2, 6.4, speedRatio);
-    const lookAhead = MathUtils.lerp(10, 18, speedRatio);
-    const lateralLead = state.steering * MathUtils.lerp(0.35, 1.2, speedRatio);
+      this.desiredCameraLookTarget.copy(state.position)
+        .addScaledVector(this.stableCameraForward, wildLookAhead)
+        .addScaledVector(state.up, 1.1)
+        .addScaledVector(this.stableCameraRight, wildLateralLead);
 
-    this.desiredCameraLookTarget.copy(state.position)
-      .addScaledVector(state.forward, lookAhead)
-      .addScaledVector(state.up, 1.4)
-      .addScaledVector(state.right, lateralLead);
+      this.desiredCameraPosition.copy(state.position)
+        .addScaledVector(this.stableCameraForward, -wildCamBack)
+        .addScaledVector(state.up, wildCamUp)
+        .addScaledVector(this.stableCameraRight, wildLateralLead * 0.15);
 
-    this.desiredCameraPosition.copy(state.position)
-      .addScaledVector(state.forward, -camBack)
-      .addScaledVector(state.up, camUp)
-      .addScaledVector(state.right, lateralLead * 0.75);
+      this.resolveStableCameraClearance(this.desiredCameraPosition, state, state.up);
+      this.resolveCameraRoadClip(this.desiredCameraPosition, state.trackU);
+      this.desiredCameraUp.copy(App.WORLD_UP).lerp(state.up, 0.42).normalize();
+    } else {
+      const comfortBack = MathUtils.lerp(8.2, 10.8, speedRatio);
+      const comfortUp = MathUtils.lerp(4.1, 5.6, speedRatio);
+      const comfortLookAhead = MathUtils.lerp(9, 13, speedRatio);
+      const comfortLateralLead = state.steering * MathUtils.lerp(0.012, 0.04, speedRatio);
+      const comfortAlpha = 1 - Math.exp(-11 * dt);
 
-    this.resolveCameraRoadClip(this.desiredCameraPosition, state.trackU);
-    this.desiredCameraUp.copy(App.WORLD_UP).lerp(state.up, 0.42).normalize();
+      this.tempVector.copy(state.forward);
+      this.tempVector.addScaledVector(App.WORLD_UP, -this.tempVector.dot(App.WORLD_UP));
+      if (this.tempVector.lengthSq() <= 1e-4) {
+        this.tempVector.crossVectors(App.WORLD_UP, state.right);
+      }
+      if (this.tempVector.lengthSq() > 1e-4) {
+        this.tempVector.normalize();
+        this.stableCameraForward.lerp(this.tempVector, comfortAlpha).normalize();
+      }
+      this.stableCameraRight.crossVectors(this.stableCameraForward, App.WORLD_UP).normalize();
+
+      this.tempVectorB.copy(state.up);
+      if (this.tempVectorB.dot(App.WORLD_UP) < 0) {
+        this.tempVectorB.multiplyScalar(-1);
+      }
+      this.tempVectorB.lerp(App.WORLD_UP, 0.84).normalize();
+      this.stableCameraLift.lerp(this.tempVectorB, 1 - Math.exp(-9 * dt)).normalize();
+
+      this.desiredCameraLookTarget.copy(state.position)
+        .addScaledVector(this.stableCameraForward, comfortLookAhead)
+        .addScaledVector(this.stableCameraLift, 1.15)
+        .addScaledVector(this.stableCameraRight, comfortLateralLead);
+
+      this.desiredCameraPosition.copy(state.position)
+        .addScaledVector(this.stableCameraForward, -comfortBack)
+        .addScaledVector(this.stableCameraLift, comfortUp)
+        .addScaledVector(this.stableCameraRight, comfortLateralLead * 0.12);
+      this.resolveStableCameraClearance(this.desiredCameraPosition, state, this.stableCameraLift);
+
+      this.desiredCameraUp.copy(App.WORLD_UP);
+    }
 
     if (!this.visualsInitialized) {
       this.smoothedCameraPosition.copy(this.desiredCameraPosition);
@@ -1067,7 +1117,12 @@ export class App {
       this.smoothedCameraPosition.lerp(this.desiredCameraPosition, positionAlpha);
       this.smoothedCameraLookTarget.lerp(this.desiredCameraLookTarget, lookAlpha);
       this.smoothedCameraUp.lerp(this.desiredCameraUp, upAlpha).normalize();
-      this.resolveCameraRoadClip(this.smoothedCameraPosition, state.trackU);
+      if (this.cameraMode === "wild") {
+        this.resolveStableCameraClearance(this.smoothedCameraPosition, state, state.up);
+        this.resolveCameraRoadClip(this.smoothedCameraPosition, state.trackU);
+      } else {
+        this.resolveStableCameraClearance(this.smoothedCameraPosition, state, this.stableCameraLift);
+      }
     }
 
     this.camera.position.copy(this.smoothedCameraPosition);
@@ -1084,6 +1139,14 @@ export class App {
     const minClearance = 2.8;
     if (clearance < minClearance) {
       cameraPosition.addScaledVector(query.up, minClearance - clearance);
+    }
+  }
+
+  private resolveStableCameraClearance(cameraPosition: Vector3, state: VehicleState, liftAxis: Vector3): void {
+    const surfaceClearance = this.tempVectorB.copy(cameraPosition).sub(state.position).dot(liftAxis);
+    const minSurfaceClearance = 2.6;
+    if (surfaceClearance < minSurfaceClearance) {
+      cameraPosition.addScaledVector(liftAxis, minSurfaceClearance - surfaceClearance);
     }
   }
 
@@ -1353,6 +1416,14 @@ function paletteForVariant(variant: CarVariant): CarPalette {
         cockpitEmissive: new Color("#1b2744"),
       };
   }
+}
+
+function buildVehicleTuning(steeringSensitivity: number) {
+  return {
+    ...defaultVehicleTuning,
+    steeringRate: defaultVehicleTuning.steeringRate * steeringSensitivity,
+    steeringResponse: defaultVehicleTuning.steeringResponse * MathUtils.lerp(1, steeringSensitivity, 0.9),
+  };
 }
 
 function formatItemLabel(item: PickupSpawnState["kind"] | null): string {

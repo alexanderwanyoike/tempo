@@ -37,6 +37,7 @@ type QueryState = {
 };
 
 type ShellMode = "solo" | "multiplayer";
+type ShellPanelView = "setup" | "settings";
 
 const FICTION_OPTIONS: Array<{ id: EnvironmentFictionId; label: string; blurb: string }> = [
   { id: 1, label: "Audio Reactor", blurb: "Neon transit geometry" },
@@ -51,6 +52,15 @@ const CAR_VARIANTS: Array<{ id: CarVariant; label: string }> = [
   { id: "ghost", label: "Ghost" },
 ];
 
+const STEERING_PRESETS = [
+  { id: "balanced", label: "Balanced", value: 1.0 },
+  { id: "responsive", label: "Responsive", value: 2.05 },
+  { id: "sharp", label: "Sharp", value: 2.45 },
+] as const;
+
+const STEERING_STORAGE_KEY = "tempo.steering-preset";
+const DEFAULT_STEERING_PRESET = "responsive";
+
 export class GameShell {
   private static readonly MULTIPLAYER_RESULTS_DWELL_MS = 4500;
   private static readonly DIRECTORY_PAGE_SIZE = 5;
@@ -62,6 +72,8 @@ export class GameShell {
   private readonly previewHost = document.createElement("div");
   private readonly statusLine = document.createElement("div");
   private readonly modeDeck = document.createElement("div");
+  private readonly panelToggleRow = document.createElement("div");
+  private readonly panelToggleButton = document.createElement("button");
   private readonly songSection = document.createElement("div");
   private readonly songSelect = document.createElement("select");
   private readonly seedSection = document.createElement("div");
@@ -73,6 +85,8 @@ export class GameShell {
   private readonly playerCapSection = document.createElement("div");
   private readonly carSection = document.createElement("div");
   private readonly carSelect = document.createElement("select");
+  private readonly steeringSection = document.createElement("div");
+  private readonly steeringSelect = document.createElement("select");
   private readonly roomNameInput = document.createElement("input");
   private readonly roomSearchInput = document.createElement("input");
   private readonly createRoomButton = document.createElement("button");
@@ -108,6 +122,8 @@ export class GameShell {
   private seedOverride: number | null = null;
   private selectedPlayerCap = 4;
   private selectedCarVariant: CarVariant = "vector";
+  private selectedSteeringPreset = loadSteeringPresetPreference();
+  private panelView: ShellPanelView = "setup";
   private mode: ShellMode = "solo";
   private debugHud = false;
   private roomClient: RoomClient | null = null;
@@ -167,6 +183,7 @@ export class GameShell {
     this.populateSongSelect();
     this.populatePlayerCapSelect();
     this.populateCarSelect();
+    this.populateSteeringSelect();
     this.renderFictionButtons();
     this.renderSelection();
     this.renderMode();
@@ -245,6 +262,29 @@ export class GameShell {
       .tempo-shell-chip.is-active, .tempo-shell-action.is-primary, .tempo-shell-play {
         border-color:var(--tempo-accent);
         color:var(--tempo-accent);
+      }
+      .tempo-shell-panel-toggle {
+        display:flex;
+        justify-content:flex-end;
+        margin-top:-6px;
+      }
+      .tempo-shell-panel-button {
+        border:0;
+        border-bottom:1px solid rgba(243,245,242,0.18);
+        background:transparent;
+        color:#9fb2ba;
+        display:inline-flex;
+        align-items:center;
+        gap:8px;
+        font:600 10px/1 inherit;
+        letter-spacing:0.18em;
+        text-transform:uppercase;
+        padding:6px 0;
+        cursor:pointer;
+      }
+      .tempo-shell-panel-button:hover {
+        color:var(--tempo-accent);
+        border-color:var(--tempo-accent);
       }
       .tempo-shell-chip:disabled, .tempo-shell-action:disabled, .tempo-shell-play:disabled { opacity:0.45; cursor:wait; }
       .tempo-shell-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
@@ -450,6 +490,15 @@ export class GameShell {
     }
     modeSection.appendChild(this.modeDeck);
 
+    this.panelToggleRow.className = "tempo-shell-panel-toggle";
+    this.panelToggleButton.type = "button";
+    this.panelToggleButton.className = "tempo-shell-panel-button";
+    this.panelToggleButton.addEventListener("click", () => {
+      this.panelView = this.panelView === "setup" ? "settings" : "setup";
+      this.renderMode();
+    });
+    this.panelToggleRow.appendChild(this.panelToggleButton);
+
     this.songSection.className = "tempo-shell-section";
     const songLabel = document.createElement("div");
     songLabel.className = "tempo-shell-label";
@@ -518,6 +567,17 @@ export class GameShell {
       }
     });
     this.carSection.append(carLabel, this.carSelect);
+
+    this.steeringSection.className = "tempo-shell-section";
+    const steeringLabel = document.createElement("div");
+    steeringLabel.className = "tempo-shell-label";
+    steeringLabel.textContent = "Steering";
+    this.steeringSelect.className = "tempo-shell-select";
+    this.steeringSelect.addEventListener("change", () => {
+      this.selectedSteeringPreset = normalizeSteeringPreset(this.steeringSelect.value);
+      savePreference(STEERING_STORAGE_KEY, this.selectedSteeringPreset);
+    });
+    this.steeringSection.append(steeringLabel, this.steeringSelect);
 
     this.playerCapSection.className = "tempo-shell-section";
     const playerCapLabel = document.createElement("div");
@@ -637,7 +697,9 @@ export class GameShell {
 
     left.append(
       modeSection,
+      this.panelToggleRow,
       this.carSection,
+      this.steeringSection,
       this.roomSection,
       this.songSection,
       this.fictionSection,
@@ -701,6 +763,17 @@ export class GameShell {
     this.carSelect.value = this.selectedCarVariant;
   }
 
+  private populateSteeringSelect(): void {
+    this.steeringSelect.replaceChildren();
+    for (const preset of STEERING_PRESETS) {
+      const option = document.createElement("option");
+      option.value = preset.id;
+      option.textContent = preset.label;
+      this.steeringSelect.appendChild(option);
+    }
+    this.steeringSelect.value = this.selectedSteeringPreset;
+  }
+
   private renderMode(): void {
     for (const child of Array.from(this.modeDeck.children)) {
       if (!(child instanceof HTMLButtonElement)) continue;
@@ -710,19 +783,25 @@ export class GameShell {
       if (!(child instanceof HTMLButtonElement)) continue;
       child.classList.toggle("is-active", child.dataset.view === this.multiplayerView);
     }
-
     const inRoom = Boolean(this.roomCode);
     const isHost = this.roomHostId === this.clientId;
     const setupLocked = this.mode === "multiplayer" && inRoom && (!isHost || this.roomPhase !== "lobby");
     const showHostSetup = this.mode === "solo" || (this.mode === "multiplayer" && (isHost || (!inRoom && this.multiplayerView === "host")));
     const showJoinBrowser = this.mode === "multiplayer" && !inRoom && this.multiplayerView === "join";
+    const showSetupPanel = this.panelView === "setup";
+    const showSettingsPanel = this.panelView === "settings";
+    this.panelToggleButton.textContent = showSettingsPanel ? "← Back" : "⚙ Settings";
 
     this.multiplayerPanel.classList.toggle("tempo-hidden", this.mode !== "multiplayer");
     this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer");
-    this.songSection.classList.toggle("tempo-hidden", !showHostSetup);
-    this.fictionSection.classList.toggle("tempo-hidden", !showHostSetup);
-    this.seedSection.classList.toggle("tempo-hidden", !showHostSetup);
-    this.playerCapSection.classList.toggle("tempo-hidden", !showHostSetup || this.mode !== "multiplayer");
+    this.songSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
+    this.fictionSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
+    this.seedSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
+    this.playerCapSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup || this.mode !== "multiplayer");
+    this.carSection.classList.toggle("tempo-hidden", !showSetupPanel);
+    this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !showSetupPanel);
+    this.steeringSection.classList.toggle("tempo-hidden", !showSettingsPanel);
+    this.trackStats.parentElement?.classList.toggle("tempo-hidden", !showSetupPanel);
     this.roomViewDeck.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
     this.hostRoomSection.classList.toggle("tempo-hidden", !showHostSetup || inRoom || this.mode !== "multiplayer");
     this.browseRoomsSection.classList.toggle("tempo-hidden", !showJoinBrowser);
@@ -740,6 +819,9 @@ export class GameShell {
       button.disabled = (this.mode === "multiplayer" ? !showHostSetup || setupLocked : false) || !enabled;
     }
     this.playButton.classList.toggle("tempo-hidden", this.mode !== "solo");
+    if (this.mode === "solo") {
+      this.playButton.classList.toggle("tempo-hidden", !showSetupPanel);
+    }
 
     const localPlayer = this.roomPlayers.find((player) => player.clientId === this.clientId) ?? null;
     this.readyButton.textContent = localPlayer?.ready ? "Unready" : "Ready";
@@ -1158,6 +1240,7 @@ export class GameShell {
       seed,
       fictionId,
       debugHud: this.debugHud,
+      steeringSensitivity: steeringPresetValue(this.selectedSteeringPreset),
       localPlayerId: "solo",
       carVariant: this.selectedCarVariant,
       onRetry: () => {
@@ -1191,6 +1274,7 @@ export class GameShell {
         seed: this.seedOverride ?? song.baseSeed,
         fictionId: this.selectedFictionId,
         debugHud: this.debugHud,
+        steeringSensitivity: steeringPresetValue(this.selectedSteeringPreset),
         localPlayerId: this.clientId,
         carVariant: player?.carVariant ?? this.selectedCarVariant,
         roster: this.roomPlayers,
@@ -1436,4 +1520,28 @@ function formatDuration(durationSeconds: number): string {
   const minutes = Math.floor(durationSeconds / 60);
   const seconds = Math.round(durationSeconds % 60);
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function savePreference(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures; defaults still work.
+  }
+}
+
+function loadSteeringPresetPreference(): string {
+  try {
+    return normalizeSteeringPreset(window.localStorage.getItem(STEERING_STORAGE_KEY));
+  } catch {
+    return DEFAULT_STEERING_PRESET;
+  }
+}
+
+function normalizeSteeringPreset(value: string | null): string {
+  return STEERING_PRESETS.some((preset) => preset.id === value) ? (value as string) : DEFAULT_STEERING_PRESET;
+}
+
+function steeringPresetValue(presetId: string): number {
+  return STEERING_PRESETS.find((preset) => preset.id === presetId)?.value ?? STEERING_PRESETS[1].value;
 }
