@@ -23,6 +23,12 @@ const ROAD_GRID_LIFT = 0.06;
 const ROAD_EDGE_LIFT = 0.09;
 const ROAD_GRID_WIDTH = 0.085;
 const ROAD_EDGE_WIDTH = 0.26;
+const ROAD_EDGE_INSET = 0.06;
+const ROAD_SURFACE_COLUMNS = 10;
+const ROAD_EDGE_COLUMNS = 3;
+const WALL_BASE_OVERLAP = 0.08;
+const WALL_SURFACE_ROWS = 5;
+const WALL_RAIL_ROWS = 2;
 const WALL_HOLO_OPACITY = 0.34;
 
 const roadSectionColors: Record<SongSectionType, { base: Color; glow: Color; edge: Color }> = {
@@ -127,36 +133,48 @@ function buildRoadSurfaceMesh(
   sampleSection?: Uint8Array,
 ): Mesh {
   const count = frames.samples.length;
-  const positions = new Float32Array(count * 2 * 3);
-  const normals = new Float32Array(count * 2 * 3);
-  const colors = new Float32Array(count * 2 * 3);
+  const rowVertexCount = ROAD_SURFACE_COLUMNS + 1;
+  const positions = new Float32Array(count * rowVertexCount * 3);
+  const normals = new Float32Array(count * rowVertexCount * 3);
+  const colors = new Float32Array(count * rowVertexCount * 3);
   const indices: number[] = [];
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
     const r = frames.rights[i];
     const n = frames.ups[i];
-    const vi = i * 2;
     const halfWidth = sampleHalfWidth(halfWidths, i);
     const palette = getRoadPalette(sections, sampleSection, i);
     const surf = new Color().copy(palette.base).lerp(palette.glow, 0.1);
 
-    positions[vi * 3]     = c.x - r.x * halfWidth + n.x * ROAD_SURFACE_LIFT;
-    positions[vi * 3 + 1] = c.y - r.y * halfWidth + n.y * ROAD_SURFACE_LIFT;
-    positions[vi * 3 + 2] = c.z - r.z * halfWidth + n.z * ROAD_SURFACE_LIFT;
+    for (let col = 0; col <= ROAD_SURFACE_COLUMNS; col += 1) {
+      const laneT = col / ROAD_SURFACE_COLUMNS;
+      const offset = TMath.lerp(-halfWidth, halfWidth, laneT);
+      const vi = i * rowVertexCount + col;
 
-    positions[(vi + 1) * 3]     = c.x + r.x * halfWidth + n.x * ROAD_SURFACE_LIFT;
-    positions[(vi + 1) * 3 + 1] = c.y + r.y * halfWidth + n.y * ROAD_SURFACE_LIFT;
-    positions[(vi + 1) * 3 + 2] = c.z + r.z * halfWidth + n.z * ROAD_SURFACE_LIFT;
+      positions[vi * 3] = c.x + r.x * offset + n.x * ROAD_SURFACE_LIFT;
+      positions[vi * 3 + 1] = c.y + r.y * offset + n.y * ROAD_SURFACE_LIFT;
+      positions[vi * 3 + 2] = c.z + r.z * offset + n.z * ROAD_SURFACE_LIFT;
 
-    normals[vi * 3] = n.x;     normals[vi * 3 + 1] = n.y;     normals[vi * 3 + 2] = n.z;
-    normals[(vi+1)*3] = n.x;   normals[(vi+1)*3+1] = n.y;     normals[(vi+1)*3+2] = n.z;
-    colors[vi * 3] = surf.r; colors[vi * 3 + 1] = surf.g; colors[vi * 3 + 2] = surf.b;
-    colors[(vi + 1) * 3] = surf.r; colors[(vi + 1) * 3 + 1] = surf.g; colors[(vi + 1) * 3 + 2] = surf.b;
+      normals[vi * 3] = n.x;
+      normals[vi * 3 + 1] = n.y;
+      normals[vi * 3 + 2] = n.z;
+      colors[vi * 3] = surf.r;
+      colors[vi * 3 + 1] = surf.g;
+      colors[vi * 3 + 2] = surf.b;
+    }
 
     if (i < count - 1) {
-      indices.push(vi, vi+1, vi+2);
-      indices.push(vi+1, vi+3, vi+2);
+      const rowStart = i * rowVertexCount;
+      const nextRowStart = (i + 1) * rowVertexCount;
+      for (let col = 0; col < ROAD_SURFACE_COLUMNS; col += 1) {
+        const a = rowStart + col;
+        const b = rowStart + col + 1;
+        const c0 = nextRowStart + col;
+        const d = nextRowStart + col + 1;
+        indices.push(a, b, c0);
+        indices.push(b, d, c0);
+      }
     }
   }
 
@@ -396,9 +414,10 @@ function buildRoadEdgeGlowMesh(
   sampleSection?: Uint8Array,
 ): Mesh {
   const count = frames.samples.length;
-  const positions = new Float32Array(count * 2 * 3);
-  const normals = new Float32Array(count * 2 * 3);
-  const colors = new Float32Array(count * 2 * 3);
+  const rowVertexCount = ROAD_EDGE_COLUMNS + 1;
+  const positions = new Float32Array(count * rowVertexCount * 3);
+  const normals = new Float32Array(count * rowVertexCount * 3);
+  const colors = new Float32Array(count * rowVertexCount * 3);
   const indices: number[] = [];
 
   for (let i = 0; i < count; i++) {
@@ -406,28 +425,39 @@ function buildRoadEdgeGlowMesh(
     const r = frames.rights[i];
     const u = frames.ups[i];
     const halfWidth = sampleHalfWidth(halfWidths, i);
-    const vi = i * 2;
-    const edgeOffset = halfWidth - ROAD_EDGE_WIDTH * 0.85;
-    const inner = edgeOffset * side;
-    const outer = (edgeOffset + ROAD_EDGE_WIDTH) * side;
+    const outerAbs = Math.max(0, halfWidth - ROAD_EDGE_INSET);
+    const innerAbs = Math.max(0, outerAbs - ROAD_EDGE_WIDTH);
+    const inner = innerAbs * side;
+    const outer = outerAbs * side;
     const palette = getRoadPalette(sections, sampleSection, i);
     const edgeColor = side === 1 ? new Color().copy(palette.glow).lerp(new Color("#ff5ea2"), 0.35) : palette.edge;
 
-    positions[vi * 3] = c.x + r.x * inner + u.x * ROAD_EDGE_LIFT;
-    positions[vi * 3 + 1] = c.y + r.y * inner + u.y * ROAD_EDGE_LIFT;
-    positions[vi * 3 + 2] = c.z + r.z * inner + u.z * ROAD_EDGE_LIFT;
-    positions[(vi + 1) * 3] = c.x + r.x * outer + u.x * ROAD_EDGE_LIFT;
-    positions[(vi + 1) * 3 + 1] = c.y + r.y * outer + u.y * ROAD_EDGE_LIFT;
-    positions[(vi + 1) * 3 + 2] = c.z + r.z * outer + u.z * ROAD_EDGE_LIFT;
-
-    normals[vi * 3] = u.x; normals[vi * 3 + 1] = u.y; normals[vi * 3 + 2] = u.z;
-    normals[(vi + 1) * 3] = u.x; normals[(vi + 1) * 3 + 1] = u.y; normals[(vi + 1) * 3 + 2] = u.z;
-    colors[vi * 3] = edgeColor.r; colors[vi * 3 + 1] = edgeColor.g; colors[vi * 3 + 2] = edgeColor.b;
-    colors[(vi + 1) * 3] = edgeColor.r; colors[(vi + 1) * 3 + 1] = edgeColor.g; colors[(vi + 1) * 3 + 2] = edgeColor.b;
+    for (let col = 0; col <= ROAD_EDGE_COLUMNS; col += 1) {
+      const laneT = col / ROAD_EDGE_COLUMNS;
+      const offset = TMath.lerp(inner, outer, laneT);
+      const vi = i * rowVertexCount + col;
+      positions[vi * 3] = c.x + r.x * offset + u.x * ROAD_EDGE_LIFT;
+      positions[vi * 3 + 1] = c.y + r.y * offset + u.y * ROAD_EDGE_LIFT;
+      positions[vi * 3 + 2] = c.z + r.z * offset + u.z * ROAD_EDGE_LIFT;
+      normals[vi * 3] = u.x;
+      normals[vi * 3 + 1] = u.y;
+      normals[vi * 3 + 2] = u.z;
+      colors[vi * 3] = edgeColor.r;
+      colors[vi * 3 + 1] = edgeColor.g;
+      colors[vi * 3 + 2] = edgeColor.b;
+    }
 
     if (i < count - 1) {
-      indices.push(vi, vi + 1, vi + 2);
-      indices.push(vi + 1, vi + 3, vi + 2);
+      const rowStart = i * rowVertexCount;
+      const nextRowStart = (i + 1) * rowVertexCount;
+      for (let col = 0; col < ROAD_EDGE_COLUMNS; col += 1) {
+        const a = rowStart + col;
+        const b = rowStart + col + 1;
+        const c0 = nextRowStart + col;
+        const d = nextRowStart + col + 1;
+        indices.push(a, b, c0);
+        indices.push(b, d, c0);
+      }
     }
   }
 
@@ -456,9 +486,10 @@ export function buildWallMesh(
   side: -1 | 1,
 ): Mesh {
   const count = frames.samples.length;
-  const positions = new Float32Array(count * 2 * 3);
-  const normals = new Float32Array(count * 2 * 3);
-  const colors = new Float32Array(count * 2 * 3);
+  const rowVertexCount = WALL_SURFACE_ROWS + 1;
+  const positions = new Float32Array(count * rowVertexCount * 3);
+  const normals = new Float32Array(count * rowVertexCount * 3);
+  const colors = new Float32Array(count * rowVertexCount * 3);
   const indices: number[] = [];
   const colBase = new Color("#4e233a");
   const colStripe = new Color("#ff2a6d");
@@ -467,27 +498,45 @@ export function buildWallMesh(
     const c = frames.samples[i];
     const r = frames.rights[i];
     const u = frames.ups[i];
-    const vi = i * 2;
     const halfWidth = sampleHalfWidth(halfWidths, i);
+    const wallOffset = Math.max(0, halfWidth - WALL_BASE_OVERLAP);
 
-    const ex = c.x + r.x * halfWidth * side;
-    const ey = c.y + r.y * halfWidth * side;
-    const ez = c.z + r.z * halfWidth * side;
-
-    positions[vi*3] = ex;           positions[vi*3+1] = ey;           positions[vi*3+2] = ez;
-    positions[(vi+1)*3] = ex+u.x*WALL_HEIGHT; positions[(vi+1)*3+1] = ey+u.y*WALL_HEIGHT; positions[(vi+1)*3+2] = ez+u.z*WALL_HEIGHT;
-
+    const ex = c.x + r.x * wallOffset * side;
+    const ey = c.y + r.y * wallOffset * side;
+    const ez = c.z + r.z * wallOffset * side;
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
-    normals[vi*3]=nx; normals[vi*3+1]=ny; normals[vi*3+2]=nz;
-    normals[(vi+1)*3]=nx; normals[(vi+1)*3+1]=ny; normals[(vi+1)*3+2]=nz;
-
     const col = Math.floor(i / 8) % 2 === 0 ? colStripe : colBase;
-    colors[vi*3]=col.r; colors[vi*3+1]=col.g; colors[vi*3+2]=col.b;
-    colors[(vi+1)*3]=col.r; colors[(vi+1)*3+1]=col.g; colors[(vi+1)*3+2]=col.b;
+
+    for (let row = 0; row <= WALL_SURFACE_ROWS; row += 1) {
+      const heightT = row / WALL_SURFACE_ROWS;
+      const vi = i * rowVertexCount + row;
+      positions[vi * 3] = ex + u.x * WALL_HEIGHT * heightT;
+      positions[vi * 3 + 1] = ey + u.y * WALL_HEIGHT * heightT;
+      positions[vi * 3 + 2] = ez + u.z * WALL_HEIGHT * heightT;
+      normals[vi * 3] = nx;
+      normals[vi * 3 + 1] = ny;
+      normals[vi * 3 + 2] = nz;
+      colors[vi * 3] = col.r;
+      colors[vi * 3 + 1] = col.g;
+      colors[vi * 3 + 2] = col.b;
+    }
 
     if (i < count - 1) {
-      if (side === 1) { indices.push(vi,vi+1,vi+2); indices.push(vi+1,vi+3,vi+2); }
-      else { indices.push(vi,vi+2,vi+1); indices.push(vi+1,vi+2,vi+3); }
+      const rowStart = i * rowVertexCount;
+      const nextRowStart = (i + 1) * rowVertexCount;
+      for (let row = 0; row < WALL_SURFACE_ROWS; row += 1) {
+        const a = rowStart + row;
+        const b = rowStart + row + 1;
+        const c0 = nextRowStart + row;
+        const d = nextRowStart + row + 1;
+        if (side === 1) {
+          indices.push(a, b, c0);
+          indices.push(b, d, c0);
+        } else {
+          indices.push(a, c0, b);
+          indices.push(b, c0, d);
+        }
+      }
     }
   }
 
@@ -534,38 +583,59 @@ function buildSectionWallSurfaceMesh(
   sampleSection: Uint8Array,
 ): Mesh {
   const count = frames.samples.length;
-  const positions = new Float32Array(count * 2 * 3);
-  const normals = new Float32Array(count * 2 * 3);
-  const colors = new Float32Array(count * 2 * 3);
+  const rowVertexCount = WALL_SURFACE_ROWS + 1;
+  const positions = new Float32Array(count * rowVertexCount * 3);
+  const normals = new Float32Array(count * rowVertexCount * 3);
+  const colors = new Float32Array(count * rowVertexCount * 3);
   const indices: number[] = [];
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
     const r = frames.rights[i];
     const u = frames.ups[i];
-    const vi = i * 2;
     const halfWidth = sampleHalfWidth(halfWidths, i);
+    const wallOffset = Math.max(0, halfWidth - WALL_BASE_OVERLAP);
 
-    const ex = c.x + r.x * halfWidth * side;
-    const ey = c.y + r.y * halfWidth * side;
-    const ez = c.z + r.z * halfWidth * side;
-
-    positions[vi*3] = ex;           positions[vi*3+1] = ey;           positions[vi*3+2] = ez;
-    positions[(vi+1)*3] = ex+u.x*WALL_HEIGHT; positions[(vi+1)*3+1] = ey+u.y*WALL_HEIGHT; positions[(vi+1)*3+2] = ez+u.z*WALL_HEIGHT;
-
+    const ex = c.x + r.x * wallOffset * side;
+    const ey = c.y + r.y * wallOffset * side;
+    const ez = c.z + r.z * wallOffset * side;
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
-    normals[vi*3]=nx; normals[vi*3+1]=ny; normals[vi*3+2]=nz;
-    normals[(vi+1)*3]=nx; normals[(vi+1)*3+1]=ny; normals[(vi+1)*3+2]=nz;
 
     const palette = sectionWallColors[sections[sampleSection[i]]?.type ?? "intro"];
     const base = new Color().copy(palette.base).lerp(palette.stripe, 0.28);
     const top = new Color().copy(palette.stripe).lerp(new Color("#ffffff"), 0.22);
-    colors[vi*3]=base.r; colors[vi*3+1]=base.g; colors[vi*3+2]=base.b;
-    colors[(vi+1)*3]=top.r; colors[(vi+1)*3+1]=top.g; colors[(vi+1)*3+2]=top.b;
+
+    for (let row = 0; row <= WALL_SURFACE_ROWS; row += 1) {
+      const heightT = row / WALL_SURFACE_ROWS;
+      const vi = i * rowVertexCount + row;
+      const color = base.clone().lerp(top, heightT);
+      positions[vi * 3] = ex + u.x * WALL_HEIGHT * heightT;
+      positions[vi * 3 + 1] = ey + u.y * WALL_HEIGHT * heightT;
+      positions[vi * 3 + 2] = ez + u.z * WALL_HEIGHT * heightT;
+      normals[vi * 3] = nx;
+      normals[vi * 3 + 1] = ny;
+      normals[vi * 3 + 2] = nz;
+      colors[vi * 3] = color.r;
+      colors[vi * 3 + 1] = color.g;
+      colors[vi * 3 + 2] = color.b;
+    }
 
     if (i < count - 1) {
-      if (side === 1) { indices.push(vi,vi+1,vi+2); indices.push(vi+1,vi+3,vi+2); }
-      else { indices.push(vi,vi+2,vi+1); indices.push(vi+1,vi+2,vi+3); }
+      const rowStart = i * rowVertexCount;
+      const nextRowStart = (i + 1) * rowVertexCount;
+      for (let row = 0; row < WALL_SURFACE_ROWS; row += 1) {
+        const a = rowStart + row;
+        const b = rowStart + row + 1;
+        const c0 = nextRowStart + row;
+        const d = nextRowStart + row + 1;
+        if (side === 1) {
+          indices.push(a, b, c0);
+          indices.push(b, d, c0);
+        } else {
+          indices.push(a, c0, b);
+          indices.push(b, c0, d);
+        }
+      }
     }
   }
 
@@ -597,41 +667,61 @@ function buildSectionWallRailMesh(
   thickness: number,
 ): Mesh {
   const count = frames.samples.length;
-  const positions = new Float32Array(count * 2 * 3);
-  const normals = new Float32Array(count * 2 * 3);
-  const colors = new Float32Array(count * 2 * 3);
+  const rowVertexCount = WALL_RAIL_ROWS + 1;
+  const positions = new Float32Array(count * rowVertexCount * 3);
+  const normals = new Float32Array(count * rowVertexCount * 3);
+  const colors = new Float32Array(count * rowVertexCount * 3);
   const indices: number[] = [];
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
     const r = frames.rights[i];
     const u = frames.ups[i];
-    const vi = i * 2;
     const halfWidth = sampleHalfWidth(halfWidths, i);
+    const wallOffset = Math.max(0, halfWidth - WALL_BASE_OVERLAP);
 
-    const ex = c.x + r.x * halfWidth * side;
-    const ey = c.y + r.y * halfWidth * side;
-    const ez = c.z + r.z * halfWidth * side;
+    const ex = c.x + r.x * wallOffset * side;
+    const ey = c.y + r.y * wallOffset * side;
+    const ez = c.z + r.z * wallOffset * side;
     const offsetA = WALL_HEIGHT * heightFraction;
     const offsetB = WALL_HEIGHT * Math.min(1, heightFraction + thickness);
-
-    positions[vi*3] = ex + u.x * offsetA;           positions[vi*3+1] = ey + u.y * offsetA;           positions[vi*3+2] = ez + u.z * offsetA;
-    positions[(vi+1)*3] = ex+u.x*offsetB; positions[(vi+1)*3+1] = ey+u.y*offsetB; positions[(vi+1)*3+2] = ez+u.z*offsetB;
-
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
-    normals[vi*3]=nx; normals[vi*3+1]=ny; normals[vi*3+2]=nz;
-    normals[(vi+1)*3]=nx; normals[(vi+1)*3+1]=ny; normals[(vi+1)*3+2]=nz;
-
     const si = sampleSection[i];
     const sectionType = sections[si]?.type ?? "intro";
     const palette = sectionWallColors[sectionType];
     const col = Math.floor(i / 4) % 2 === 0 ? palette.stripe : new Color().copy(palette.stripe).lerp(new Color("#ffffff"), 0.28);
-    colors[vi*3]=col.r; colors[vi*3+1]=col.g; colors[vi*3+2]=col.b;
-    colors[(vi+1)*3]=col.r; colors[(vi+1)*3+1]=col.g; colors[(vi+1)*3+2]=col.b;
+
+    for (let row = 0; row <= WALL_RAIL_ROWS; row += 1) {
+      const heightT = row / WALL_RAIL_ROWS;
+      const offset = TMath.lerp(offsetA, offsetB, heightT);
+      const vi = i * rowVertexCount + row;
+      positions[vi * 3] = ex + u.x * offset;
+      positions[vi * 3 + 1] = ey + u.y * offset;
+      positions[vi * 3 + 2] = ez + u.z * offset;
+      normals[vi * 3] = nx;
+      normals[vi * 3 + 1] = ny;
+      normals[vi * 3 + 2] = nz;
+      colors[vi * 3] = col.r;
+      colors[vi * 3 + 1] = col.g;
+      colors[vi * 3 + 2] = col.b;
+    }
 
     if (i < count - 1) {
-      if (side === 1) { indices.push(vi,vi+1,vi+2); indices.push(vi+1,vi+3,vi+2); }
-      else { indices.push(vi,vi+2,vi+1); indices.push(vi+1,vi+2,vi+3); }
+      const rowStart = i * rowVertexCount;
+      const nextRowStart = (i + 1) * rowVertexCount;
+      for (let row = 0; row < WALL_RAIL_ROWS; row += 1) {
+        const a = rowStart + row;
+        const b = rowStart + row + 1;
+        const c0 = nextRowStart + row;
+        const d = nextRowStart + row + 1;
+        if (side === 1) {
+          indices.push(a, b, c0);
+          indices.push(b, d, c0);
+        } else {
+          indices.push(a, c0, b);
+          indices.push(b, c0, d);
+        }
+      }
     }
   }
 
