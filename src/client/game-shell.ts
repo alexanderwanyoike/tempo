@@ -359,18 +359,146 @@ export class GameShell {
       .tempo-shell-stat-value { font-size:16px; font-weight:600; color:#f3f5f2; }
       .tempo-shell-play { margin-top:auto; padding:18px 22px; font-size:14px; font-weight:700; letter-spacing:0.22em; }
       .tempo-shell-status { font-size:10px; font-weight:500; letter-spacing:0.16em; text-transform:uppercase; color:#6b757a; min-height:14px; }
-      .tempo-shell-preview-box { position:relative; width:100%; height:min(72vh, 720px); min-height:480px; border:1px solid rgba(243,245,242,0.08); background:#0a0c10; border-radius:2px; overflow:hidden; }
-      .tempo-shell-preview-canvas { position:absolute; inset:0; width:100%; height:100%; }
-      .tempo-shell-preview-head { position:absolute; top:18px; left:20px; right:20px; display:flex; justify-content:space-between; align-items:flex-start; gap:16px; pointer-events:none; z-index:1; }
-      .tempo-shell-song-name { font-size:clamp(22px, 2.2vw, 30px); font-weight:700; letter-spacing:-0.015em; line-height:1.1; }
-      .tempo-shell-song-info { margin-top:6px; font-size:10px; font-weight:500; letter-spacing:0.18em; text-transform:uppercase; color:#8a9297; }
-      .tempo-shell-preview-meta { text-align:right; font-size:9px; font-weight:600; letter-spacing:0.18em; text-transform:uppercase; color:var(--tempo-accent); }
+      .tempo-shell-preview-box {
+        position:relative;
+        width:100%;
+        height:min(72vh, 720px);
+        min-height:480px;
+        border:1px solid rgba(243,245,242,0.08);
+        background:
+          radial-gradient(circle at 18% 14%, rgba(96, 224, 255, 0.08), transparent 26%),
+          radial-gradient(circle at 84% 82%, rgba(96, 224, 255, 0.05), transparent 32%),
+          linear-gradient(180deg, rgba(16, 20, 26, 0.96), rgba(7, 10, 15, 0.98)),
+          #080b10;
+        border-radius:2px;
+        overflow:hidden;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+      }
+      .tempo-shell-preview-canvas { position:absolute; inset:0; width:100%; height:100%; z-index:1; }
+      .tempo-shell-preview-fx,
+      .tempo-shell-preview-head { position:absolute; inset:0; pointer-events:none; }
+      .tempo-shell-preview-fx { z-index:2; }
+      .tempo-shell-preview-head {
+        top:18px;
+        left:20px;
+        right:20px;
+        bottom:auto;
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        gap:16px;
+        z-index:3;
+      }
+      .tempo-shell-preview-grid {
+        position:absolute;
+        inset:0;
+        z-index:0;
+        opacity:0.48;
+        background:
+          linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(255,255,255,0.026) 1px, transparent 1px);
+        background-size:72px 72px, 72px 72px;
+        mask-image:linear-gradient(180deg, rgba(0,0,0,0.85), rgba(0,0,0,0.14));
+      }
+      .tempo-shell-preview-scan {
+        position:absolute;
+        inset:-20% -8%;
+        z-index:1;
+        background:linear-gradient(110deg, transparent 0%, rgba(255,255,255,0.035) 40%, rgba(255,255,255,0.15) 48%, rgba(255,255,255,0.03) 54%, transparent 72%);
+        mix-blend-mode:screen;
+        opacity:0.5;
+        animation:tempo-preview-scan 9.5s linear infinite;
+      }
+      .tempo-shell-preview-vignette {
+        position:absolute;
+        inset:0;
+        z-index:2;
+        background:
+          linear-gradient(180deg, rgba(4, 8, 12, 0.16), transparent 18%, transparent 82%, rgba(4, 8, 12, 0.24)),
+          linear-gradient(90deg, rgba(4, 8, 12, 0.22), transparent 14%, transparent 86%, rgba(4, 8, 12, 0.22));
+      }
+      .tempo-shell-preview-frame {
+        position:absolute;
+        inset:14px;
+        z-index:3;
+        border:1px solid rgba(255,255,255,0.045);
+      }
+      .tempo-shell-preview-frame::before,
+      .tempo-shell-preview-frame::after {
+        content:"";
+        position:absolute;
+        left:20px;
+        right:20px;
+        height:1px;
+        background:linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+      }
+      .tempo-shell-preview-frame::before { top:54px; }
+      .tempo-shell-preview-frame::after { bottom:24px; }
+      .tempo-shell-preview-corner {
+        position:absolute;
+        z-index:4;
+        width:26px;
+        height:26px;
+        border-color:rgba(116, 239, 255, 0.68);
+        border-style:solid;
+        border-width:0;
+        filter:drop-shadow(0 0 10px rgba(116,239,255,0.2));
+      }
+      .tempo-shell-preview-corner.tl { top:14px; left:14px; border-top-width:1px; border-left-width:1px; }
+      .tempo-shell-preview-corner.tr { top:14px; right:14px; border-top-width:1px; border-right-width:1px; }
+      .tempo-shell-preview-corner.bl { bottom:14px; left:14px; border-bottom-width:1px; border-left-width:1px; }
+      .tempo-shell-preview-corner.br { bottom:14px; right:14px; border-bottom-width:1px; border-right-width:1px; }
+      .tempo-shell-preview-caption {
+        position:absolute;
+        z-index:4;
+        left:24px;
+        bottom:20px;
+        display:flex;
+        flex-wrap:wrap;
+        gap:12px;
+        align-items:center;
+        font-size:9px;
+        font-weight:600;
+        letter-spacing:0.22em;
+        text-transform:uppercase;
+        color:rgba(152, 165, 171, 0.92);
+      }
+      .tempo-shell-preview-caption::before {
+        content:"";
+        display:block;
+        width:48px;
+        height:1px;
+        background:linear-gradient(90deg, rgba(116,239,255,0.85), transparent);
+      }
+      .tempo-shell-song-name {
+        font-size:clamp(22px, 2.2vw, 30px);
+        font-weight:700;
+        letter-spacing:-0.015em;
+        line-height:1.05;
+        text-shadow:0 0 18px rgba(255,255,255,0.08);
+      }
+      .tempo-shell-song-info { margin-top:7px; font-size:10px; font-weight:500; letter-spacing:0.2em; text-transform:uppercase; color:#8a9297; }
+      .tempo-shell-preview-meta {
+        text-align:right;
+        font-size:9px;
+        font-weight:700;
+        letter-spacing:0.22em;
+        text-transform:uppercase;
+        color:var(--tempo-accent);
+        text-shadow:0 0 14px rgba(116, 239, 255, 0.22);
+      }
+      @keyframes tempo-preview-scan {
+        0% { transform:translate3d(-18%, -10%, 0); }
+        100% { transform:translate3d(18%, 10%, 0); }
+      }
       .tempo-hidden { display:none !important; }
       @media (max-width: 980px) {
         .tempo-shell-ui { overflow-y:auto; overscroll-behavior:contain; }
         .tempo-shell { padding:24px 22px; }
         .tempo-shell-main { grid-template-columns:1fr; gap:24px; }
         .tempo-shell-preview-box { min-height:340px; }
+        .tempo-shell-preview-grid { background-size:52px 52px, 52px 52px; }
+        .tempo-shell-preview-caption { left:20px; bottom:16px; letter-spacing:0.18em; }
         .tempo-shell-room-card {
           grid-template-columns:1fr;
           padding:12px;
@@ -404,6 +532,9 @@ export class GameShell {
         .tempo-shell-stat-value { font-size:14px; }
         .tempo-shell-play { margin-top:4px; padding:12px 16px; font-size:12px; letter-spacing:0.18em; }
         .tempo-shell-preview-box { min-height:0; height:100%; }
+        .tempo-shell-preview-grid,
+        .tempo-shell-preview-scan { opacity:0.32; }
+        .tempo-shell-preview-caption { display:none; }
         .tempo-shell-directory { max-height:38vh; }
         .tempo-shell-room-block { padding:10px; }
       }
@@ -713,6 +844,24 @@ export class GameShell {
     const previewBox = document.createElement("div");
     previewBox.className = "tempo-shell-preview-box";
     this.previewHost.className = "tempo-shell-preview-canvas";
+    const previewFx = document.createElement("div");
+    previewFx.className = "tempo-shell-preview-fx";
+    const previewGrid = document.createElement("div");
+    previewGrid.className = "tempo-shell-preview-grid";
+    const previewSweep = document.createElement("div");
+    previewSweep.className = "tempo-shell-preview-scan";
+    const previewVignette = document.createElement("div");
+    previewVignette.className = "tempo-shell-preview-vignette";
+    const previewFrame = document.createElement("div");
+    previewFrame.className = "tempo-shell-preview-frame";
+    for (const corner of ["tl", "tr", "bl", "br"]) {
+      const element = document.createElement("div");
+      element.className = `tempo-shell-preview-corner ${corner}`;
+      previewFx.appendChild(element);
+    }
+    const previewCaption = document.createElement("div");
+    previewCaption.className = "tempo-shell-preview-caption";
+    previewCaption.textContent = "Circuit schematic projection";
     const previewHead = document.createElement("div");
     previewHead.className = "tempo-shell-preview-head";
     const previewInfo = document.createElement("div");
@@ -723,7 +872,8 @@ export class GameShell {
     previewMeta.className = "tempo-shell-preview-meta";
     previewMeta.append(this.previewTitle, this.previewSubline);
     previewHead.append(previewInfo, previewMeta);
-    previewBox.append(this.previewHost, previewHead);
+    previewFx.append(previewGrid, previewSweep, previewVignette, previewFrame, previewCaption);
+    previewBox.append(this.previewHost, previewFx, previewHead);
     right.append(previewBox);
 
     main.append(left, right);
