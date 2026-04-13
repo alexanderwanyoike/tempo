@@ -328,7 +328,7 @@ export function barrelRoll(
   const entrySet = advance(start, forward, length * rollStartT);
 
   const rollPts: Vector3[] = [];
-  for (let i = 0; i < rollSamples; i++) {
+  for (let i = 1; i < rollSamples; i++) {
     const t = i / (rollSamples - 1);
     const alongT = rollStartT + (rollEndT - rollStartT) * t;
     const angle = t * Math.PI * 2 * sign;
