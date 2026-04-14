@@ -92,12 +92,15 @@ export class GameShell {
   private readonly panelToggleButton = document.createElement("button");
   private readonly songSection = document.createElement("div");
   private readonly songBrowserHint = document.createElement("div");
+  private readonly songSelectionMeta = document.createElement("div");
+  private readonly songOpenModalButton = document.createElement("button");
+  private readonly songModal = document.createElement("div");
+  private readonly songModalDialog = document.createElement("div");
+  private readonly songModalCloseButton = document.createElement("button");
+  private readonly songModalMeta = document.createElement("div");
   private readonly songSearchInput = document.createElement("input");
   private readonly songGenreDeck = document.createElement("div");
   private readonly songBrowserList = document.createElement("div");
-  private readonly songActionRow = document.createElement("div");
-  private readonly songPreviewButton = document.createElement("button");
-  private readonly songSelectionMeta = document.createElement("div");
   private readonly seedSection = document.createElement("div");
   private readonly seedInput = document.createElement("input");
   private readonly fictionSection = document.createElement("div");
@@ -145,6 +148,7 @@ export class GameShell {
   private browseSongId = "";
   private songSearchQuery = "";
   private songGenreFilter = SONG_FILTER_ALL;
+  private songModalOpen = false;
   private auditionState: SongAuditionState = { songId: null, status: "idle", error: null };
   private selectedFictionId: EnvironmentFictionId = 1;
   private seedOverride: number | null = null;
@@ -300,6 +304,40 @@ export class GameShell {
         text-transform:uppercase;
         color:#8e9aa0;
       }
+      .tempo-shell-song-current {
+        display:grid;
+        grid-template-columns:56px minmax(0, 1fr);
+        gap:12px;
+        align-items:center;
+        padding:10px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:rgba(243,245,242,0.03);
+      }
+      .tempo-shell-song-current-art {
+        width:56px;
+        height:56px;
+        object-fit:cover;
+        border-radius:2px;
+        border:1px solid rgba(243,245,242,0.08);
+        background:#0a0d12;
+      }
+      .tempo-shell-song-current-copy {
+        min-width:0;
+      }
+      .tempo-shell-song-current-title {
+        font-size:14px;
+        font-weight:700;
+        line-height:1.2;
+        color:#f3f5f2;
+      }
+      .tempo-shell-song-current-sub {
+        margin-top:4px;
+        font-size:10px;
+        font-weight:500;
+        letter-spacing:0.16em;
+        text-transform:uppercase;
+        color:#8a9297;
+      }
       .tempo-shell-song-genres {
         display:flex;
         flex-wrap:wrap;
@@ -384,9 +422,34 @@ export class GameShell {
       .tempo-shell-song-card-status {
         justify-self:end;
         display:flex;
-        flex-direction:column;
+        flex-direction:row;
         align-items:flex-end;
         gap:6px;
+      }
+      .tempo-shell-song-audition {
+        width:36px;
+        height:36px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        border:1px solid rgba(243,245,242,0.16);
+        background:transparent;
+        color:#d9e2e8;
+        border-radius:2px;
+        cursor:pointer;
+      }
+      .tempo-shell-song-audition:hover {
+        border-color:var(--tempo-accent);
+        color:var(--tempo-accent);
+      }
+      .tempo-shell-song-audition.is-playing {
+        border-color:var(--tempo-accent);
+        color:var(--tempo-accent);
+        background:rgba(103, 201, 215, 0.08);
+      }
+      .tempo-shell-song-audition:disabled {
+        opacity:0.45;
+        cursor:wait;
       }
       .tempo-shell-song-card-pill {
         padding:4px 6px;
@@ -401,14 +464,65 @@ export class GameShell {
         color:var(--tempo-accent);
         border-color:rgba(103, 201, 215, 0.45);
       }
-      .tempo-shell-song-actions {
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        gap:10px;
-      }
       .tempo-shell-song-selection-meta {
         min-width:0;
+        font-size:10px;
+        line-height:1.45;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
+      .tempo-shell-modal {
+        position:fixed;
+        inset:0;
+        z-index:120;
+        display:none;
+        align-items:center;
+        justify-content:center;
+        padding:28px;
+        background:rgba(3, 6, 9, 0.78);
+        backdrop-filter:blur(10px);
+      }
+      .tempo-shell-modal.is-open { display:flex; }
+      .tempo-shell-modal-dialog {
+        width:min(980px, 100%);
+        max-height:min(88vh, 900px);
+        display:flex;
+        flex-direction:column;
+        gap:16px;
+        padding:18px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:
+          radial-gradient(circle at 20% 18%, rgba(103, 201, 215, 0.08), transparent 28%),
+          linear-gradient(180deg, rgba(16, 20, 26, 0.98), rgba(7, 10, 15, 0.98));
+        box-shadow:0 24px 80px rgba(0,0,0,0.45);
+      }
+      .tempo-shell-modal-head {
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:14px;
+      }
+      .tempo-shell-modal-title {
+        font-size:13px;
+        font-weight:700;
+        letter-spacing:0.22em;
+        text-transform:uppercase;
+        color:#f3f5f2;
+      }
+      .tempo-shell-modal-sub {
+        margin-top:6px;
+        font-size:10px;
+        line-height:1.55;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
+      .tempo-shell-modal-close {
+        min-width:44px;
+        min-height:44px;
+      }
+      .tempo-shell-modal-meta {
         font-size:10px;
         line-height:1.45;
         letter-spacing:0.14em;
@@ -709,6 +823,8 @@ export class GameShell {
         }
         .tempo-shell-directory { max-height:42vh; overflow-y:auto; }
         .tempo-shell-song-list { max-height:44vh; }
+        .tempo-shell-modal { padding:14px; }
+        .tempo-shell-modal-dialog { max-height:92vh; padding:14px; }
       }
       @media (max-width: 900px) and (orientation: landscape) {
         .tempo-shell { padding:12px 20px 14px; gap:12px; min-height:100vh; }
@@ -737,17 +853,15 @@ export class GameShell {
         .tempo-shell-input,
         .tempo-shell-code { padding:10px 12px; font-size:14px; }
         .tempo-shell-song-card {
-          grid-template-columns:56px minmax(0, 1fr);
+          grid-template-columns:56px minmax(0, 1fr) auto;
         }
         .tempo-shell-song-card-status {
-          grid-column:2;
-          align-items:flex-start;
-          justify-self:start;
           flex-direction:row;
           flex-wrap:wrap;
         }
         .tempo-shell-preview-info { gap:10px; }
         .tempo-shell-song-art { width:58px; height:58px; }
+        .tempo-shell-modal-dialog { max-height:94vh; }
       }
       .tempo-rotate-prompt {
         position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
@@ -844,32 +958,20 @@ export class GameShell {
     this.songSection.className = "tempo-shell-section";
     const songLabel = document.createElement("div");
     songLabel.className = "tempo-shell-label";
-    songLabel.textContent = "Music Browser";
+    songLabel.textContent = "Track";
     this.songBrowserHint.className = "tempo-shell-song-hint";
-    this.songSearchInput.className = "tempo-shell-song-search";
-    this.songSearchInput.type = "search";
-    this.songSearchInput.placeholder = "Search title or artist";
-    this.songSearchInput.addEventListener("input", () => {
-      this.songSearchQuery = this.songSearchInput.value.trim().toLowerCase();
-      this.renderSongBrowser();
-    });
-    this.songGenreDeck.className = "tempo-shell-song-genres";
-    this.songBrowserList.className = "tempo-shell-song-list";
-    this.songActionRow.className = "tempo-shell-song-actions";
-    this.songPreviewButton.type = "button";
-    this.songPreviewButton.className = "tempo-shell-action";
-    this.songPreviewButton.addEventListener("click", () => {
-      void this.toggleSongAudition();
-    });
     this.songSelectionMeta.className = "tempo-shell-song-selection-meta";
-    this.songActionRow.append(this.songPreviewButton, this.songSelectionMeta);
+    this.songOpenModalButton.type = "button";
+    this.songOpenModalButton.className = "tempo-shell-action is-primary";
+    this.songOpenModalButton.textContent = "Browse Music";
+    this.songOpenModalButton.addEventListener("click", () => {
+      this.openSongModal();
+    });
     this.songSection.append(
       songLabel,
       this.songBrowserHint,
-      this.songSearchInput,
-      this.songGenreDeck,
-      this.songBrowserList,
-      this.songActionRow,
+      this.songSelectionMeta,
+      this.songOpenModalButton,
     );
 
     this.fictionSection.className = "tempo-shell-section";
@@ -1108,6 +1210,53 @@ export class GameShell {
 
     main.append(left, right);
     this.shell.append(topline, main);
+
+    this.songModal.className = "tempo-shell-modal";
+    this.songModal.addEventListener("click", (event) => {
+      if (event.target === this.songModal) {
+        this.closeSongModal();
+      }
+    });
+    this.songModalDialog.className = "tempo-shell-modal-dialog";
+    this.songModalDialog.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    const modalHead = document.createElement("div");
+    modalHead.className = "tempo-shell-modal-head";
+    const modalCopy = document.createElement("div");
+    const modalTitle = document.createElement("div");
+    modalTitle.className = "tempo-shell-modal-title";
+    modalTitle.textContent = "Music Browser";
+    const modalSub = document.createElement("div");
+    modalSub.className = "tempo-shell-modal-sub";
+    modalSub.textContent = "Filter by genre, search title or artist, and tap the speaker icon to audition.";
+    modalCopy.append(modalTitle, modalSub);
+    this.songModalCloseButton.type = "button";
+    this.songModalCloseButton.className = "tempo-shell-action tempo-shell-modal-close";
+    this.songModalCloseButton.textContent = "Close";
+    this.songModalCloseButton.addEventListener("click", () => {
+      this.closeSongModal();
+    });
+    modalHead.append(modalCopy, this.songModalCloseButton);
+    this.songModalMeta.className = "tempo-shell-modal-meta";
+    this.songSearchInput.className = "tempo-shell-song-search";
+    this.songSearchInput.type = "search";
+    this.songSearchInput.placeholder = "Search title or artist";
+    this.songSearchInput.addEventListener("input", () => {
+      this.songSearchQuery = this.songSearchInput.value.trim().toLowerCase();
+      this.renderSongBrowser();
+    });
+    this.songGenreDeck.className = "tempo-shell-song-genres";
+    this.songBrowserList.className = "tempo-shell-song-list";
+    this.songModalDialog.append(
+      modalHead,
+      this.songModalMeta,
+      this.songSearchInput,
+      this.songGenreDeck,
+      this.songBrowserList,
+    );
+    this.songModal.appendChild(this.songModalDialog);
+    this.uiLayer.appendChild(this.songModal);
   }
 
   private renderSongBrowser(): void {
@@ -1116,6 +1265,29 @@ export class GameShell {
     const canCommit = this.canEditSongSelection();
 
     this.songBrowserHint.textContent = this.describeSongBrowserMode();
+    this.songSelectionMeta.replaceChildren();
+    if (selectedSong) {
+      const current = document.createElement("div");
+      current.className = "tempo-shell-song-current";
+      const art = document.createElement("img");
+      art.className = "tempo-shell-song-current-art";
+      art.alt = "";
+      art.src = this.getSongAlbumArtUrl(selectedSong);
+      const copy = document.createElement("div");
+      copy.className = "tempo-shell-song-current-copy";
+      const title = document.createElement("div");
+      title.className = "tempo-shell-song-current-title";
+      title.textContent = selectedSong.title;
+      const sub = document.createElement("div");
+      sub.className = "tempo-shell-song-current-sub";
+      sub.textContent = `${selectedSong.artist} / ${selectedSong.genre} / ${selectedSong.bpm.toFixed(0)} BPM`;
+      copy.append(title, sub);
+      current.append(art, copy);
+      this.songSelectionMeta.appendChild(current);
+    }
+    this.songOpenModalButton.textContent = "Browse Music";
+    this.songOpenModalButton.disabled = this.launchInFlight;
+
     this.songGenreDeck.replaceChildren();
     for (const genre of [SONG_FILTER_ALL, ...this.listAvailableGenres()]) {
       const button = document.createElement("button");
@@ -1129,6 +1301,8 @@ export class GameShell {
       });
       this.songGenreDeck.appendChild(button);
     }
+    this.songModalMeta.textContent = this.describeSongSelectionMeta(selectedSong, focusedSong, canCommit);
+    this.songModal.classList.toggle("is-open", this.songModalOpen);
 
     this.songBrowserList.replaceChildren();
     const visibleSongs = this.listVisibleSongs();
@@ -1174,6 +1348,18 @@ export class GameShell {
 
       const status = document.createElement("div");
       status.className = "tempo-shell-song-card-status";
+      const auditionButton = document.createElement("button");
+      auditionButton.type = "button";
+      auditionButton.className = "tempo-shell-song-audition";
+      auditionButton.classList.toggle("is-playing", this.auditionState.songId === song.id && this.auditionState.status === "playing");
+      auditionButton.disabled = this.launchInFlight;
+      auditionButton.setAttribute("aria-label", `Audition ${song.title}`);
+      auditionButton.innerHTML = speakerIconSvg();
+      auditionButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.toggleSongAudition(song.id);
+      });
+      status.appendChild(auditionButton);
       if (song.id === selectedSong?.id) {
         status.appendChild(createSongPill(this.mode === "multiplayer" ? "Room" : "Selected", true));
       }
@@ -1190,19 +1376,6 @@ export class GameShell {
       row.append(art, meta, status);
       this.songBrowserList.appendChild(row);
     }
-
-    this.songPreviewButton.disabled = !focusedSong || this.launchInFlight;
-    if (focusedSong && this.auditionState.songId === focusedSong.id) {
-      this.songPreviewButton.textContent = this.auditionState.status === "playing"
-        ? "Stop Preview"
-        : this.auditionState.status === "loading"
-          ? "Loading Preview"
-          : "Retry Preview";
-    } else {
-      this.songPreviewButton.textContent = "Audition";
-    }
-
-    this.songSelectionMeta.textContent = this.describeSongSelectionMeta(selectedSong, focusedSong, canCommit);
   }
 
   private listAvailableGenres(): string[] {
@@ -1243,6 +1416,7 @@ export class GameShell {
       this.renderFictionButtons();
       this.syncUrl();
       this.syncRoomSetup();
+      this.closeSongModal();
     }
 
     this.renderSelection();
@@ -1309,12 +1483,23 @@ export class GameShell {
     return resolveSongAlbumArtUrl(this.config, song) ?? buildFallbackAlbumArt(song);
   }
 
-  private async toggleSongAudition(): Promise<void> {
-    const song = this.getFocusedSong();
+  private async toggleSongAudition(songId: string): Promise<void> {
+    const song = this.findSongById(songId);
     if (!song) return;
     unlockAudioContext();
     const { musicUrl } = resolveSongLaunchUrls(this.config, song);
     await this.auditionPlayer.toggle(song.id, musicUrl, song.previewStartTime);
+  }
+
+  private openSongModal(): void {
+    this.songModalOpen = true;
+    this.browseSongId = this.selectedSongId;
+    this.renderSongBrowser();
+  }
+
+  private closeSongModal(): void {
+    this.dismissSongModal();
+    this.renderSongBrowser();
   }
 
   private populatePlayerCapSelect(): void {
@@ -1425,7 +1610,7 @@ export class GameShell {
   }
 
   private renderSelection(): void {
-    const song = this.getFocusedSong();
+    const song = this.getSelectedSong();
     if (!song) return;
 
     const fiction = FICTION_OPTIONS.find((candidate) => candidate.id === this.selectedFictionId) ?? FICTION_OPTIONS[0];
@@ -1675,7 +1860,7 @@ export class GameShell {
 
   private async setMode(mode: ShellMode): Promise<void> {
     if (mode === this.mode) return;
-    this.stopSongAudition();
+    this.dismissSongModal();
     if (mode === "solo" && this.roomCode) {
       await this.leaveRoom();
     }
@@ -1707,7 +1892,7 @@ export class GameShell {
       this.roomClient = new RoomClient(this.config.websocketUrl);
       this.roomClient.onMessage = (message) => this.handleServerMessage(message);
       this.roomClient.onClose = () => {
-        this.stopSongAudition();
+        this.dismissSongModal();
         this.roomCode = null;
         this.roomName = "";
         this.roomPhase = null;
@@ -1761,7 +1946,7 @@ export class GameShell {
 
   private async leaveRoom(): Promise<void> {
     this.clearResultsReturnTimer();
-    this.stopSongAudition();
+    this.dismissSongModal();
     this.roomClient?.send({ type: "room.leave" });
     this.roomCode = null;
     this.roomName = "";
@@ -1798,7 +1983,7 @@ export class GameShell {
   private async launchSoloRace(reuseLastLaunch = false): Promise<void> {
     if (this.launchInFlight) return;
     this.clearResultsReturnTimer();
-    this.stopSongAudition();
+    this.dismissSongModal();
     const song = this.getSelectedSong();
     if (!song && !reuseLastLaunch) {
       this.setStatus("Pick a valid circuit before launch.");
@@ -1863,7 +2048,7 @@ export class GameShell {
   private async startMultiplayerRace(): Promise<void> {
     if (this.launchInFlight || !this.roomCode) return;
     this.clearResultsReturnTimer();
-    this.stopSongAudition();
+    this.dismissSongModal();
     const song = this.getSelectedSong();
     if (!song) return;
 
@@ -1926,7 +2111,7 @@ export class GameShell {
 
   private async showLobby(statusMessage?: string): Promise<void> {
     this.clearResultsReturnTimer();
-    this.stopSongAudition();
+    this.dismissSongModal();
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
@@ -1941,7 +2126,7 @@ export class GameShell {
 
   private async showMenu(): Promise<void> {
     this.clearResultsReturnTimer();
-    this.stopSongAudition();
+    this.dismissSongModal();
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
@@ -1953,6 +2138,11 @@ export class GameShell {
 
   private stopSongAudition(): void {
     this.auditionPlayer.stop();
+  }
+
+  private dismissSongModal(): void {
+    this.songModalOpen = false;
+    this.stopSongAudition();
   }
 
   private async stopActiveRace(): Promise<void> {
@@ -2151,6 +2341,16 @@ function createSongPill(value: string, accent = false): HTMLDivElement {
   pill.classList.toggle("is-accent", accent);
   pill.textContent = value;
   return pill;
+}
+
+function speakerIconSvg(): string {
+  return `
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M11 5 7.8 8H5a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.8L11 19z"/>
+      <path d="M15 9.5a4 4 0 0 1 0 5"/>
+      <path d="M17.8 7a7.5 7.5 0 0 1 0 10"/>
+    </svg>
+  `.trim();
 }
 
 function parseInteger(value: string | null): number | null {
