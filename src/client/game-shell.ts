@@ -1390,7 +1390,7 @@ export class GameShell {
       return buildSongSearchText(song).includes(this.songSearchQuery);
     }).sort(compareSongsForBrowser);
 
-    const pinned = [this.getSelectedSong(), this.getFocusedSong()].filter((song): song is ShellSongEntry => Boolean(song));
+    const pinned = [this.getSelectedSong()].filter((song): song is ShellSongEntry => Boolean(song));
     const visible = new Map<string, ShellSongEntry>();
     for (const song of pinned) {
       if (!filtered.includes(song)) {
@@ -1476,7 +1476,7 @@ export class GameShell {
     const matchesFilter = (this.songGenreFilter === SONG_FILTER_ALL || song.genre === this.songGenreFilter)
       && (!this.songSearchQuery || buildSongSearchText(song).includes(this.songSearchQuery));
     if (matchesFilter) return false;
-    return song.id === this.selectedSongId || song.id === this.browseSongId;
+    return song.id === this.selectedSongId;
   }
 
   private getSongAlbumArtUrl(song: ShellSongEntry): string {
