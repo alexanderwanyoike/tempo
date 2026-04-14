@@ -135,8 +135,14 @@ export class GameShell {
   private readonly songModalCloseButton = document.createElement("button");
   private readonly songModalMeta = document.createElement("div");
   private readonly songSearchInput = document.createElement("input");
+  private readonly songGenreToggle = document.createElement("button");
   private readonly songGenreDeck = document.createElement("div");
   private readonly songBrowserList = document.createElement("div");
+  private readonly roomModal = document.createElement("div");
+  private readonly roomModalDialog = document.createElement("div");
+  private readonly roomModalCloseButton = document.createElement("button");
+  private readonly roomModalBody = document.createElement("div");
+  private readonly configureRoomButton = document.createElement("button");
   private readonly seedSection = document.createElement("div");
   private readonly seedInput = document.createElement("input");
   private readonly fictionSection = document.createElement("div");
@@ -189,7 +195,9 @@ export class GameShell {
   private browseSongId = "";
   private songSearchQuery = "";
   private songGenreFilter = SONG_FILTER_ALL;
+  private songGenresExpanded = false;
   private songModalOpen = false;
+  private roomModalOpen = false;
   private auditionState: SongAuditionState = { songId: null, status: "idle", error: null };
   private selectedFictionId: EnvironmentFictionId = 1;
   private seedOverride: number | null = null;
@@ -301,17 +309,21 @@ export class GameShell {
         z-index: 1;
         display: grid;
         grid-template-rows: auto 1fr;
+        height: 100%;
         min-height: 100%;
-        padding: 36px 52px 32px;
-        gap: 28px;
+        padding: 28px 40px 24px;
+        gap: 20px;
+        box-sizing: border-box;
       }
       .tempo-shell-topline { display:flex; align-items:baseline; gap:18px; }
-      .tempo-shell-brand { font-size: clamp(34px, 4vw, 52px); font-weight:800; letter-spacing:-0.04em; line-height:1; }
+      .tempo-shell-brand { font-size: clamp(28px, 3.4vw, 48px); font-weight:800; letter-spacing:-0.04em; line-height:1; }
       .tempo-shell-tagline { font-size:11px; font-weight:500; letter-spacing:0.22em; text-transform:uppercase; color:#6b757a; }
-      .tempo-shell-main { display:grid; grid-template-columns:minmax(330px, 420px) minmax(0, 1fr); gap:40px; min-height:0; }
-      .tempo-shell-left { display:flex; flex-direction:column; gap:18px; min-width:0; }
-      .tempo-shell-right { min-width:0; min-height:0; }
-      .tempo-shell-section { display:flex; flex-direction:column; gap:10px; }
+      .tempo-shell-main { display:grid; grid-template-columns:minmax(300px, 380px) minmax(0, 1fr); gap:28px; min-height:0; }
+      .tempo-shell-left { display:flex; flex-direction:column; gap:12px; min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:2px; }
+      .tempo-shell-left::-webkit-scrollbar { width:6px; }
+      .tempo-shell-left::-webkit-scrollbar-thumb { background:rgba(243,245,242,0.12); border-radius:3px; }
+      .tempo-shell-right { min-width:0; min-height:0; display:flex; }
+      .tempo-shell-section { display:flex; flex-direction:column; gap:8px; }
       .tempo-shell-label { font-size:10px; font-weight:600; letter-spacing:0.24em; text-transform:uppercase; color:#6b757a; }
       .tempo-shell-select, .tempo-shell-input, .tempo-shell-code {
         width:100%;
@@ -464,6 +476,26 @@ export class GameShell {
         flex-wrap:wrap;
         gap:8px;
       }
+      .tempo-shell-song-genres.is-collapsed { display:none; }
+      .tempo-shell-song-genre-toggle {
+        align-self:flex-start;
+        display:inline-flex;
+        align-items:center;
+        gap:8px;
+        border:1px solid rgba(243,245,242,0.16);
+        background:transparent;
+        color:#d4dadd;
+        font:600 11px/1 inherit;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        border-radius:2px;
+        padding:10px 14px;
+        cursor:pointer;
+        min-height:40px;
+      }
+      .tempo-shell-song-genre-toggle:hover { border-color:var(--tempo-accent); color:var(--tempo-accent); }
+      .tempo-shell-song-genre-toggle.is-active { border-color:var(--tempo-accent); color:var(--tempo-accent); }
+      .tempo-shell-song-genre-toggle-caret { opacity:0.7; font-size:9px; }
       .tempo-shell-song-list {
         display:flex;
         flex-direction:column;
@@ -643,6 +675,15 @@ export class GameShell {
         min-width:44px;
         min-height:44px;
       }
+      .tempo-shell-modal-body {
+        display:flex;
+        flex-direction:column;
+        gap:12px;
+        min-height:0;
+        flex:1 1 auto;
+        overflow-y:auto;
+        padding-right:4px;
+      }
       .tempo-shell-modal-meta {
         font-size:10px;
         line-height:1.45;
@@ -764,17 +805,18 @@ export class GameShell {
         color:#7f8b91;
       }
       .tempo-shell-room-meta { font-size:11px; line-height:1.55; color:#98a5ab; text-transform:uppercase; letter-spacing:0.12em; min-height:16px; }
-      .tempo-shell-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(86px, 1fr)); gap:14px; }
-      .tempo-shell-stat { display:flex; flex-direction:column; gap:4px; }
+      .tempo-shell-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(72px, 1fr)); gap:10px; }
+      .tempo-shell-stat { display:flex; flex-direction:column; gap:3px; }
       .tempo-shell-stat-key { font-size:9px; font-weight:600; letter-spacing:0.2em; text-transform:uppercase; color:#6b757a; }
-      .tempo-shell-stat-value { font-size:16px; font-weight:600; color:#f3f5f2; }
-      .tempo-shell-play { margin-top:auto; padding:18px 22px; font-size:14px; font-weight:700; letter-spacing:0.22em; }
+      .tempo-shell-stat-value { font-size:14px; font-weight:600; color:#f3f5f2; }
+      .tempo-shell-play { margin-top:auto; padding:14px 18px; font-size:13px; font-weight:700; letter-spacing:0.22em; min-height:48px; }
       .tempo-shell-status { font-size:10px; font-weight:500; letter-spacing:0.16em; text-transform:uppercase; color:#6b757a; min-height:14px; }
       .tempo-shell-preview-box {
         position:relative;
         width:100%;
-        height:min(72vh, 720px);
-        min-height:480px;
+        flex:1 1 auto;
+        height:100%;
+        min-height:0;
         border:1px solid rgba(243,245,242,0.08);
         background:
           radial-gradient(circle at 18% 14%, rgba(96, 224, 255, 0.08), transparent 26%),
@@ -921,88 +963,64 @@ export class GameShell {
         100% { transform:translate3d(18%, 10%, 0); }
       }
       .tempo-hidden { display:none !important; }
-      @media (max-width: 980px) {
-        .tempo-shell-ui { overflow-y:auto; overscroll-behavior:contain; }
-        .tempo-shell { padding:24px 22px; }
-        .tempo-shell-main { grid-template-columns:1fr; gap:24px; }
-        .tempo-shell-preview-box { min-height:340px; }
-        .tempo-shell-preview-grid { background-size:52px 52px, 52px 52px; }
-        .tempo-shell-preview-caption { left:20px; bottom:16px; letter-spacing:0.18em; }
-        .tempo-shell-room-card {
-          grid-template-columns:1fr;
-          padding:12px;
-          gap:10px;
-        }
-        .tempo-shell-room-card-meta {
-          font-size:12px;
-          line-height:1.55;
-        }
-        .tempo-shell-room-card .tempo-shell-action,
-        .tempo-shell-room-card .tempo-shell-chip {
-          width:100%;
-          min-height:44px;
-        }
-        .tempo-shell-directory { max-height:42vh; overflow-y:auto; }
-        .tempo-shell-song-list { max-height:44vh; }
-        .tempo-shell-modal { padding:14px; }
-        .tempo-shell-modal-dialog { max-height:92vh; padding:14px; }
-        .tempo-shell-car-preview {
-          left:auto;
-          right:18px;
-          width:170px;
-          bottom:18px;
-        }
+      .tempo-shell-directory { max-height:46vh; overflow-y:auto; padding-right:4px; }
+      @media (max-width: 1099px) {
+        .tempo-shell { padding:22px 28px 20px; gap:16px; }
+        .tempo-shell-main { grid-template-columns:minmax(280px, 340px) minmax(0, 1fr); gap:20px; }
+        .tempo-shell-brand { font-size:30px; }
+        .tempo-shell-left { gap:10px; }
+        .tempo-shell-section { gap:6px; }
+        .tempo-shell-preview-box { min-height:0; height:100%; }
+        .tempo-shell-car-preview { width:164px; bottom:18px; right:18px; }
+        .tempo-shell-car-preview-canvas { height:108px; }
       }
-      @media (max-width: 900px) and (orientation: landscape) {
-        .tempo-shell { padding:12px 20px 14px; gap:12px; min-height:100vh; }
+      @media (max-width: 819px) {
+        .tempo-shell { padding:14px 18px 14px; gap:10px; }
         .tempo-shell-topline { gap:10px; }
         .tempo-shell-brand { font-size:22px; }
         .tempo-shell-tagline { display:none; }
-        .tempo-shell-main { grid-template-columns:minmax(220px, 300px) minmax(0, 1fr); gap:18px; }
-        .tempo-shell-left { gap:12px; }
-        .tempo-shell-section { gap:6px; }
+        .tempo-shell-main { grid-template-columns:minmax(220px, 280px) minmax(0, 1fr); gap:14px; }
+        .tempo-shell-left { gap:8px; }
+        .tempo-shell-section { gap:5px; }
+        .tempo-shell-label { font-size:9px; letter-spacing:0.2em; }
         .tempo-shell-select,
         .tempo-shell-input,
-        .tempo-shell-code { padding:10px 12px; font-size:14px; }
+        .tempo-shell-code,
+        .tempo-shell-song-search { padding:9px 11px; font-size:13px; }
         .tempo-shell-chip,
-        .tempo-shell-action { padding:9px 12px; }
-        .tempo-shell-stats { gap:10px; }
-        .tempo-shell-stat-value { font-size:14px; }
-        .tempo-shell-play { margin-top:4px; padding:12px 16px; font-size:12px; letter-spacing:0.18em; }
+        .tempo-shell-action { padding:9px 12px; min-height:38px; }
+        .tempo-shell-song-genre-toggle { min-height:38px; padding:9px 12px; }
+        .tempo-shell-car-card { min-height:38px; padding:6px 9px; }
+        .tempo-shell-car-card-name { font-size:10px; }
+        .tempo-shell-song-current { padding:8px; grid-template-columns:44px minmax(0, 1fr); gap:10px; }
+        .tempo-shell-song-current-art { width:44px; height:44px; }
+        .tempo-shell-song-current-title { font-size:12px; }
+        .tempo-shell-song-current-sub { font-size:9px; }
+        .tempo-shell-stats { gap:8px; grid-template-columns:repeat(auto-fit, minmax(64px, 1fr)); }
+        .tempo-shell-stat-value { font-size:12px; }
+        .tempo-shell-play { margin-top:4px; padding:11px 14px; font-size:12px; letter-spacing:0.18em; min-height:42px; }
+        .tempo-shell-status { font-size:9px; }
         .tempo-shell-preview-box { min-height:0; height:100%; }
         .tempo-shell-preview-grid,
         .tempo-shell-preview-scan { opacity:0.32; }
         .tempo-shell-preview-caption { display:none; }
-        .tempo-shell-directory { max-height:38vh; }
-        .tempo-shell-room-block { padding:10px; }
-        .tempo-shell-song-search,
-        .tempo-shell-select,
-        .tempo-shell-input,
-        .tempo-shell-code { padding:10px 12px; font-size:14px; }
-        .tempo-shell-song-card {
-          grid-template-columns:56px minmax(0, 1fr) auto;
-        }
-        .tempo-shell-song-card-status {
-          flex-direction:row;
-          flex-wrap:wrap;
-        }
+        .tempo-shell-preview-head { top:12px; left:14px; right:14px; }
         .tempo-shell-preview-info { gap:10px; }
-        .tempo-shell-song-art { width:58px; height:58px; }
-        .tempo-shell-modal-dialog { max-height:94vh; }
-        .tempo-shell-car-preview {
-          left:auto;
-          right:14px;
-          bottom:14px;
-          width:160px;
-          padding:8px;
-          gap:6px;
-        }
-        .tempo-shell-car-preview-name {
-          font-size:11px;
-        }
-        .tempo-shell-car-preview-canvas {
-          height:96px;
-        }
+        .tempo-shell-song-art { width:52px; height:52px; }
+        .tempo-shell-song-name { font-size:18px; }
+        .tempo-shell-song-info { font-size:9px; }
+        .tempo-shell-car-preview { right:12px; bottom:12px; width:136px; padding:7px; gap:5px; }
+        .tempo-shell-car-preview-name { font-size:10px; }
+        .tempo-shell-car-preview-canvas { height:84px; }
+        .tempo-shell-modal { padding:14px; }
+        .tempo-shell-modal-dialog { max-height:92vh; padding:14px; gap:12px; }
+        .tempo-shell-modal-title { font-size:12px; }
+        .tempo-shell-song-list { max-height:48vh; }
+        .tempo-shell-directory { max-height:46vh; }
+        .tempo-shell-room-card { grid-template-columns:minmax(0, 1fr) auto; padding:9px 10px; gap:10px; }
+        .tempo-shell-room-card-title { font-size:11px; }
+        .tempo-shell-room-card-summary { font-size:10px; }
+        .tempo-shell-roster { min-height:60px; padding:8px 10px; font-size:10px; line-height:1.5; }
       }
       .tempo-rotate-prompt {
         position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
@@ -1278,15 +1296,19 @@ export class GameShell {
     this.directoryPanel.className = "tempo-shell-directory";
     this.directoryPager.className = "tempo-shell-directory-pager";
     this.rosterPanel.className = "tempo-shell-roster";
+
+    this.configureRoomButton.type = "button";
+    this.configureRoomButton.className = "tempo-shell-action is-primary";
+    this.configureRoomButton.textContent = "Rooms";
+    this.configureRoomButton.addEventListener("click", () => {
+      this.openRoomModal();
+    });
+
     this.multiplayerPanel.append(
       this.roomMeta,
+      this.configureRoomButton,
       this.roomActionRow,
       this.rosterPanel,
-      this.roomViewDeck,
-      this.hostRoomSection,
-      this.browseRoomsSection,
-      this.directoryPanel,
-      this.directoryPager,
     );
     this.roomSection.append(roomLabel, this.multiplayerPanel);
 
@@ -1405,17 +1427,74 @@ export class GameShell {
       this.songSearchQuery = this.songSearchInput.value.trim().toLowerCase();
       this.renderSongBrowser();
     });
+    this.songGenreToggle.type = "button";
+    this.songGenreToggle.className = "tempo-shell-song-genre-toggle";
+    this.songGenreToggle.addEventListener("click", () => {
+      this.songGenresExpanded = !this.songGenresExpanded;
+      this.renderSongBrowser();
+    });
     this.songGenreDeck.className = "tempo-shell-song-genres";
     this.songBrowserList.className = "tempo-shell-song-list";
     this.songModalDialog.append(
       modalHead,
       this.songModalMeta,
       this.songSearchInput,
+      this.songGenreToggle,
       this.songGenreDeck,
       this.songBrowserList,
     );
     this.songModal.appendChild(this.songModalDialog);
     this.uiLayer.appendChild(this.songModal);
+
+    this.roomModal.className = "tempo-shell-modal";
+    this.roomModal.addEventListener("click", (event) => {
+      if (event.target === this.roomModal) {
+        this.closeRoomModal();
+      }
+    });
+    this.roomModalDialog.className = "tempo-shell-modal-dialog";
+    this.roomModalDialog.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    const roomModalHead = document.createElement("div");
+    roomModalHead.className = "tempo-shell-modal-head";
+    const roomModalCopy = document.createElement("div");
+    const roomModalTitle = document.createElement("div");
+    roomModalTitle.className = "tempo-shell-modal-title";
+    roomModalTitle.textContent = "Rooms";
+    const roomModalSub = document.createElement("div");
+    roomModalSub.className = "tempo-shell-modal-sub";
+    roomModalSub.textContent = "Host a room or join one from the waiting list.";
+    roomModalCopy.append(roomModalTitle, roomModalSub);
+    this.roomModalCloseButton.type = "button";
+    this.roomModalCloseButton.className = "tempo-shell-action tempo-shell-modal-close";
+    this.roomModalCloseButton.textContent = "Close";
+    this.roomModalCloseButton.addEventListener("click", () => {
+      this.closeRoomModal();
+    });
+    roomModalHead.append(roomModalCopy, this.roomModalCloseButton);
+    this.roomModalBody.className = "tempo-shell-modal-body";
+    this.roomModalBody.append(
+      this.roomViewDeck,
+      this.hostRoomSection,
+      this.browseRoomsSection,
+      this.directoryPanel,
+      this.directoryPager,
+    );
+    this.roomModalDialog.append(roomModalHead, this.roomModalBody);
+    this.roomModal.appendChild(this.roomModalDialog);
+    this.uiLayer.appendChild(this.roomModal);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (this.roomModalOpen) {
+        event.preventDefault();
+        this.closeRoomModal();
+      } else if (this.songModalOpen) {
+        event.preventDefault();
+        this.closeSongModal();
+      }
+    });
   }
 
   private renderSongBrowser(): void {
@@ -1456,10 +1535,18 @@ export class GameShell {
       button.classList.toggle("is-active", this.songGenreFilter === genre);
       button.addEventListener("click", () => {
         this.songGenreFilter = genre;
+        this.songGenresExpanded = false;
         this.renderSongBrowser();
       });
       this.songGenreDeck.appendChild(button);
     }
+    const genreLabel = this.songGenreFilter === SONG_FILTER_ALL
+      ? "Filters: All Genres"
+      : `Filters: ${this.songGenreFilter}`;
+    const caret = this.songGenresExpanded ? "▲" : "▼";
+    this.songGenreToggle.innerHTML = `<span>${genreLabel}</span><span class="tempo-shell-song-genre-toggle-caret">${caret}</span>`;
+    this.songGenreToggle.classList.toggle("is-active", this.songGenreFilter !== SONG_FILTER_ALL);
+    this.songGenreDeck.classList.toggle("is-collapsed", !this.songGenresExpanded);
     this.songModalMeta.textContent = this.describeSongSelectionMeta(selectedSong, focusedSong, canCommit);
     this.songModal.classList.toggle("is-open", this.songModalOpen);
 
@@ -1661,6 +1748,21 @@ export class GameShell {
     this.renderSongBrowser();
   }
 
+  private openRoomModal(): void {
+    this.roomModalOpen = true;
+    this.renderRoomState();
+    this.renderMode();
+  }
+
+  private closeRoomModal(): void {
+    this.dismissRoomModal();
+    this.renderMode();
+  }
+
+  private dismissRoomModal(): void {
+    this.roomModalOpen = false;
+  }
+
   private populatePlayerCapSelect(): void {
     this.playerCapSelect.replaceChildren();
     for (const cap of [2, 4, 6, 8]) {
@@ -1712,6 +1814,7 @@ export class GameShell {
     this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !showSetupPanel);
     this.steeringSection.classList.toggle("tempo-hidden", !showSettingsPanel);
     this.trackStats.parentElement?.classList.toggle("tempo-hidden", !showSetupPanel);
+    this.configureRoomButton.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
     this.roomViewDeck.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
     this.hostRoomSection.classList.toggle("tempo-hidden", !showHostSetup || inRoom || this.mode !== "multiplayer");
     this.browseRoomsSection.classList.toggle("tempo-hidden", !showJoinBrowser);
@@ -1719,6 +1822,7 @@ export class GameShell {
     this.directoryPager.classList.toggle("tempo-hidden", !showJoinBrowser);
     this.roomActionRow.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !inRoom);
     this.rosterPanel.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !inRoom);
+    this.roomModal.classList.toggle("is-open", this.roomModalOpen);
     this.playerCapSelect.disabled = this.mode !== "multiplayer" || !showHostSetup || setupLocked;
     this.songSearchInput.disabled = !showSetupPanel || !showSongBrowser;
     this.seedInput.disabled = this.mode === "multiplayer" ? !showHostSetup || setupLocked : false;
@@ -2041,6 +2145,7 @@ export class GameShell {
   private async setMode(mode: ShellMode): Promise<void> {
     if (mode === this.mode) return;
     this.dismissSongModal();
+    this.dismissRoomModal();
     if (mode === "solo" && this.roomCode) {
       await this.leaveRoom();
     }
@@ -2389,6 +2494,9 @@ export class GameShell {
         }
         this.seedInput.value = String(this.seedOverride);
         this.playerCapSelect.value = String(this.selectedPlayerCap);
+        if (previousRoomCode !== message.roomCode && message.roomCode) {
+          this.dismissRoomModal();
+        }
         this.renderCarSelection();
         this.renderFictionButtons();
         this.renderSongBrowser();
