@@ -99,7 +99,7 @@ export class CarPreview {
     if (this.carGroup) {
       const bob = Math.sin(time * 0.0018) * 0.09;
       this.carGroup.position.y = bob;
-      this.carGroup.rotation.y = Math.sin(time * 0.0008) * 0.35 - 0.42;
+      this.carGroup.rotation.y = time * 0.0006;
       this.carGroup.rotation.z = Math.sin(time * 0.0013) * 0.03;
     }
     this.render();

@@ -151,8 +151,11 @@ export class GameShell {
   private readonly playerCapSelect = document.createElement("select");
   private readonly playerCapSection = document.createElement("div");
   private readonly carSection = document.createElement("div");
-  private readonly carGrid = document.createElement("div");
-  private readonly carCards = new Map<CarVariant, HTMLButtonElement>();
+  private readonly carCarousel = document.createElement("div");
+  private readonly carCarouselName = document.createElement("div");
+  private readonly carCarouselSwatch = document.createElement("div");
+  private readonly carCarouselPrev = document.createElement("button");
+  private readonly carCarouselNext = document.createElement("button");
   private readonly steeringSection = document.createElement("div");
   private readonly steeringSelect = document.createElement("select");
   private readonly roomNameInput = document.createElement("input");
@@ -180,8 +183,6 @@ export class GameShell {
   private readonly songInfo = document.createElement("div");
   private readonly previewTitle = document.createElement("div");
   private readonly previewSubline = document.createElement("div");
-  private readonly carPreviewDock = document.createElement("div");
-  private readonly carPreviewName = document.createElement("div");
   private readonly carPreviewHost = document.createElement("div");
   private readonly rotatePrompt = document.createElement("div");
   private readonly menuPreview: MenuPreview;
@@ -392,81 +393,60 @@ export class GameShell {
         text-transform:uppercase;
         color:#8a9297;
       }
-      .tempo-shell-car-grid {
+      .tempo-shell-car-carousel {
         display:grid;
-        grid-template-columns:repeat(2, minmax(0, 1fr));
-        gap:8px;
-      }
-      .tempo-shell-car-card {
-        display:flex;
+        grid-template-columns:auto minmax(0, 1fr) auto;
         align-items:center;
-        justify-content:space-between;
-        gap:10px;
-        min-height:44px;
-        padding:8px 10px;
-        border:1px solid rgba(243,245,242,0.1);
-        background:rgba(243,245,242,0.03);
-        color:inherit;
-        text-align:left;
+        gap:6px;
+      }
+      .tempo-shell-car-carousel-arrow {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        width:32px;
+        height:32px;
+        border:0;
+        background:transparent;
+        color:#9aa4aa;
         cursor:pointer;
+        font-size:22px;
+        font-weight:400;
+        line-height:1;
       }
-      .tempo-shell-car-card:hover {
-        border-color:rgba(243,245,242,0.24);
-        background:rgba(243,245,242,0.05);
+      .tempo-shell-car-carousel-arrow:hover {
+        color:var(--car-accent, var(--tempo-accent));
       }
-      .tempo-shell-car-card.is-selected {
-        border-color:var(--car-accent, var(--tempo-accent));
-        background:color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 10%, transparent);
-      }
-      .tempo-shell-car-card-name {
-        font-size:11px;
-        font-weight:700;
-        letter-spacing:0.16em;
-        text-transform:uppercase;
-        color:#f3f5f2;
-      }
-      .tempo-shell-car-card-swatch {
-        width:12px;
-        height:12px;
-        border-radius:999px;
-        background:var(--car-accent, var(--tempo-accent));
-        box-shadow:0 0 14px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 50%, transparent);
-      }
-      .tempo-shell-car-preview {
-        position:absolute;
-        right:22px;
-        bottom:24px;
-        width:184px;
-        z-index:5;
+      .tempo-shell-car-carousel-stage {
         display:flex;
         flex-direction:column;
-        gap:8px;
-        padding:10px;
-        border:1px solid rgba(243,245,242,0.08);
-        background:
-          linear-gradient(180deg, rgba(9, 14, 19, 0.84), rgba(7, 10, 15, 0.9)),
-          rgba(7, 10, 15, 0.88);
-        backdrop-filter:blur(8px);
-        box-shadow:0 14px 48px rgba(0,0,0,0.28);
+        align-items:stretch;
+        gap:4px;
+        min-width:0;
       }
-      .tempo-shell-car-preview-name {
-        font-size:12px;
+      .tempo-shell-car-carousel-name {
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
+        font-size:11px;
         font-weight:700;
-        letter-spacing:0.18em;
+        letter-spacing:0.22em;
         text-transform:uppercase;
         color:#f3f5f2;
       }
-      .tempo-shell-car-preview-canvas {
+      .tempo-shell-car-carousel-swatch {
+        width:8px;
+        height:8px;
+        border-radius:999px;
+        background:var(--car-accent, var(--tempo-accent));
+        box-shadow:0 0 12px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 55%, transparent);
+      }
+      .tempo-shell-car-carousel-canvas {
         position:relative;
-        height:126px;
-        border:1px solid rgba(243,245,242,0.08);
-        background:
-          radial-gradient(circle at 50% 54%, color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 22%, transparent), transparent 48%),
-          linear-gradient(180deg, rgba(255,255,255,0.03), transparent 38%),
-          rgba(5, 10, 14, 0.74);
+        height:118px;
         overflow:hidden;
       }
-      .tempo-shell-car-preview-canvas canvas {
+      .tempo-shell-car-carousel-canvas canvas {
         width:100% !important;
         height:100% !important;
         display:block;
@@ -971,8 +951,7 @@ export class GameShell {
         .tempo-shell-left { gap:10px; }
         .tempo-shell-section { gap:6px; }
         .tempo-shell-preview-box { min-height:0; height:100%; }
-        .tempo-shell-car-preview { width:164px; bottom:18px; right:18px; }
-        .tempo-shell-car-preview-canvas { height:108px; }
+        .tempo-shell-car-carousel-canvas { height:104px; }
       }
       @media (max-width: 819px) {
         .tempo-shell { padding:14px 18px 14px; gap:10px; }
@@ -990,8 +969,9 @@ export class GameShell {
         .tempo-shell-chip,
         .tempo-shell-action { padding:9px 12px; min-height:38px; }
         .tempo-shell-song-genre-toggle { min-height:38px; padding:9px 12px; }
-        .tempo-shell-car-card { min-height:38px; padding:6px 9px; }
-        .tempo-shell-car-card-name { font-size:10px; }
+        .tempo-shell-car-carousel-arrow { width:28px; height:28px; font-size:18px; }
+        .tempo-shell-car-carousel-name { font-size:10px; letter-spacing:0.2em; }
+        .tempo-shell-car-carousel-canvas { height:80px; }
         .tempo-shell-song-current { padding:8px; grid-template-columns:44px minmax(0, 1fr); gap:10px; }
         .tempo-shell-song-current-art { width:44px; height:44px; }
         .tempo-shell-song-current-title { font-size:12px; }
@@ -1009,9 +989,6 @@ export class GameShell {
         .tempo-shell-song-art { width:52px; height:52px; }
         .tempo-shell-song-name { font-size:18px; }
         .tempo-shell-song-info { font-size:9px; }
-        .tempo-shell-car-preview { right:12px; bottom:12px; width:136px; padding:7px; gap:5px; }
-        .tempo-shell-car-preview-name { font-size:10px; }
-        .tempo-shell-car-preview-canvas { height:84px; }
         .tempo-shell-modal { padding:14px; }
         .tempo-shell-modal-dialog { max-height:92vh; padding:14px; gap:12px; }
         .tempo-shell-modal-title { font-size:12px; }
@@ -1175,25 +1152,31 @@ export class GameShell {
     const carLabel = document.createElement("div");
     carLabel.className = "tempo-shell-label";
     carLabel.textContent = "Car";
-    this.carGrid.className = "tempo-shell-car-grid";
-    for (const car of CAR_VARIANTS) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "tempo-shell-car-card";
-      button.style.setProperty("--car-accent", car.accent);
-      button.addEventListener("click", () => {
-        this.handleCarSelection(car.id);
-      });
-      const name = document.createElement("div");
-      name.className = "tempo-shell-car-card-name";
-      name.textContent = car.label;
-      const swatch = document.createElement("div");
-      swatch.className = "tempo-shell-car-card-swatch";
-      button.append(name, swatch);
-      this.carCards.set(car.id, button);
-      this.carGrid.appendChild(button);
-    }
-    this.carSection.append(carLabel, this.carGrid);
+    this.carCarousel.className = "tempo-shell-car-carousel";
+    this.carCarouselPrev.type = "button";
+    this.carCarouselPrev.className = "tempo-shell-car-carousel-arrow";
+    this.carCarouselPrev.setAttribute("aria-label", "Previous car");
+    this.carCarouselPrev.textContent = "‹";
+    this.carCarouselPrev.addEventListener("click", () => {
+      this.cycleCar(-1);
+    });
+    this.carCarouselNext.type = "button";
+    this.carCarouselNext.className = "tempo-shell-car-carousel-arrow";
+    this.carCarouselNext.setAttribute("aria-label", "Next car");
+    this.carCarouselNext.textContent = "›";
+    this.carCarouselNext.addEventListener("click", () => {
+      this.cycleCar(1);
+    });
+    const carStage = document.createElement("div");
+    carStage.className = "tempo-shell-car-carousel-stage";
+    this.carCarouselName.className = "tempo-shell-car-carousel-name";
+    this.carCarouselSwatch.className = "tempo-shell-car-carousel-swatch";
+    const carName = document.createElement("span");
+    this.carCarouselName.append(this.carCarouselSwatch, carName);
+    this.carPreviewHost.className = "tempo-shell-car-carousel-canvas";
+    carStage.append(this.carCarouselName, this.carPreviewHost);
+    this.carCarousel.append(this.carCarouselPrev, carStage, this.carCarouselNext);
+    this.carSection.append(carLabel, this.carCarousel);
 
     this.steeringSection.className = "tempo-shell-section";
     const steeringLabel = document.createElement("div");
@@ -1378,15 +1361,8 @@ export class GameShell {
     previewMeta.className = "tempo-shell-preview-meta";
     previewMeta.append(this.previewTitle, this.previewSubline);
     previewHead.append(previewInfo, previewMeta);
-    this.carPreviewDock.className = "tempo-shell-car-preview";
-    this.carPreviewName.className = "tempo-shell-car-preview-name";
-    this.carPreviewHost.className = "tempo-shell-car-preview-canvas";
-    this.carPreviewDock.append(
-      this.carPreviewName,
-      this.carPreviewHost,
-    );
     previewFx.append(previewGrid, previewSweep, previewVignette, previewFrame, previewCaption);
-    previewBox.append(this.previewHost, previewFx, previewHead, this.carPreviewDock);
+    previewBox.append(this.previewHost, previewFx, previewHead);
     right.append(previewBox);
 
     main.append(left, right);
@@ -1837,9 +1813,8 @@ export class GameShell {
       this.playButton.classList.toggle("tempo-hidden", !showSetupPanel);
     }
 
-    for (const button of this.carCards.values()) {
-      button.disabled = this.launchInFlight;
-    }
+    this.carCarouselPrev.disabled = this.launchInFlight;
+    this.carCarouselNext.disabled = this.launchInFlight;
 
     const localPlayer = this.roomPlayers.find((player) => player.clientId === this.clientId) ?? null;
     this.readyButton.textContent = localPlayer?.ready ? "Unready" : "Ready";
@@ -1853,15 +1828,9 @@ export class GameShell {
 
   private renderCarSelection(): void {
     const selectedCar = getCarVariantMeta(this.selectedCarVariant);
-    for (const car of CAR_VARIANTS) {
-      const button = this.carCards.get(car.id);
-      if (!button) continue;
-      button.classList.toggle("is-selected", car.id === this.selectedCarVariant);
-      button.setAttribute("aria-pressed", car.id === this.selectedCarVariant ? "true" : "false");
-    }
-
-    this.carPreviewDock.style.setProperty("--car-accent", selectedCar.accent);
-    this.carPreviewName.textContent = selectedCar.label;
+    this.carCarousel.style.setProperty("--car-accent", selectedCar.accent);
+    const nameSpan = this.carCarouselName.querySelector("span");
+    if (nameSpan) nameSpan.textContent = selectedCar.label;
     this.carPreview.setSpec({
       accent: selectedCar.accent,
       trim: selectedCar.trim,
@@ -1877,6 +1846,13 @@ export class GameShell {
     if (this.mode === "multiplayer" && this.roomClient && this.roomCode) {
       this.roomClient.send({ type: "room.selectCar", carVariant: this.selectedCarVariant });
     }
+  }
+
+  private cycleCar(delta: 1 | -1): void {
+    const index = CAR_VARIANTS.findIndex((car) => car.id === this.selectedCarVariant);
+    const count = CAR_VARIANTS.length;
+    const nextIndex = (index + delta + count) % count;
+    this.handleCarSelection(CAR_VARIANTS[nextIndex].id);
   }
 
   private renderFictionButtons(): void {
