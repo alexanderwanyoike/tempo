@@ -48,11 +48,61 @@ const FICTION_OPTIONS: Array<{ id: EnvironmentFictionId; label: string; blurb: s
   { id: 3, label: "Data Cathedral", blurb: "Ceremonial spectral architecture" },
 ];
 
-const CAR_VARIANTS: Array<{ id: CarVariant; label: string }> = [
-  { id: "vector", label: "Vector" },
-  { id: "ember", label: "Ember" },
-  { id: "nova", label: "Nova" },
-  { id: "ghost", label: "Ghost" },
+const CAR_VARIANTS: Array<{
+  id: CarVariant;
+  label: string;
+  blurb: string;
+  accent: string;
+  trim: string;
+  canopy: string;
+  silhouette: "dart" | "muscle" | "wedge" | "phantom";
+  speedClass: string;
+  handlingClass: string;
+}> = [
+  {
+    id: "vector",
+    label: "Vector",
+    blurb: "Precision line cutter for clean race reads.",
+    accent: "#14f1ff",
+    trim: "#0f6d74",
+    canopy: "#0e1320",
+    silhouette: "dart",
+    speedClass: "Balanced",
+    handlingClass: "Clean",
+  },
+  {
+    id: "ember",
+    label: "Ember",
+    blurb: "Hotrod pressure with heavier visual punch.",
+    accent: "#ff825c",
+    trim: "#7b220d",
+    canopy: "#1e1010",
+    silhouette: "muscle",
+    speedClass: "Aggro",
+    handlingClass: "Heavy",
+  },
+  {
+    id: "nova",
+    label: "Nova",
+    blurb: "Sharp attack profile with bright reactor glare.",
+    accent: "#f6f06d",
+    trim: "#615d0e",
+    canopy: "#14161b",
+    silhouette: "wedge",
+    speedClass: "Fast",
+    handlingClass: "Sharp",
+  },
+  {
+    id: "ghost",
+    label: "Ghost",
+    blurb: "Spectral bodywork tuned for nocturnal style.",
+    accent: "#caa8ff",
+    trim: "#432667",
+    canopy: "#120f1d",
+    silhouette: "phantom",
+    speedClass: "Glide",
+    handlingClass: "Loose",
+  },
 ];
 
 const STEERING_PRESETS = [
@@ -109,7 +159,8 @@ export class GameShell {
   private readonly playerCapSelect = document.createElement("select");
   private readonly playerCapSection = document.createElement("div");
   private readonly carSection = document.createElement("div");
-  private readonly carSelect = document.createElement("select");
+  private readonly carGrid = document.createElement("div");
+  private readonly carCards = new Map<CarVariant, HTMLButtonElement>();
   private readonly steeringSection = document.createElement("div");
   private readonly steeringSelect = document.createElement("select");
   private readonly roomNameInput = document.createElement("input");
@@ -137,6 +188,19 @@ export class GameShell {
   private readonly songInfo = document.createElement("div");
   private readonly previewTitle = document.createElement("div");
   private readonly previewSubline = document.createElement("div");
+  private readonly carPreviewDock = document.createElement("div");
+  private readonly carPreviewLabel = document.createElement("div");
+  private readonly carPreviewName = document.createElement("div");
+  private readonly carPreviewBlurb = document.createElement("div");
+  private readonly carPreviewStats = document.createElement("div");
+  private readonly carPreviewHolo = document.createElement("div");
+  private readonly carPreviewBody = document.createElement("div");
+  private readonly carPreviewCanopy = document.createElement("div");
+  private readonly carPreviewNose = document.createElement("div");
+  private readonly carPreviewWingLeft = document.createElement("div");
+  private readonly carPreviewWingRight = document.createElement("div");
+  private readonly carPreviewThrusterLeft = document.createElement("div");
+  private readonly carPreviewThrusterRight = document.createElement("div");
   private readonly rotatePrompt = document.createElement("div");
   private readonly menuPreview: MenuPreview;
   private readonly auditionPlayer = new SongAuditionPlayer();
@@ -218,8 +282,8 @@ export class GameShell {
     this.browseSongId = this.selectedSongId;
 
     this.populatePlayerCapSelect();
-    this.populateCarSelect();
     this.populateSteeringSelect();
+    this.renderCarSelection();
     this.renderFictionButtons();
     this.renderSongBrowser();
     this.renderSelection();
@@ -337,6 +401,212 @@ export class GameShell {
         letter-spacing:0.16em;
         text-transform:uppercase;
         color:#8a9297;
+      }
+      .tempo-shell-car-grid {
+        display:grid;
+        grid-template-columns:repeat(2, minmax(0, 1fr));
+        gap:8px;
+      }
+      .tempo-shell-car-card {
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        padding:10px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:rgba(243,245,242,0.03);
+        color:inherit;
+        text-align:left;
+        cursor:pointer;
+      }
+      .tempo-shell-car-card:hover {
+        border-color:rgba(243,245,242,0.24);
+        background:rgba(243,245,242,0.05);
+      }
+      .tempo-shell-car-card.is-selected {
+        border-color:var(--car-accent, var(--tempo-accent));
+        background:color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 10%, transparent);
+      }
+      .tempo-shell-car-card-top {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:10px;
+      }
+      .tempo-shell-car-card-name {
+        font-size:13px;
+        font-weight:700;
+        letter-spacing:0.08em;
+        text-transform:uppercase;
+        color:#f3f5f2;
+      }
+      .tempo-shell-car-card-swatch {
+        width:12px;
+        height:12px;
+        border-radius:999px;
+        background:var(--car-accent, var(--tempo-accent));
+        box-shadow:0 0 14px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 50%, transparent);
+      }
+      .tempo-shell-car-card-sub {
+        font-size:9px;
+        line-height:1.45;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8a9297;
+      }
+      .tempo-shell-car-card-tags {
+        display:flex;
+        flex-wrap:wrap;
+        gap:6px;
+      }
+      .tempo-shell-car-preview {
+        position:absolute;
+        right:22px;
+        bottom:24px;
+        width:min(320px, calc(100% - 44px));
+        z-index:5;
+        display:flex;
+        flex-direction:column;
+        gap:12px;
+        padding:14px;
+        border:1px solid rgba(243,245,242,0.08);
+        background:
+          linear-gradient(180deg, rgba(9, 14, 19, 0.84), rgba(7, 10, 15, 0.9)),
+          rgba(7, 10, 15, 0.88);
+        backdrop-filter:blur(8px);
+        box-shadow:0 14px 48px rgba(0,0,0,0.28);
+      }
+      .tempo-shell-car-preview-label {
+        font-size:9px;
+        font-weight:700;
+        letter-spacing:0.24em;
+        text-transform:uppercase;
+        color:#8a9297;
+      }
+      .tempo-shell-car-preview-name {
+        font-size:20px;
+        font-weight:700;
+        letter-spacing:-0.02em;
+        color:#f3f5f2;
+      }
+      .tempo-shell-car-preview-blurb {
+        font-size:10px;
+        line-height:1.5;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#97a3a9;
+      }
+      .tempo-shell-car-preview-stats {
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+      }
+      .tempo-shell-car-holo {
+        position:relative;
+        height:122px;
+        border:1px solid rgba(243,245,242,0.08);
+        background:
+          radial-gradient(circle at 50% 54%, color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 22%, transparent), transparent 48%),
+          linear-gradient(180deg, rgba(255,255,255,0.03), transparent 38%),
+          rgba(5, 10, 14, 0.74);
+        overflow:hidden;
+      }
+      .tempo-shell-car-holo::before {
+        content:"";
+        position:absolute;
+        inset:auto 10% 16px;
+        height:1px;
+        background:linear-gradient(90deg, transparent, color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 80%, white 10%), transparent);
+      }
+      .tempo-shell-car-model {
+        position:absolute;
+        inset:0;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        transform:translateY(6px);
+      }
+      .tempo-shell-car-body,
+      .tempo-shell-car-canopy,
+      .tempo-shell-car-nose,
+      .tempo-shell-car-wing,
+      .tempo-shell-car-thruster {
+        position:absolute;
+      }
+      .tempo-shell-car-body {
+        width:150px;
+        height:34px;
+        border:1px solid color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 60%, white 18%);
+        background:linear-gradient(135deg, color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 82%, #0b1117 18%), color-mix(in srgb, var(--car-trim, #142028) 76%, #05080c 24%));
+        box-shadow:
+          0 0 26px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 28%, transparent),
+          inset 0 0 20px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 16%, transparent);
+        clip-path:polygon(8% 24%, 22% 10%, 78% 10%, 92% 24%, 100% 50%, 92% 76%, 78% 90%, 22% 90%, 8% 76%, 0% 50%);
+      }
+      .tempo-shell-car-canopy {
+        width:58px;
+        height:20px;
+        background:linear-gradient(135deg, color-mix(in srgb, var(--car-canopy, #111827) 88%, white 12%), #05080c);
+        border:1px solid rgba(243,245,242,0.22);
+        transform:translateY(-3px);
+        clip-path:polygon(18% 0%, 82% 0%, 100% 48%, 82% 100%, 18% 100%, 0% 48%);
+      }
+      .tempo-shell-car-nose {
+        width:38px;
+        height:12px;
+        transform:translateX(82px);
+        background:linear-gradient(90deg, color-mix(in srgb, var(--car-trim, #142028) 80%, transparent), color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 68%, white 12%));
+        clip-path:polygon(0% 20%, 72% 0%, 100% 50%, 72% 100%, 0% 80%, 18% 50%);
+      }
+      .tempo-shell-car-wing {
+        width:38px;
+        height:10px;
+        background:color-mix(in srgb, var(--car-trim, #142028) 80%, white 12%);
+      }
+      .tempo-shell-car-wing.left {
+        transform:translate(-76px, 12px) skewX(-28deg);
+      }
+      .tempo-shell-car-wing.right {
+        transform:translate(76px, 12px) skewX(28deg);
+      }
+      .tempo-shell-car-thruster {
+        width:14px;
+        height:8px;
+        background:color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 78%, white 12%);
+        box-shadow:0 0 18px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 46%, transparent);
+      }
+      .tempo-shell-car-thruster.left {
+        transform:translate(-54px, 0);
+      }
+      .tempo-shell-car-thruster.right {
+        transform:translate(-38px, 0);
+      }
+      .tempo-shell-car-preview[data-silhouette="muscle"] .tempo-shell-car-body {
+        width:162px;
+        height:38px;
+        clip-path:polygon(6% 30%, 16% 8%, 84% 8%, 94% 30%, 100% 50%, 94% 70%, 84% 92%, 16% 92%, 6% 70%, 0% 50%);
+      }
+      .tempo-shell-car-preview[data-silhouette="muscle"] .tempo-shell-car-wing.left {
+        transform:translate(-80px, 14px) skewX(-36deg);
+      }
+      .tempo-shell-car-preview[data-silhouette="muscle"] .tempo-shell-car-wing.right {
+        transform:translate(80px, 14px) skewX(36deg);
+      }
+      .tempo-shell-car-preview[data-silhouette="wedge"] .tempo-shell-car-body {
+        width:156px;
+        height:30px;
+        clip-path:polygon(10% 36%, 30% 12%, 84% 8%, 100% 50%, 84% 92%, 30% 88%, 10% 64%, 0% 50%);
+      }
+      .tempo-shell-car-preview[data-silhouette="wedge"] .tempo-shell-car-nose {
+        width:46px;
+        transform:translateX(86px);
+      }
+      .tempo-shell-car-preview[data-silhouette="phantom"] .tempo-shell-car-body {
+        width:146px;
+        height:34px;
+        clip-path:polygon(12% 22%, 30% 6%, 70% 6%, 88% 22%, 100% 50%, 88% 78%, 70% 94%, 30% 94%, 12% 78%, 0% 50%);
+      }
+      .tempo-shell-car-preview[data-silhouette="phantom"] .tempo-shell-car-canopy {
+        width:64px;
       }
       .tempo-shell-song-genres {
         display:flex;
@@ -825,6 +1095,12 @@ export class GameShell {
         .tempo-shell-song-list { max-height:44vh; }
         .tempo-shell-modal { padding:14px; }
         .tempo-shell-modal-dialog { max-height:92vh; padding:14px; }
+        .tempo-shell-car-preview {
+          left:18px;
+          right:18px;
+          width:auto;
+          bottom:18px;
+        }
       }
       @media (max-width: 900px) and (orientation: landscape) {
         .tempo-shell { padding:12px 20px 14px; gap:12px; min-height:100vh; }
@@ -862,6 +1138,23 @@ export class GameShell {
         .tempo-shell-preview-info { gap:10px; }
         .tempo-shell-song-art { width:58px; height:58px; }
         .tempo-shell-modal-dialog { max-height:94vh; }
+        .tempo-shell-car-grid {
+          grid-template-columns:1fr;
+        }
+        .tempo-shell-car-preview {
+          left:14px;
+          right:14px;
+          bottom:14px;
+          width:auto;
+          padding:10px;
+          gap:8px;
+        }
+        .tempo-shell-car-preview-name {
+          font-size:16px;
+        }
+        .tempo-shell-car-holo {
+          height:94px;
+        }
       }
       .tempo-rotate-prompt {
         position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
@@ -1016,14 +1309,37 @@ export class GameShell {
     const carLabel = document.createElement("div");
     carLabel.className = "tempo-shell-label";
     carLabel.textContent = "Car";
-    this.carSelect.className = "tempo-shell-select";
-    this.carSelect.addEventListener("change", () => {
-      this.selectedCarVariant = this.carSelect.value as CarVariant;
-      if (this.mode === "multiplayer" && this.roomClient && this.roomCode) {
-        this.roomClient.send({ type: "room.selectCar", carVariant: this.selectedCarVariant });
-      }
-    });
-    this.carSection.append(carLabel, this.carSelect);
+    this.carGrid.className = "tempo-shell-car-grid";
+    for (const car of CAR_VARIANTS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tempo-shell-car-card";
+      button.style.setProperty("--car-accent", car.accent);
+      button.addEventListener("click", () => {
+        this.handleCarSelection(car.id);
+      });
+      const top = document.createElement("div");
+      top.className = "tempo-shell-car-card-top";
+      const name = document.createElement("div");
+      name.className = "tempo-shell-car-card-name";
+      name.textContent = car.label;
+      const swatch = document.createElement("div");
+      swatch.className = "tempo-shell-car-card-swatch";
+      top.append(name, swatch);
+      const sub = document.createElement("div");
+      sub.className = "tempo-shell-car-card-sub";
+      sub.textContent = car.blurb;
+      const tags = document.createElement("div");
+      tags.className = "tempo-shell-car-card-tags";
+      tags.append(
+        createSongTag(car.speedClass),
+        createSongTag(car.handlingClass),
+      );
+      button.append(top, sub, tags);
+      this.carCards.set(car.id, button);
+      this.carGrid.appendChild(button);
+    }
+    this.carSection.append(carLabel, this.carGrid);
 
     this.steeringSection.className = "tempo-shell-section";
     const steeringLabel = document.createElement("div");
@@ -1204,8 +1520,41 @@ export class GameShell {
     previewMeta.className = "tempo-shell-preview-meta";
     previewMeta.append(this.previewTitle, this.previewSubline);
     previewHead.append(previewInfo, previewMeta);
+    this.carPreviewDock.className = "tempo-shell-car-preview";
+    this.carPreviewLabel.className = "tempo-shell-car-preview-label";
+    this.carPreviewLabel.textContent = "Selected Hovercar";
+    this.carPreviewName.className = "tempo-shell-car-preview-name";
+    this.carPreviewBlurb.className = "tempo-shell-car-preview-blurb";
+    this.carPreviewStats.className = "tempo-shell-car-preview-stats";
+    this.carPreviewHolo.className = "tempo-shell-car-holo";
+    const carModel = document.createElement("div");
+    carModel.className = "tempo-shell-car-model";
+    this.carPreviewBody.className = "tempo-shell-car-body";
+    this.carPreviewCanopy.className = "tempo-shell-car-canopy";
+    this.carPreviewNose.className = "tempo-shell-car-nose";
+    this.carPreviewWingLeft.className = "tempo-shell-car-wing left";
+    this.carPreviewWingRight.className = "tempo-shell-car-wing right";
+    this.carPreviewThrusterLeft.className = "tempo-shell-car-thruster left";
+    this.carPreviewThrusterRight.className = "tempo-shell-car-thruster right";
+    carModel.append(
+      this.carPreviewWingLeft,
+      this.carPreviewWingRight,
+      this.carPreviewBody,
+      this.carPreviewCanopy,
+      this.carPreviewNose,
+      this.carPreviewThrusterLeft,
+      this.carPreviewThrusterRight,
+    );
+    this.carPreviewHolo.appendChild(carModel);
+    this.carPreviewDock.append(
+      this.carPreviewLabel,
+      this.carPreviewName,
+      this.carPreviewBlurb,
+      this.carPreviewStats,
+      this.carPreviewHolo,
+    );
     previewFx.append(previewGrid, previewSweep, previewVignette, previewFrame, previewCaption);
-    previewBox.append(this.previewHost, previewFx, previewHead);
+    previewBox.append(this.previewHost, previewFx, previewHead, this.carPreviewDock);
     right.append(previewBox);
 
     main.append(left, right);
@@ -1513,17 +1862,6 @@ export class GameShell {
     this.playerCapSelect.value = String(this.selectedPlayerCap);
   }
 
-  private populateCarSelect(): void {
-    this.carSelect.replaceChildren();
-    for (const car of CAR_VARIANTS) {
-      const option = document.createElement("option");
-      option.value = car.id;
-      option.textContent = car.label;
-      this.carSelect.appendChild(option);
-    }
-    this.carSelect.value = this.selectedCarVariant;
-  }
-
   private populateSteeringSelect(): void {
     this.steeringSelect.replaceChildren();
     for (const preset of STEERING_PRESETS) {
@@ -1585,6 +1923,10 @@ export class GameShell {
       this.playButton.classList.toggle("tempo-hidden", !showSetupPanel);
     }
 
+    for (const button of this.carCards.values()) {
+      button.disabled = this.launchInFlight;
+    }
+
     const localPlayer = this.roomPlayers.find((player) => player.clientId === this.clientId) ?? null;
     this.readyButton.textContent = localPlayer?.ready ? "Unready" : "Ready";
     this.readyButton.disabled = !inRoom || this.roomPhase !== "lobby";
@@ -1593,6 +1935,36 @@ export class GameShell {
     this.createRoomButton.disabled = this.mode !== "multiplayer" || inRoom || this.multiplayerView !== "host";
     this.roomNameInput.disabled = this.mode !== "multiplayer" || inRoom || this.multiplayerView !== "host";
     this.roomSearchInput.disabled = !showJoinBrowser;
+  }
+
+  private renderCarSelection(): void {
+    const selectedCar = getCarVariantMeta(this.selectedCarVariant);
+    for (const car of CAR_VARIANTS) {
+      const button = this.carCards.get(car.id);
+      if (!button) continue;
+      button.classList.toggle("is-selected", car.id === this.selectedCarVariant);
+      button.setAttribute("aria-pressed", car.id === this.selectedCarVariant ? "true" : "false");
+    }
+
+    this.carPreviewDock.dataset.silhouette = selectedCar.silhouette;
+    this.carPreviewDock.style.setProperty("--car-accent", selectedCar.accent);
+    this.carPreviewDock.style.setProperty("--car-trim", selectedCar.trim);
+    this.carPreviewDock.style.setProperty("--car-canopy", selectedCar.canopy);
+    this.carPreviewName.textContent = selectedCar.label;
+    this.carPreviewBlurb.textContent = selectedCar.blurb;
+    this.carPreviewStats.replaceChildren(
+      createSongTag(selectedCar.speedClass),
+      createSongTag(selectedCar.handlingClass),
+    );
+  }
+
+  private handleCarSelection(variant: CarVariant): void {
+    if (variant === this.selectedCarVariant) return;
+    this.selectedCarVariant = variant;
+    this.renderCarSelection();
+    if (this.mode === "multiplayer" && this.roomClient && this.roomCode) {
+      this.roomClient.send({ type: "room.selectCar", carVariant: this.selectedCarVariant });
+    }
   }
 
   private renderFictionButtons(): void {
@@ -2191,6 +2563,10 @@ export class GameShell {
         this.roomHostId = message.hostId;
         this.roomPlayers = message.players;
         this.multiplayerView = message.hostId === this.clientId ? "host" : "join";
+        const localPlayer = message.players.find((player) => player.clientId === this.clientId) ?? null;
+        if (localPlayer) {
+          this.selectedCarVariant = localPlayer.carVariant;
+        }
         this.selectedSongId = message.setup.songId;
         this.selectedFictionId = clampFictionId(message.setup.fictionId);
         this.seedOverride = message.setup.seed;
@@ -2205,6 +2581,7 @@ export class GameShell {
         }
         this.seedInput.value = String(this.seedOverride);
         this.playerCapSelect.value = String(this.selectedPlayerCap);
+        this.renderCarSelection();
         this.renderFictionButtons();
         this.renderSongBrowser();
         this.renderSelection();
@@ -2401,6 +2778,10 @@ function compareSongsForBrowser(a: SongCatalogEntry, b: SongCatalogEntry): numbe
     return b.bpm - a.bpm;
   }
   return a.title.localeCompare(b.title);
+}
+
+function getCarVariantMeta(variant: CarVariant) {
+  return CAR_VARIANTS.find((car) => car.id === variant) ?? CAR_VARIANTS[0];
 }
 
 function buildFallbackAlbumArt(song: Pick<SongCatalogEntry, "title" | "artist" | "genre">): string {
