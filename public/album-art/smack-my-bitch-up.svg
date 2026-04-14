@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="title desc">
+  <title id="title">Smack My Bitch Up Album Art</title>
+  <desc id="desc">Abstract industrial breakbeat cover art with diagonal bars and glitch lines.</desc>
+  <rect width="720" height="720" fill="#090b0e"/>
+  <rect x="66" y="92" width="588" height="520" fill="#11161c" stroke="#95e6ff" stroke-opacity="0.18" stroke-width="2"/>
+  <g opacity="0.88">
+    <rect x="116" y="132" width="82" height="432" fill="#ff8a5b"/>
+    <rect x="236" y="132" width="52" height="432" fill="#f5f7fa" fill-opacity="0.84"/>
+    <rect x="328" y="132" width="128" height="432" fill="#4ce1ff"/>
+    <rect x="498" y="132" width="112" height="432" fill="#ff4d7d"/>
+  </g>
+  <g stroke="#d6e4ef" stroke-opacity="0.22" stroke-width="6">
+    <line x1="92" y1="214" x2="628" y2="214"/>
+    <line x1="92" y1="310" x2="628" y2="310"/>
+    <line x1="92" y1="406" x2="628" y2="406"/>
+    <line x1="92" y1="502" x2="628" y2="502"/>
+  </g>
+  <text x="88" y="626" fill="#f5f7fa" font-family="Arial, sans-serif" font-size="52" font-weight="700" letter-spacing="3">SMACK MY BITCH UP</text>
+  <text x="90" y="664" fill="#9aa7b1" font-family="Arial, sans-serif" font-size="22" letter-spacing="8">THE PRODIGY / BREAKS</text>
+</svg>
