@@ -163,6 +163,10 @@ export type ClientMessage =
       carVariant: CarVariant;
     }
   | {
+      type: "room.setPlayerName";
+      name: string;
+    }
+  | {
       type: "room.setReady";
       ready: boolean;
     }

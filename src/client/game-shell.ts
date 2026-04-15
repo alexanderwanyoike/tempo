@@ -97,7 +97,10 @@ const STEERING_PRESETS = [
   { id: "sharp", label: "Sharp", value: 2.45 },
 ] as const;
 
+const PLAYER_NAME_STORAGE_KEY = "tempo.player-name";
 const STEERING_STORAGE_KEY = "tempo.steering-preset";
+const PLAYER_NAME_MIN_LENGTH = 2;
+const PLAYER_NAME_MAX_LENGTH = 18;
 const DEFAULT_STEERING_PRESET = "responsive";
 const SONG_FILTER_ALL = "All";
 const SONG_GENRE_ORDER = [
@@ -156,6 +159,8 @@ export class GameShell {
   private readonly carCarouselSwatch = document.createElement("div");
   private readonly carCarouselPrev = document.createElement("button");
   private readonly carCarouselNext = document.createElement("button");
+  private readonly playerNameSection = document.createElement("div");
+  private readonly playerNameInput = document.createElement("input");
   private readonly steeringSection = document.createElement("div");
   private readonly steeringSelect = document.createElement("select");
   private readonly roomNameInput = document.createElement("input");
@@ -204,6 +209,7 @@ export class GameShell {
   private seedOverride: number | null = null;
   private selectedPlayerCap = 4;
   private selectedCarVariant: CarVariant = "vector";
+  private selectedPlayerName = loadPlayerNamePreference();
   private selectedSteeringPreset = loadSteeringPresetPreference();
   private panelView: ShellPanelView = "setup";
   private mode: ShellMode = "solo";
@@ -1178,6 +1184,32 @@ export class GameShell {
     this.carCarousel.append(this.carCarouselPrev, carStage, this.carCarouselNext);
     this.carSection.append(carLabel, this.carCarousel);
 
+    this.playerNameSection.className = "tempo-shell-section";
+    const playerNameLabel = document.createElement("div");
+    playerNameLabel.className = "tempo-shell-label";
+    playerNameLabel.textContent = "Pilot Tag";
+    this.playerNameInput.className = "tempo-shell-input";
+    this.playerNameInput.type = "text";
+    this.playerNameInput.maxLength = PLAYER_NAME_MAX_LENGTH;
+    this.playerNameInput.placeholder = "Pilot Name";
+    this.playerNameInput.value = this.selectedPlayerName;
+    this.playerNameInput.addEventListener("blur", () => {
+      this.commitPlayerName();
+    });
+    this.playerNameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.commitPlayerName();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.playerNameInput.value = this.selectedPlayerName;
+        this.playerNameInput.blur();
+      }
+    });
+    this.playerNameSection.append(playerNameLabel, this.playerNameInput);
+
     this.steeringSection.className = "tempo-shell-section";
     const steeringLabel = document.createElement("div");
     steeringLabel.className = "tempo-shell-label";
@@ -1313,6 +1345,7 @@ export class GameShell {
       modeSection,
       this.panelToggleRow,
       this.carSection,
+      this.playerNameSection,
       this.steeringSection,
       this.roomSection,
       this.songSection,
@@ -1787,6 +1820,7 @@ export class GameShell {
     this.seedSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
     this.playerCapSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup || this.mode !== "multiplayer");
     this.carSection.classList.toggle("tempo-hidden", !showSetupPanel);
+    this.playerNameSection.classList.toggle("tempo-hidden", !showSettingsPanel);
     this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !showSetupPanel);
     this.steeringSection.classList.toggle("tempo-hidden", !showSettingsPanel);
     this.trackStats.parentElement?.classList.toggle("tempo-hidden", !showSetupPanel);
@@ -2168,6 +2202,7 @@ export class GameShell {
       };
     }
     await this.roomClient.ensureConnected();
+    this.syncPlayerIdentity();
     this.startDirectoryPolling();
     this.requestDirectoryRefresh();
     return this.roomClient;
@@ -2232,6 +2267,26 @@ export class GameShell {
     this.roomClient?.send({ type: "room.setReady", ready: !player.ready });
   }
 
+  private commitPlayerName(): void {
+    const nextName = sanitizePlayerName(this.playerNameInput.value);
+    if (!nextName) {
+      this.playerNameInput.value = this.selectedPlayerName;
+      return;
+    }
+    this.playerNameInput.value = nextName;
+    if (nextName === this.selectedPlayerName) return;
+    this.selectedPlayerName = nextName;
+    savePreference(PLAYER_NAME_STORAGE_KEY, nextName);
+    this.syncPlayerIdentity();
+  }
+
+  private syncPlayerIdentity(): void {
+    this.roomClient?.send({
+      type: "room.setPlayerName",
+      name: this.selectedPlayerName,
+    });
+  }
+
   private syncRoomSetup(): void {
     if (this.mode !== "multiplayer") return;
     if (!this.roomCode || this.roomHostId !== this.clientId || this.roomPhase !== "lobby") return;
@@ -2259,7 +2314,10 @@ export class GameShell {
     try {
       await this.stopActiveRace();
       const launchOptions = reuseLastLaunch && this.lastLaunch
-        ? this.lastLaunch
+        ? {
+            ...this.lastLaunch,
+            localPlayerName: this.selectedPlayerName,
+          }
         : this.buildSoloLaunchOptions(song!);
       const runtime = await import("./runtime/app");
       const app = await runtime.App.create(this.raceHost, this.config, launchOptions);
@@ -2296,6 +2354,7 @@ export class GameShell {
       debugHud: this.debugHud,
       steeringSensitivity: steeringPresetValue(this.selectedSteeringPreset),
       localPlayerId: "solo",
+      localPlayerName: this.selectedPlayerName,
       carVariant: this.selectedCarVariant,
       onRetry: () => {
         void this.launchSoloRace(true);
@@ -2331,6 +2390,7 @@ export class GameShell {
         debugHud: this.debugHud,
         steeringSensitivity: steeringPresetValue(this.selectedSteeringPreset),
         localPlayerId: this.clientId,
+        localPlayerName: this.selectedPlayerName,
         carVariant: player?.carVariant ?? this.selectedCarVariant,
         roster: this.roomPlayers,
         onSceneReady: () => {
@@ -2455,6 +2515,11 @@ export class GameShell {
         const localPlayer = message.players.find((player) => player.clientId === this.clientId) ?? null;
         if (localPlayer) {
           this.selectedCarVariant = localPlayer.carVariant;
+          if (document.activeElement !== this.playerNameInput && localPlayer.name !== this.selectedPlayerName) {
+            this.selectedPlayerName = localPlayer.name;
+            this.playerNameInput.value = localPlayer.name;
+            savePreference(PLAYER_NAME_STORAGE_KEY, localPlayer.name);
+          }
         }
         this.selectedSongId = message.setup.songId;
         this.selectedFictionId = clampFictionId(message.setup.fictionId);
@@ -2642,6 +2707,20 @@ function savePreference(key: string, value: string): void {
   }
 }
 
+function loadPlayerNamePreference(): string {
+  const fallback = generateDefaultPlayerName();
+  try {
+    const stored = sanitizePlayerName(window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY));
+    const resolved = stored ?? fallback;
+    if (stored !== resolved) {
+      window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, resolved);
+    }
+    return resolved;
+  } catch {
+    return fallback;
+  }
+}
+
 function loadSteeringPresetPreference(): string {
   try {
     return normalizeSteeringPreset(window.localStorage.getItem(STEERING_STORAGE_KEY));
@@ -2652,6 +2731,31 @@ function loadSteeringPresetPreference(): string {
 
 function normalizeSteeringPreset(value: string | null): string {
   return STEERING_PRESETS.some((preset) => preset.id === value) ? (value as string) : DEFAULT_STEERING_PRESET;
+}
+
+function sanitizePlayerName(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9 _'-]/g, "")
+    .slice(0, PLAYER_NAME_MAX_LENGTH)
+    .trim();
+  return normalized.length >= PLAYER_NAME_MIN_LENGTH ? normalized : null;
+}
+
+function generateDefaultPlayerName(): string {
+  return `Pilot ${generatePlayerToken()}`;
+}
+
+function generatePlayerToken(): string {
+  try {
+    const values = new Uint32Array(1);
+    window.crypto.getRandomValues(values);
+    return (values[0] % (36 ** 4)).toString(36).toUpperCase().padStart(4, "0");
+  } catch {
+    return Math.floor(Math.random() * (36 ** 4)).toString(36).toUpperCase().padStart(4, "0");
+  }
 }
 
 function steeringPresetValue(presetId: string): number {

@@ -109,6 +109,7 @@ export type AppLaunchOptions = {
   steeringSensitivity?: number;
   mode?: AppMode;
   localPlayerId?: string | null;
+  localPlayerName?: string | null;
   carVariant?: CarVariant;
   roster?: RoomPlayerState[];
   onRetry?: (() => void) | null;
@@ -123,6 +124,8 @@ export type AppLaunchOptions = {
 
 const START_TRACK_U = 0.001;
 const NOMINAL_HALF_WIDTH = 11;
+const NAME_LABEL_FULL_RANGE = 110;
+const NAME_LABEL_FADE_RANGE = 140;
 // Mirrors server SHIELD_DURATION_MS. Purely cosmetic - the server is the
 // source of truth for the actual shield window.
 const SHIELD_VISUAL_DURATION_MS = 120000;
@@ -171,6 +174,7 @@ export class App {
   private readonly checkpointHud: HTMLDivElement;
   private readonly inventoryHud: HTMLDivElement;
   private readonly rosterHud: HTMLDivElement;
+  private readonly nameLabelLayer: HTMLDivElement;
   private readonly statusOverlay: HTMLDivElement;
   private readonly statusTitle: HTMLDivElement;
   private readonly statusSubtitle: HTMLDivElement;
@@ -193,6 +197,7 @@ export class App {
   private readonly tempVectorB = new Vector3();
   private readonly trackObjectTriggers = new Set<string>();
   private readonly serverPlayers = new Map<string, RacePlayerState>();
+  private readonly nameLabels = new Map<string, HTMLDivElement>();
   private readonly reducedFx: boolean;
   private readonly boostTrailSampleLimit: number;
   private readonly baseBloomStrength = 0.4;
@@ -353,6 +358,7 @@ export class App {
     this.checkpointHud = this.hud.querySelector(".tempo-hud-checkpoint") as HTMLDivElement;
     this.inventoryHud = this.hud.querySelector(".tempo-hud-inventory") as HTMLDivElement;
     this.rosterHud = this.hud.querySelector(".tempo-hud-roster") as HTMLDivElement;
+    this.nameLabelLayer = this.createNameLabelLayer();
 
     const statusUi = this.createStatusOverlay();
     this.statusOverlay = statusUi.overlay;
@@ -374,7 +380,7 @@ export class App {
   }
 
   start(): void {
-    this.root.append(this.renderer.domElement, this.hud, this.statusOverlay);
+    this.root.append(this.renderer.domElement, this.hud, this.nameLabelLayer, this.statusOverlay);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.touchControls?.attach(this.root);
     this.setupScene();
@@ -403,6 +409,7 @@ export class App {
     this.musicSync?.stop();
     this.winSfx.pause();
     this.loseSfx.pause();
+    this.clearNameLabels();
     this.renderer.dispose();
     this.disposeSceneGraph();
     this.root.replaceChildren();
@@ -410,6 +417,7 @@ export class App {
 
   setRoomState(players: RoomPlayerState[], phase: AppPhase | "lobby"): void {
     this.latestRoster = [...players];
+    this.syncNameLabels();
     const nextPhase = phase === "lobby" ? "staging" : phase;
     if (this.launch.mode === "multiplayer" && nextPhase === "running") {
       this.enterRunningPhase();
@@ -485,6 +493,7 @@ export class App {
       if (!nextIds.has(clientId)) {
         this.scene.remove(remote.group);
         this.remoteCars.delete(clientId);
+        this.removeNameLabel(clientId);
       }
     }
 
@@ -800,6 +809,15 @@ export class App {
     return hud;
   }
 
+  private createNameLabelLayer(): HTMLDivElement {
+    const layer = document.createElement("div");
+    layer.style.position = "fixed";
+    layer.style.inset = "0";
+    layer.style.pointerEvents = "none";
+    layer.style.zIndex = "11";
+    return layer;
+  }
+
   private createStatusOverlay(): {
     overlay: HTMLDivElement;
     title: HTMLDivElement;
@@ -880,6 +898,70 @@ export class App {
       primaryButton,
       secondaryButton,
     };
+  }
+
+  private syncNameLabels(): void {
+    if (this.launch.mode !== "multiplayer") {
+      this.clearNameLabels();
+      return;
+    }
+
+    const visibleIds = new Set(
+      this.latestRoster
+        .filter((player) => player.clientId !== this.launch.localPlayerId)
+        .map((player) => player.clientId),
+    );
+
+    for (const player of this.latestRoster) {
+      if (!visibleIds.has(player.clientId)) continue;
+      const label = this.getOrCreateNameLabel(player.clientId);
+      label.textContent = player.name;
+    }
+
+    for (const clientId of Array.from(this.nameLabels.keys())) {
+      if (!visibleIds.has(clientId)) {
+        this.removeNameLabel(clientId);
+      }
+    }
+  }
+
+  private getOrCreateNameLabel(clientId: string): HTMLDivElement {
+    const existing = this.nameLabels.get(clientId);
+    if (existing) return existing;
+
+    const label = document.createElement("div");
+    label.style.position = "absolute";
+    label.style.left = "0";
+    label.style.top = "0";
+    label.style.padding = "5px 8px";
+    label.style.borderRadius = "999px";
+    label.style.border = "1px solid rgba(110, 255, 190, 0.34)";
+    label.style.background = "rgba(4, 8, 14, 0.84)";
+    label.style.boxShadow = "0 0 18px rgba(110, 255, 190, 0.18)";
+    label.style.color = "#f5fffd";
+    label.style.font = "700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace";
+    label.style.letterSpacing = "0.08em";
+    label.style.whiteSpace = "nowrap";
+    label.style.transform = "translate(-50%, -100%)";
+    label.style.opacity = "0";
+    label.style.display = "none";
+    this.nameLabels.set(clientId, label);
+    this.nameLabelLayer.appendChild(label);
+    return label;
+  }
+
+  private removeNameLabel(clientId: string): void {
+    const label = this.nameLabels.get(clientId);
+    if (!label) return;
+    label.remove();
+    this.nameLabels.delete(clientId);
+  }
+
+  private clearNameLabels(): void {
+    for (const label of this.nameLabels.values()) {
+      label.remove();
+    }
+    this.nameLabels.clear();
   }
 
   private createOverlayButton(label: string): HTMLButtonElement {
@@ -1417,7 +1499,7 @@ export class App {
         entries: [
           {
             clientId: this.launch.localPlayerId ?? "solo",
-            name: "Pilot 1",
+            name: this.getLocalPlayerName(),
             placement: 1,
             status: "finished",
             finishTimeMs: Math.round(this.elapsedRaceTime * 1000),
@@ -1444,7 +1526,7 @@ export class App {
         entries: [
           {
             clientId: this.launch.localPlayerId ?? "solo",
-            name: "Pilot 1",
+            name: this.getLocalPlayerName(),
             placement: 1,
             status: "dnf",
             finishTimeMs: null,
@@ -1487,6 +1569,61 @@ export class App {
     }
     lines.unshift("Room Status");
     this.rosterHud.textContent = lines.join("\n");
+  }
+
+  private updateNameLabels(): void {
+    if (this.launch.mode !== "multiplayer" || this.phase === "finished") {
+      for (const label of this.nameLabels.values()) {
+        label.style.display = "none";
+      }
+      return;
+    }
+
+    const localPosition = this.localVehicle.group.position;
+    for (const player of this.latestRoster) {
+      if (player.clientId === this.launch.localPlayerId) continue;
+      const remote = this.remoteCars.get(player.clientId);
+      const label = this.nameLabels.get(player.clientId);
+      if (!remote || !label) continue;
+
+      const distance = localPosition.distanceTo(remote.group.position);
+      if (distance >= NAME_LABEL_FADE_RANGE) {
+        label.style.display = "none";
+        continue;
+      }
+
+      this.tempVector.copy(remote.group.position);
+      this.tempVector.y += 1.5;
+      this.tempVectorB.copy(this.tempVector).applyMatrix4(this.camera.matrixWorldInverse);
+      if (this.tempVectorB.z >= -this.camera.near) {
+        label.style.display = "none";
+        continue;
+      }
+
+      this.tempVectorB.copy(this.tempVector).project(this.camera);
+      if (
+        this.tempVectorB.x < -1
+        || this.tempVectorB.x > 1
+        || this.tempVectorB.y < -1
+        || this.tempVectorB.y > 1
+      ) {
+        label.style.display = "none";
+        continue;
+      }
+
+      const opacity = distance <= NAME_LABEL_FULL_RANGE
+        ? 1
+        : 1 - ((distance - NAME_LABEL_FULL_RANGE) / (NAME_LABEL_FADE_RANGE - NAME_LABEL_FULL_RANGE));
+      label.style.display = "";
+      label.style.opacity = opacity.toFixed(2);
+      label.style.left = `${((this.tempVectorB.x + 1) * 0.5 * window.innerWidth).toFixed(1)}px`;
+      label.style.top = `${((1 - this.tempVectorB.y) * 0.5 * window.innerHeight - 12).toFixed(1)}px`;
+    }
+  }
+
+  private getLocalPlayerName(): string {
+    const normalized = this.launch.localPlayerName?.trim();
+    return normalized && normalized.length > 0 ? normalized : "Pilot 1";
   }
 
   private createDebugHud(enabled: boolean): HTMLDivElement | null {
@@ -1566,6 +1703,7 @@ export class App {
     this.updateCamera(deltaSeconds);
     this.environment.update(this.elapsedRaceTime, musicTime, this.vehicleController.state.trackU, this.latestReactiveBands);
     this.updateHud();
+    this.updateNameLabels();
     this.updateDebugHud();
     this.updatePostEffects();
     this.composer.render();
