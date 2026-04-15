@@ -1243,6 +1243,172 @@ export class App {
         pointer-events: none;
       }
 
+      .tempo-touch-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        pointer-events: none;
+        font-family: "Tempo Sans", ui-sans-serif, sans-serif;
+      }
+
+      .tempo-touch-stick-area {
+        position: absolute;
+        left: 18px;
+        bottom: 18px;
+        width: 152px;
+        height: 152px;
+        pointer-events: auto;
+      }
+
+      .tempo-touch-stick-base {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        border: 1px solid rgba(124, 249, 255, 0.26);
+        border-radius: 999px;
+        background:
+          radial-gradient(circle at 50% 35%, rgba(124, 249, 255, 0.16), rgba(4, 10, 18, 0.38) 55%),
+          rgba(4, 8, 14, 0.5);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          0 14px 34px rgba(0, 0, 0, 0.24),
+          0 0 28px rgba(124, 249, 255, 0.08);
+        backdrop-filter: blur(10px);
+      }
+
+      .tempo-touch-stick-base::before,
+      .tempo-touch-stick-base::after {
+        content: "";
+        position: absolute;
+        inset: 14px;
+        border: 1px solid rgba(124, 249, 255, 0.1);
+        border-radius: 999px;
+        pointer-events: none;
+      }
+
+      .tempo-touch-stick-base::after {
+        inset: 36px;
+        border-color: rgba(124, 249, 255, 0.14);
+      }
+
+      .tempo-touch-stick-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 68px;
+        height: 68px;
+        margin-left: -34px;
+        margin-top: -34px;
+        border: 1px solid rgba(191, 252, 255, 0.62);
+        border-radius: 999px;
+        background:
+          radial-gradient(circle at 40% 35%, rgba(191, 252, 255, 0.68), rgba(124, 249, 255, 0.2) 52%, rgba(2, 8, 14, 0.54) 100%);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+          0 0 28px rgba(124, 249, 255, 0.2);
+        transition: box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      .tempo-touch-stick-area.is-active .tempo-touch-stick-base {
+        border-color: rgba(134, 255, 86, 0.36);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          0 14px 34px rgba(0, 0, 0, 0.24),
+          0 0 36px rgba(134, 255, 86, 0.14);
+      }
+
+      .tempo-touch-stick-area.is-active .tempo-touch-stick-knob {
+        border-color: rgba(214, 255, 197, 0.8);
+        background:
+          radial-gradient(circle at 40% 35%, rgba(224, 255, 210, 0.8), rgba(134, 255, 86, 0.28) 55%, rgba(2, 8, 14, 0.56) 100%);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+          0 0 34px rgba(134, 255, 86, 0.22);
+      }
+
+      .tempo-touch-button {
+        --tempo-touch-accent: var(--tempo-hud-accent);
+        position: absolute;
+        right: 18px;
+        width: 118px;
+        height: 60px;
+        padding: 0;
+        appearance: none;
+        border: 1px solid color-mix(in srgb, var(--tempo-touch-accent) 58%, white 0%);
+        background:
+          linear-gradient(180deg, rgba(12, 22, 34, 0.9), rgba(4, 10, 18, 0.84));
+        color: var(--tempo-touch-accent);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          0 14px 34px rgba(0, 0, 0, 0.24),
+          0 0 28px color-mix(in srgb, var(--tempo-touch-accent) 14%, transparent);
+        backdrop-filter: blur(10px);
+        clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+        pointer-events: auto;
+      }
+
+      .tempo-touch-button::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(135deg, color-mix(in srgb, var(--tempo-touch-accent) 16%, transparent), transparent 48%),
+          repeating-linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.025) 0,
+            rgba(255, 255, 255, 0.025) 1px,
+            transparent 1px,
+            transparent 8px
+          );
+        pointer-events: none;
+      }
+
+      .tempo-touch-button::after {
+        content: "";
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        bottom: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tempo-touch-accent) 70%, white 0%), transparent);
+        pointer-events: none;
+      }
+
+      .tempo-touch-button-label {
+        position: relative;
+        display: block;
+        font: 700 14px/1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .tempo-touch-button.is-active {
+        transform: translateY(-1px);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+          0 14px 34px rgba(0, 0, 0, 0.24),
+          0 0 38px color-mix(in srgb, var(--tempo-touch-accent) 24%, transparent);
+      }
+
+      .tempo-touch-button.is-active .tempo-touch-button-label {
+        text-shadow: 0 0 16px color-mix(in srgb, var(--tempo-touch-accent) 32%, transparent);
+      }
+
+      .tempo-touch-button--shield {
+        --tempo-touch-accent: #7cf9ff;
+        bottom: 170px;
+      }
+
+      .tempo-touch-button--fire {
+        --tempo-touch-accent: #ff6b96;
+        bottom: 94px;
+      }
+
+      .tempo-touch-button--brake {
+        --tempo-touch-accent: #ffb27e;
+        bottom: 18px;
+      }
+
       @media (max-width: 1100px), (max-height: 760px) {
         .tempo-hud-race,
         .tempo-hud-summary {
@@ -1262,6 +1428,16 @@ export class App {
           grid-column: 2 / -1;
           text-align: left;
           min-width: 0;
+        }
+
+        .tempo-touch-stick-area {
+          width: 144px;
+          height: 144px;
+        }
+
+        .tempo-touch-button {
+          width: 112px;
+          height: 58px;
         }
       }
 
@@ -1338,6 +1514,43 @@ export class App {
         .tempo-runtime-result-takedowns {
           grid-column: 2;
           text-align: left;
+        }
+
+        .tempo-touch-stick-area {
+          left: 12px;
+          bottom: 12px;
+          width: 136px;
+          height: 136px;
+        }
+
+        .tempo-touch-stick-knob {
+          width: 62px;
+          height: 62px;
+          margin-left: -31px;
+          margin-top: -31px;
+        }
+
+        .tempo-touch-button {
+          right: 12px;
+          width: 104px;
+          height: 56px;
+        }
+
+        .tempo-touch-button-label {
+          font-size: 13px;
+          letter-spacing: 0.16em;
+        }
+
+        .tempo-touch-button--shield {
+          bottom: 146px;
+        }
+
+        .tempo-touch-button--fire {
+          bottom: 79px;
+        }
+
+        .tempo-touch-button--brake {
+          bottom: 12px;
         }
       }
     `;
