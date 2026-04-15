@@ -11,13 +11,15 @@ import {
   SphereGeometry,
   WebGLRenderer,
 } from "three";
-
-export type CarPreviewSpec = {
-  accent: string;
-  trim: string;
-  canopy: string;
-  silhouette: "dart" | "muscle" | "wedge" | "phantom";
-};
+import type { CarVariant } from "../../../shared/network-types";
+import type { ClientConfig } from "./config";
+import {
+  applyCarTransform,
+  getCarAssetDefinition,
+  isSharedCarMesh,
+  loadCarMesh,
+  type CarPreviewSpec,
+} from "./car-assets";
 
 export class CarPreview {
   private readonly renderer: WebGLRenderer;
@@ -28,8 +30,12 @@ export class CarPreview {
   private animationFrameId: number | null = null;
   private running = false;
   private carGroup: Group | null = null;
+  private loadRevision = 0;
 
-  constructor(private readonly host: HTMLElement) {
+  constructor(
+    private readonly host: HTMLElement,
+    private readonly config: ClientConfig,
+  ) {
     this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor("#000000", 0);
@@ -77,11 +83,29 @@ export class CarPreview {
     this.host.replaceChildren();
   }
 
-  setSpec(spec: CarPreviewSpec): void {
+  setVariant(variant: CarVariant): void {
+    const definition = getCarAssetDefinition(variant);
+    const revision = ++this.loadRevision;
     this.clearCar();
-    this.carGroup = buildCar(spec);
-    this.root.add(this.carGroup);
+
+    const group = new Group();
+    const fallback = buildFallbackCar(definition.fallbackPreviewSpec);
+    group.add(fallback);
+    this.carGroup = group;
+    this.root.add(group);
     this.render();
+
+    void loadCarMesh(this.config, variant)
+      .then((asset) => {
+        if (revision !== this.loadRevision || this.carGroup !== group) return;
+        applyCarTransform(asset, definition.previewTransform);
+        group.add(asset);
+        fallback.visible = false;
+        this.render();
+      })
+      .catch((error) => {
+        console.error(`Failed to load preview mesh for ${variant}:`, error);
+      });
   }
 
   private resize(): void {
@@ -114,7 +138,7 @@ export class CarPreview {
     if (!this.carGroup) return;
     this.root.remove(this.carGroup);
     this.carGroup.traverse((object) => {
-      if (!(object instanceof Mesh)) return;
+      if (!(object instanceof Mesh) || isSharedCarMesh(object)) return;
       object.geometry.dispose();
       if (Array.isArray(object.material)) {
         for (const material of object.material) material.dispose();
@@ -126,7 +150,7 @@ export class CarPreview {
   }
 }
 
-function buildCar(spec: CarPreviewSpec): Group {
+function buildFallbackCar(spec: CarPreviewSpec): Group {
   const group = new Group();
   const accent = new Color(spec.accent);
   const trim = new Color(spec.trim);
@@ -205,6 +229,5 @@ function buildCar(spec: CarPreviewSpec): Group {
   }
 
   group.add(body, canopyMesh, nose, wingLeft, wingRight, thrusterLeft, thrusterRight);
-  group.position.set(0, 0, 0);
   return group;
 }

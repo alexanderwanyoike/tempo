@@ -41,6 +41,12 @@ import { clampFictionId, type EnvironmentFictionId } from "./fiction-id";
 import { VehicleInput } from "./input";
 import { MusicSync, type ReactiveBands } from "./music-sync";
 import { CombatVfx } from "./combat-vfx";
+import {
+  applyCarTransform,
+  getCarAssetDefinition,
+  isSharedCarMesh,
+  loadCarMesh,
+} from "./car-assets";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
@@ -72,8 +78,14 @@ type RemoteCarVisual = {
   id: string;
   variant: CarVariant;
   group: Group;
-  bodyMaterial: MeshStandardMaterial;
-  cockpitMaterial: MeshStandardMaterial;
+  bodyPivot: Group;
+  fallbackGroup: Group;
+  fallbackBodyMaterial: MeshStandardMaterial;
+  fallbackCockpitMaterial: MeshStandardMaterial;
+  feedbackGlow: Mesh;
+  feedbackGlowMaterial: MeshBasicMaterial;
+  assetGroup: Group | null;
+  assetRevision: number;
   targetTrackU: number;
   targetLateralOffset: number;
   currentTrackU: number;
@@ -714,20 +726,62 @@ export class App {
     const cockpit = new Mesh(new BoxGeometry(0.8, 0.35, 1.15), cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
 
-    const group = new Group();
-    group.add(body, cockpit);
+    const fallbackGroup = new Group();
+    fallbackGroup.add(body, cockpit);
 
-    return {
+    const feedbackGlowMaterial = new MeshBasicMaterial({
+      color: App.BOOST_COLOR.clone(),
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: AdditiveBlending,
+    });
+    const feedbackGlow = new Mesh(new CylinderGeometry(0.72, 1.02, 0.08, 24), feedbackGlowMaterial);
+    feedbackGlow.position.y = 0.08;
+
+    const bodyPivot = new Group();
+    bodyPivot.add(fallbackGroup, feedbackGlow);
+
+    const group = new Group();
+    group.add(bodyPivot);
+
+    const visual: RemoteCarVisual = {
       id: "",
       variant,
       group,
-      bodyMaterial,
-      cockpitMaterial,
+      bodyPivot,
+      fallbackGroup,
+      fallbackBodyMaterial: bodyMaterial,
+      fallbackCockpitMaterial: cockpitMaterial,
+      feedbackGlow,
+      feedbackGlowMaterial,
+      assetGroup: null,
+      assetRevision: 0,
       targetTrackU: START_TRACK_U,
       targetLateralOffset: 0,
       currentTrackU: START_TRACK_U,
       currentLateralOffset: 0,
     };
+    void this.hydrateVehicleVisual(visual);
+    return visual;
+  }
+
+  private async hydrateVehicleVisual(visual: RemoteCarVisual): Promise<void> {
+    const definition = getCarAssetDefinition(visual.variant);
+    const revision = ++visual.assetRevision;
+    try {
+      const asset = await loadCarMesh(this.config, visual.variant);
+      if (this.destroyed || revision !== visual.assetRevision) return;
+      applyCarTransform(asset, definition.raceTransform);
+      if (visual.assetGroup) {
+        visual.bodyPivot.remove(visual.assetGroup);
+      }
+      visual.assetGroup = asset;
+      visual.bodyPivot.add(asset);
+      visual.fallbackGroup.visible = false;
+    } catch (error) {
+      console.error(`Failed to load race mesh for ${visual.variant}:`, error);
+    }
   }
 
   private ensureRemoteCar(clientId: string): RemoteCarVisual {
@@ -1844,12 +1898,10 @@ export class App {
       this.localVehicle.group.quaternion.slerp(this.targetCarQuaternion, rotationAlpha);
     }
 
-    const body = this.localVehicle.group.children[0];
-    if (body) {
-      body.rotation.set(state.visualPitch, -state.steering * 0.15, state.visualBank, "XYZ");
-    }
+    const body = this.localVehicle.bodyPivot;
+    body.rotation.set(state.visualPitch, -state.steering * 0.15, state.visualBank, "XYZ");
     if (this.localTakenDownUntil > now) {
-      this.applySpinoutVisual(this.localVehicle.group, body ?? null, state.up, now, this.localTakenDownUntil);
+      this.applySpinoutVisual(this.localVehicle.group, body, state.up, now, this.localTakenDownUntil);
     }
   }
 
@@ -1870,10 +1922,8 @@ export class App {
         .addScaledVector(frame.up, 0.45);
       this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
       remote.group.setRotationFromMatrix(this.orientMat);
-      const body = remote.group.children[0] ?? null;
-      if (body) {
-        body.rotation.set(0, 0, 0, "XYZ");
-      }
+      const body = remote.bodyPivot;
+      body.rotation.set(0, 0, 0, "XYZ");
       if (snapshot.takenDownUntil > now) {
         this.applySpinoutVisual(remote.group, body, frame.up, now, snapshot.takenDownUntil);
       }
@@ -1924,12 +1974,18 @@ export class App {
       .lerp(App.BOOST_COLOR, boostMix * 0.96)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.65);
 
-    this.localVehicle.bodyMaterial.color.copy(bodyColor);
-    this.localVehicle.bodyMaterial.emissive.copy(bodyEmissive);
-    this.localVehicle.bodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.8 + slowdownMix * 1.2;
-    this.localVehicle.cockpitMaterial.color.copy(cockpitColor);
-    this.localVehicle.cockpitMaterial.emissive.copy(cockpitEmissive);
-    this.localVehicle.cockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.9 + slowdownMix * 0.5;
+    this.localVehicle.fallbackBodyMaterial.color.copy(bodyColor);
+    this.localVehicle.fallbackBodyMaterial.emissive.copy(bodyEmissive);
+    this.localVehicle.fallbackBodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.8 + slowdownMix * 1.2;
+    this.localVehicle.fallbackCockpitMaterial.color.copy(cockpitColor);
+    this.localVehicle.fallbackCockpitMaterial.emissive.copy(cockpitEmissive);
+    this.localVehicle.fallbackCockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.9 + slowdownMix * 0.5;
+    this.localVehicle.feedbackGlowMaterial.color.copy(
+      App.BOOST_COLOR.clone().lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.9),
+    );
+    this.localVehicle.feedbackGlowMaterial.opacity = Math.min(surgeBoost * 0.42 + slowdownMix * 0.38, 0.72);
+    const glowScale = 1 + surgeBoost * 0.55 + slowdownMix * 0.18;
+    this.localVehicle.feedbackGlow.scale.set(glowScale, 1, glowScale);
 
     this.boostTrailHistory.unshift({
       position: this.localVehicle.group.position.clone(),
@@ -2542,7 +2598,7 @@ export class App {
 
   private disposeSceneGraph(): void {
     this.scene.traverse((object) => {
-      if (!(object instanceof Mesh)) return;
+      if (!(object instanceof Mesh) || isSharedCarMesh(object)) return;
       object.geometry.dispose();
       this.disposeMaterial(object.material);
     });
@@ -2558,37 +2614,13 @@ export class App {
 }
 
 function paletteForVariant(variant: CarVariant): CarPalette {
-  switch (variant) {
-    case "ember":
-      return {
-        body: new Color("#ff825c"),
-        bodyEmissive: new Color("#7b220d"),
-        cockpit: new Color("#1e1010"),
-        cockpitEmissive: new Color("#4a2b1f"),
-      };
-    case "nova":
-      return {
-        body: new Color("#f6f06d"),
-        bodyEmissive: new Color("#615d0e"),
-        cockpit: new Color("#14161b"),
-        cockpitEmissive: new Color("#393e49"),
-      };
-    case "ghost":
-      return {
-        body: new Color("#caa8ff"),
-        bodyEmissive: new Color("#432667"),
-        cockpit: new Color("#120f1d"),
-        cockpitEmissive: new Color("#2c2550"),
-      };
-    case "vector":
-    default:
-      return {
-        body: new Color("#14f1ff"),
-        bodyEmissive: new Color("#0f6d74"),
-        cockpit: new Color("#0e1320"),
-        cockpitEmissive: new Color("#1b2744"),
-      };
-  }
+  const palette = getCarAssetDefinition(variant).fallbackPalette;
+  return {
+    body: new Color(palette.body),
+    bodyEmissive: new Color(palette.bodyEmissive),
+    cockpit: new Color(palette.cockpit),
+    cockpitEmissive: new Color(palette.cockpitEmissive),
+  };
 }
 
 function buildVehicleTuning(steeringSensitivity: number) {

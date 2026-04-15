@@ -9,6 +9,10 @@ import type {
   ServerMessage,
 } from "../../shared/network-types";
 import type { App, AppLaunchOptions } from "./runtime/app";
+import {
+  carAssetDefinitions,
+  prefetchCarMesh,
+} from "./runtime/car-assets";
 import { CarPreview } from "./runtime/car-preview";
 import type { ClientConfig } from "./runtime/config";
 import { clampFictionId, type EnvironmentFictionId } from "./runtime/fiction-id";
@@ -49,47 +53,14 @@ const FICTION_OPTIONS: Array<{ id: EnvironmentFictionId; label: string; blurb: s
   { id: 3, label: "Data Cathedral", blurb: "Ceremonial spectral architecture" },
 ];
 
-const CAR_VARIANTS: Array<{
-  id: CarVariant;
-  label: string;
-  accent: string;
-  trim: string;
-  canopy: string;
-  silhouette: "dart" | "muscle" | "wedge" | "phantom";
-}> = [
-  {
-    id: "vector",
-    label: "Vector",
-    accent: "#14f1ff",
-    trim: "#0f6d74",
-    canopy: "#0e1320",
-    silhouette: "dart",
-  },
-  {
-    id: "ember",
-    label: "Ember",
-    accent: "#ff825c",
-    trim: "#7b220d",
-    canopy: "#1e1010",
-    silhouette: "muscle",
-  },
-  {
-    id: "nova",
-    label: "Nova",
-    accent: "#f6f06d",
-    trim: "#615d0e",
-    canopy: "#14161b",
-    silhouette: "wedge",
-  },
-  {
-    id: "ghost",
-    label: "Ghost",
-    accent: "#caa8ff",
-    trim: "#432667",
-    canopy: "#120f1d",
-    silhouette: "phantom",
-  },
-];
+const CAR_VARIANTS = carAssetDefinitions.map((definition) => ({
+  id: definition.variant,
+  label: definition.displayName,
+  accent: definition.fallbackPreviewSpec.accent,
+  trim: definition.fallbackPreviewSpec.trim,
+  canopy: definition.fallbackPreviewSpec.canopy,
+  silhouette: definition.fallbackPreviewSpec.silhouette,
+}));
 
 const STEERING_PRESETS = [
   { id: "balanced", label: "Balanced", value: 1.0 },
@@ -192,7 +163,7 @@ export class GameShell {
   private readonly rotatePrompt = document.createElement("div");
   private readonly menuPreview: MenuPreview;
   private readonly auditionPlayer = new SongAuditionPlayer();
-  private readonly carPreview = new CarPreview(this.carPreviewHost);
+  private readonly carPreview: CarPreview;
 
   private orientationQuery: MediaQueryList | null = null;
   private catalog: SongCatalog | null = null;
@@ -233,6 +204,7 @@ export class GameShell {
   private activeApp: App | null = null;
   private lastLaunch: AppLaunchOptions | null = null;
   private previewDebounce: number | null = null;
+  private carPrefetchTimer: number | null = null;
   private launchInFlight = false;
 
   constructor(
@@ -242,6 +214,7 @@ export class GameShell {
     this.injectStyles();
     this.configureLayout();
     this.menuPreview = new MenuPreview(this.previewHost);
+    this.carPreview = new CarPreview(this.carPreviewHost, this.config);
     this.auditionPlayer.onStateChange = (state) => {
       this.auditionState = state;
       this.renderSongBrowser();
@@ -1865,12 +1838,8 @@ export class GameShell {
     this.carCarousel.style.setProperty("--car-accent", selectedCar.accent);
     const nameSpan = this.carCarouselName.querySelector("span");
     if (nameSpan) nameSpan.textContent = selectedCar.label;
-    this.carPreview.setSpec({
-      accent: selectedCar.accent,
-      trim: selectedCar.trim,
-      canopy: selectedCar.canopy,
-      silhouette: selectedCar.silhouette,
-    });
+    this.carPreview.setVariant(this.selectedCarVariant);
+    this.scheduleCarPrefetch();
   }
 
   private handleCarSelection(variant: CarVariant): void {
@@ -1887,6 +1856,24 @@ export class GameShell {
     const count = CAR_VARIANTS.length;
     const nextIndex = (index + delta + count) % count;
     this.handleCarSelection(CAR_VARIANTS[nextIndex].id);
+  }
+
+  private scheduleCarPrefetch(): void {
+    if (this.carPrefetchTimer !== null) {
+      window.clearTimeout(this.carPrefetchTimer);
+    }
+    const index = CAR_VARIANTS.findIndex((car) => car.id === this.selectedCarVariant);
+    const count = CAR_VARIANTS.length;
+    const adjacent = [
+      CAR_VARIANTS[(index + 1) % count]?.id,
+      CAR_VARIANTS[(index - 1 + count) % count]?.id,
+    ].filter((variant): variant is CarVariant => Boolean(variant));
+    this.carPrefetchTimer = window.setTimeout(() => {
+      this.carPrefetchTimer = null;
+      for (const variant of adjacent) {
+        prefetchCarMesh(this.config, variant);
+      }
+    }, 180);
   }
 
   private renderFictionButtons(): void {
@@ -1982,7 +1969,8 @@ export class GameShell {
         player.ready ? "RDY" : "   ",
         player.isActiveRacer ? "GRID" : "----",
       ];
-      return `${flags.join(" ")}  ${player.name.padEnd(8, " ")} ${player.carVariant.toUpperCase()}`;
+      const carLabel = getCarVariantMeta(player.carVariant).label.toUpperCase();
+      return `${flags.join(" ")}  ${player.name.padEnd(8, " ")} ${carLabel}`;
     }));
     const selectedSong = this.getSelectedSong();
     const songLabel = selectedSong ? `${selectedSong.title} / ${selectedSong.genre}` : this.selectedSongId;
