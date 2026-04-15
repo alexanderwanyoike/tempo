@@ -129,10 +129,11 @@ const SHIELD_VISUAL_DURATION_MS = 120000;
 
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
-  private static readonly BOOST_COLOR = new Color("#8bff56");
-  private static readonly BOOST_HOT_COLOR = new Color("#d8ff8a");
-  private static readonly TRACER_COLOR = new Color("#78f7ff");
-  private static readonly TRACER_HOT_COLOR = new Color("#f4ffaf");
+  private static readonly BOOST_COLOR = new Color("#57ff36");
+  private static readonly BOOST_HOT_COLOR = new Color("#c8ff7a");
+  private static readonly TRACER_COLOR = new Color("#7dff48");
+  private static readonly TRACER_HOT_COLOR = new Color("#f9fff2");
+  private static readonly SLOWDOWN_FLASH_COLOR = new Color("#ff4b4b");
   private static readonly WIN_SFX_URL = new URL("../../../assets/audio/Win Backspin.wav", import.meta.url).href;
   private static readonly LOSE_SFX_URL = new URL("../../../assets/audio/Lose Backspin.wav", import.meta.url).href;
 
@@ -224,6 +225,7 @@ export class App {
   private boostSurge = 0;
   private pickupSurge = 0;
   private impactSurge = 0;
+  private slowdownFlash = 0;
 
   static async create(
     root: HTMLElement,
@@ -1067,18 +1069,30 @@ export class App {
   private updateBoostVisuals(): void {
     const boost = this.vehicleController.state.visualBoost;
     const surgeBoost = MathUtils.clamp(boost + this.boostSurge * 0.42 + this.pickupSurge * 0.22, 0, 1.35);
+    const slowdownMix = Math.min(this.slowdownFlash, 1);
     const localPalette = paletteForVariant(this.launch.carVariant ?? "vector");
-    const bodyColor = localPalette.body.clone().lerp(App.BOOST_HOT_COLOR, Math.min(surgeBoost, 1));
-    const bodyEmissive = localPalette.bodyEmissive.clone().lerp(App.BOOST_HOT_COLOR, Math.min(surgeBoost, 1));
-    const cockpitColor = localPalette.cockpit.clone().lerp(new Color("#4a6a26"), Math.min(surgeBoost, 1) * 0.48);
-    const cockpitEmissive = localPalette.cockpitEmissive.clone().lerp(App.BOOST_COLOR, Math.min(surgeBoost, 1));
+    const boostMix = Math.min(surgeBoost, 1);
+    const bodyColor = localPalette.body.clone()
+      .lerp(App.BOOST_COLOR, boostMix * 0.72)
+      .lerp(App.BOOST_HOT_COLOR, boostMix * 0.34)
+      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.82);
+    const bodyEmissive = localPalette.bodyEmissive.clone()
+      .lerp(App.BOOST_COLOR, boostMix * 0.88)
+      .lerp(App.BOOST_HOT_COLOR, boostMix * 0.2)
+      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix);
+    const cockpitColor = localPalette.cockpit.clone()
+      .lerp(new Color("#2f540e"), boostMix * 0.62)
+      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.3);
+    const cockpitEmissive = localPalette.cockpitEmissive.clone()
+      .lerp(App.BOOST_COLOR, boostMix * 0.96)
+      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.65);
 
     this.localVehicle.bodyMaterial.color.copy(bodyColor);
     this.localVehicle.bodyMaterial.emissive.copy(bodyEmissive);
-    this.localVehicle.bodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.4;
+    this.localVehicle.bodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.8 + slowdownMix * 1.2;
     this.localVehicle.cockpitMaterial.color.copy(cockpitColor);
     this.localVehicle.cockpitMaterial.emissive.copy(cockpitEmissive);
-    this.localVehicle.cockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.5;
+    this.localVehicle.cockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.9 + slowdownMix * 0.5;
 
     this.boostTrailHistory.unshift({
       position: this.localVehicle.group.position.clone(),
@@ -1107,11 +1121,11 @@ export class App {
       this.tempVector.applyQuaternion(sample.quaternion);
       mesh.position.add(this.tempVector);
       mesh.scale.set(
-        1 + sample.boost * (0.55 + i * 0.03),
+        1 + sample.boost * (0.62 + i * 0.03),
         1 + sample.boost * (0.18 + i * 0.018),
-        1.4 + sample.boost * (1.05 + i * 0.1),
+        1.55 + sample.boost * (1.2 + i * 0.1),
       );
-      material.opacity = Math.max(0, sample.boost * (0.34 - i * 0.018));
+      material.opacity = Math.max(0, sample.boost * (0.4 - i * 0.018));
       material.color.copy(App.BOOST_COLOR).lerp(App.BOOST_HOT_COLOR, Math.min(sample.boost * 0.72, 1));
     }
   }
@@ -1160,15 +1174,15 @@ export class App {
       tracer.mesh.scale.set(
         1 + intensity * 0.12,
         1 + intensity * 0.16,
-        MathUtils.lerp(2.2, 5.4, intensity) * (1 + tracer.sampleOffset * 0.03),
+        MathUtils.lerp(2.8, 6.4, intensity) * (1 + tracer.sampleOffset * 0.035),
       );
       tracer.material.opacity = Math.max(
         0,
-        intensity * (0.52 - tracer.sampleOffset * 0.022) * (0.62 + sample.boost * 0.34),
+        intensity * (0.72 - tracer.sampleOffset * 0.028) * (0.72 + sample.boost * 0.44),
       );
       tracer.material.color.copy(App.TRACER_COLOR).lerp(
         App.TRACER_HOT_COLOR,
-        Math.min(state.visualBoost * 0.42 + this.pickupSurge * 0.14, 1),
+        Math.min(0.28 + state.visualBoost * 0.48 + this.pickupSurge * 0.18, 1),
       );
     }
   }
@@ -1178,6 +1192,7 @@ export class App {
     this.boostSurge = MathUtils.damp(this.boostSurge, 0, 5.4, dt);
     this.pickupSurge = MathUtils.damp(this.pickupSurge, 0, 6.8, dt);
     this.impactSurge = MathUtils.damp(this.impactSurge, 0, 8.2, dt);
+    this.slowdownFlash = MathUtils.damp(this.slowdownFlash, 0, 9.5, dt);
   }
 
   private updatePostEffects(): void {
@@ -1206,6 +1221,10 @@ export class App {
 
   private triggerImpactSurge(amount = 1): void {
     this.impactSurge = Math.min(1.35, this.impactSurge + amount);
+  }
+
+  private triggerSlowdownFlash(amount = 1): void {
+    this.slowdownFlash = Math.min(1.2, this.slowdownFlash + amount);
   }
 
   private updateCamera(deltaSeconds: number): void {
@@ -1346,6 +1365,7 @@ export class App {
       } else {
         this.vehicleController.applyObstacleHit();
         this.triggerImpactSurge(0.28);
+        this.triggerSlowdownFlash(1);
       }
     }
   }
