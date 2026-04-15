@@ -168,12 +168,17 @@ export class App {
   private environment: EnvironmentRuntime;
   private fictionId: EnvironmentFictionId;
   private readonly songDuration: number | null;
+  private readonly runtimeUiStyles: HTMLStyleElement;
   private readonly debugHud: HTMLDivElement | null;
   private readonly hud: HTMLDivElement;
   private readonly placementHud: HTMLDivElement;
   private readonly checkpointHud: HTMLDivElement;
-  private readonly inventoryHud: HTMLDivElement;
+  private readonly checkpointBarHud: HTMLDivElement;
+  private readonly offensiveHud: HTMLDivElement;
+  private readonly defensiveHud: HTMLDivElement;
+  private readonly summaryHud: HTMLDivElement;
   private readonly rosterHud: HTMLDivElement;
+  private readonly rosterListHud: HTMLDivElement;
   private readonly nameLabelLayer: HTMLDivElement;
   private readonly statusOverlay: HTMLDivElement;
   private readonly statusTitle: HTMLDivElement;
@@ -352,12 +357,18 @@ export class App {
     this.vehicleController.setTrackQuery((pos, hintU) => this.track.queryNearest(pos, hintU));
     this.vehicleController.forceTrackState(START_TRACK_U);
 
+    this.latestRoster = [...(launch.roster ?? [])];
+    this.runtimeUiStyles = this.createRuntimeUiStyles();
     this.debugHud = this.createDebugHud(debugHudEnabled);
     this.hud = this.createHud();
-    this.placementHud = this.hud.querySelector(".tempo-hud-placement") as HTMLDivElement;
-    this.checkpointHud = this.hud.querySelector(".tempo-hud-checkpoint") as HTMLDivElement;
-    this.inventoryHud = this.hud.querySelector(".tempo-hud-inventory") as HTMLDivElement;
-    this.rosterHud = this.hud.querySelector(".tempo-hud-roster") as HTMLDivElement;
+    this.placementHud = this.hud.querySelector(".tempo-hud-place-value") as HTMLDivElement;
+    this.checkpointHud = this.hud.querySelector(".tempo-hud-progress-value") as HTMLDivElement;
+    this.checkpointBarHud = this.hud.querySelector(".tempo-hud-progress-fill") as HTMLDivElement;
+    this.offensiveHud = this.hud.querySelector(".tempo-hud-slot-value[data-slot='attack']") as HTMLDivElement;
+    this.defensiveHud = this.hud.querySelector(".tempo-hud-slot-value[data-slot='defense']") as HTMLDivElement;
+    this.summaryHud = this.hud.querySelector(".tempo-hud-summary") as HTMLDivElement;
+    this.rosterHud = this.hud.querySelector(".tempo-hud-summary-status") as HTMLDivElement;
+    this.rosterListHud = this.hud.querySelector(".tempo-hud-standings") as HTMLDivElement;
     this.nameLabelLayer = this.createNameLabelLayer();
 
     const statusUi = this.createStatusOverlay();
@@ -380,7 +391,7 @@ export class App {
   }
 
   start(): void {
-    this.root.append(this.renderer.domElement, this.hud, this.nameLabelLayer, this.statusOverlay);
+    this.root.append(this.runtimeUiStyles, this.renderer.domElement, this.hud, this.nameLabelLayer, this.statusOverlay);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.touchControls?.attach(this.root);
     this.setupScene();
@@ -448,7 +459,9 @@ export class App {
         this.countdownResetSpeed,
       );
     }
+    this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
+    this.statusBody.replaceChildren();
     this.statusBody.style.display = "none";
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
@@ -609,8 +622,9 @@ export class App {
   showResults(results: RaceResults): void {
     this.phase = "finished";
     this.musicSync?.stop();
+    this.statusOverlay.dataset.overlayState = "results";
     this.statusOverlay.style.display = "flex";
-    this.statusBody.style.display = "";
+    this.statusBody.style.display = "grid";
     const winner = results.entries[0] ?? null;
     if (this.launch.mode === "multiplayer") {
       const winnerByFinishLine = winner?.status === "finished";
@@ -618,23 +632,11 @@ export class App {
       this.statusSubtitle.textContent = winnerByFinishLine
         ? `${winner?.name ?? "Winner"} hit the finish line first.`
         : `${winner?.name ?? "Winner"} was leading when the track ended.`;
-      this.statusBody.textContent = results.entries
-        .map((entry, index) => {
-          const role = index === 0 ? "WINNER" : "LOSER ";
-          const time = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
-          return `${role} ${entry.placement}. ${entry.name.padEnd(10, " ")} ${time}  TKD ${entry.takedowns}`;
-        })
-        .join("\n");
     } else {
       this.statusTitle.textContent = "Results";
       this.statusSubtitle.textContent = `${results.entries[0]?.name ?? "Winner"} takes the line first.`;
-      this.statusBody.textContent = results.entries
-        .map((entry) => {
-          const time = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
-          return `${entry.placement}. ${entry.name.padEnd(10, " ")} ${time}  TKD ${entry.takedowns}`;
-        })
-        .join("\n");
     }
+    this.statusBody.replaceChildren(...results.entries.map((entry, index) => this.createResultRow(entry, index === 0)));
     this.primaryButton.textContent = this.launch.mode === "multiplayer" ? "Back To Lobby" : "Retry";
     this.primaryButton.style.display = "";
     this.secondaryButton.textContent = "Back To Menu";
@@ -792,29 +794,597 @@ export class App {
     }
   }
 
+  private createRuntimeUiStyles(): HTMLStyleElement {
+    const style = document.createElement("style");
+    style.textContent = `
+      @font-face {
+        font-family: "Tempo Display";
+        src: url("/fonts/oxanium-600.woff2") format("woff2");
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Tempo Display";
+        src: url("/fonts/oxanium-700.woff2") format("woff2");
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Tempo Sans";
+        src: url("/fonts/rajdhani-500.woff2") format("woff2");
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Tempo Sans";
+        src: url("/fonts/rajdhani-600.woff2") format("woff2");
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Tempo Sans";
+        src: url("/fonts/rajdhani-700.woff2") format("woff2");
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+      }
+
+      .tempo-runtime-hud,
+      .tempo-name-label-layer,
+      .tempo-runtime-overlay,
+      .tempo-debug-hud {
+        --tempo-hud-bg: rgba(4, 10, 18, 0.78);
+        --tempo-hud-panel: linear-gradient(180deg, rgba(10, 20, 31, 0.92), rgba(3, 8, 15, 0.86));
+        --tempo-hud-border: rgba(104, 231, 255, 0.28);
+        --tempo-hud-glow: rgba(36, 215, 255, 0.12);
+        --tempo-hud-accent: #7cf9ff;
+        --tempo-hud-accent-hot: #bffcff;
+        --tempo-hud-boost: #86ff56;
+        --tempo-hud-danger: #ff5a6f;
+        --tempo-hud-text: #f1fbff;
+        --tempo-hud-muted: rgba(188, 228, 240, 0.74);
+        --tempo-hud-shadow: 0 18px 64px rgba(0, 0, 0, 0.42);
+      }
+
+      .tempo-runtime-hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 10;
+        font-family: "Tempo Sans", ui-sans-serif, sans-serif;
+        color: var(--tempo-hud-text);
+      }
+
+      .tempo-hud-card {
+        position: relative;
+        overflow: hidden;
+        background: var(--tempo-hud-panel);
+        border: 1px solid var(--tempo-hud-border);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          0 0 0 1px rgba(124, 249, 255, 0.05),
+          0 10px 36px rgba(0, 0, 0, 0.35),
+          0 0 40px var(--tempo-hud-glow);
+        backdrop-filter: blur(10px);
+      }
+
+      .tempo-hud-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(135deg, rgba(124, 249, 255, 0.12), transparent 42%),
+          repeating-linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.025) 0,
+            rgba(255, 255, 255, 0.025) 1px,
+            transparent 1px,
+            transparent 9px
+          );
+        pointer-events: none;
+        mix-blend-mode: screen;
+      }
+
+      .tempo-hud-card::after {
+        content: "";
+        position: absolute;
+        inset: auto 14px 0 14px;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(124, 249, 255, 0.6), transparent);
+        pointer-events: none;
+      }
+
+      .tempo-hud-race {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: min(280px, calc(100vw - 32px));
+      }
+
+      .tempo-hud-place {
+        padding: 12px 14px 13px;
+        clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+      }
+
+      .tempo-hud-kicker {
+        color: var(--tempo-hud-muted);
+        font: 700 11px/1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+      }
+
+      .tempo-hud-place-value {
+        margin-top: 6px;
+        font: 700 clamp(32px, 4vw, 46px)/0.9 "Tempo Display", ui-sans-serif, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--tempo-hud-accent-hot);
+        text-shadow: 0 0 22px rgba(124, 249, 255, 0.2);
+      }
+
+      .tempo-hud-progress {
+        padding: 11px 14px 13px;
+        clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 16px) 100%, 0 100%);
+      }
+
+      .tempo-hud-progress-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+      }
+
+      .tempo-hud-progress-value {
+        font: 700 20px/1 "Tempo Display", ui-sans-serif, sans-serif;
+        letter-spacing: 0.12em;
+        color: var(--tempo-hud-accent-hot);
+      }
+
+      .tempo-hud-progress-rail {
+        margin-top: 10px;
+        height: 6px;
+        background: rgba(96, 174, 192, 0.16);
+        border: 1px solid rgba(96, 174, 192, 0.18);
+        overflow: hidden;
+      }
+
+      .tempo-hud-progress-fill {
+        width: 100%;
+        height: 100%;
+        transform-origin: left center;
+        transform: scaleX(0);
+        background: linear-gradient(90deg, rgba(124, 249, 255, 0.2), rgba(124, 249, 255, 0.9), rgba(134, 255, 86, 0.8));
+        box-shadow: 0 0 18px rgba(124, 249, 255, 0.35);
+      }
+
+      .tempo-hud-combat {
+        position: absolute;
+        left: 16px;
+        bottom: 16px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 180px));
+        gap: 10px;
+        width: min(370px, calc(100vw - 32px));
+      }
+
+      .tempo-hud-slot {
+        padding: 10px 12px 11px;
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+      }
+
+      .tempo-hud-slot-value {
+        margin-top: 7px;
+        font: 700 18px/1.05 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--tempo-hud-text);
+      }
+
+      .tempo-hud-slot-value.is-empty {
+        color: rgba(188, 228, 240, 0.54);
+      }
+
+      .tempo-hud-slot-value.is-active {
+        color: var(--tempo-hud-accent-hot);
+        text-shadow: 0 0 20px rgba(124, 249, 255, 0.14);
+      }
+
+      .tempo-hud-summary {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: min(312px, calc(100vw - 32px));
+        padding: 12px 14px 13px;
+        clip-path: polygon(16px 0, 100% 0, 100% 100%, 0 100%, 0 16px);
+      }
+
+      .tempo-hud-summary-status {
+        color: var(--tempo-hud-accent-hot);
+        font: 600 16px/1.1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.06em;
+      }
+
+      .tempo-hud-standings {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .tempo-hud-standings-row {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        padding: 8px 0 0;
+        border-top: 1px solid rgba(124, 249, 255, 0.12);
+      }
+
+      .tempo-hud-standings-row.is-local {
+        color: var(--tempo-hud-accent-hot);
+      }
+
+      .tempo-hud-standings-rank {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 30px;
+        background: rgba(124, 249, 255, 0.1);
+        border: 1px solid rgba(124, 249, 255, 0.22);
+        font: 700 16px/1 "Tempo Display", ui-sans-serif, sans-serif;
+        letter-spacing: 0.08em;
+      }
+
+      .tempo-hud-standings-copy {
+        min-width: 0;
+      }
+
+      .tempo-hud-standings-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font: 700 18px/1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.08em;
+      }
+
+      .tempo-hud-standings-meta {
+        margin-top: 4px;
+        color: var(--tempo-hud-muted);
+        font: 600 11px/1.2 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .tempo-name-label-layer {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 11;
+      }
+
+      .tempo-name-label {
+        position: absolute;
+        left: 0;
+        top: 0;
+        padding: 5px 9px;
+        border: 1px solid rgba(134, 255, 86, 0.34);
+        border-radius: 999px;
+        background: rgba(4, 8, 14, 0.88);
+        box-shadow: 0 0 18px rgba(134, 255, 86, 0.16);
+        color: #f7fffd;
+        font: 700 12px/1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.12em;
+        white-space: nowrap;
+        transform: translate(-50%, -100%);
+        opacity: 0;
+        display: none;
+      }
+
+      .tempo-runtime-overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top, rgba(124, 249, 255, 0.08), transparent 42%),
+          rgba(2, 4, 9, 0.62);
+        pointer-events: none;
+        z-index: 15;
+        font-family: "Tempo Sans", ui-sans-serif, sans-serif;
+      }
+
+      .tempo-runtime-overlay-panel {
+        width: min(760px, calc(100vw - 48px));
+        padding: 26px 26px 24px;
+        background: linear-gradient(180deg, rgba(7, 14, 24, 0.96), rgba(3, 8, 16, 0.92));
+        border: 1px solid rgba(124, 249, 255, 0.24);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          var(--tempo-hud-shadow),
+          0 0 60px rgba(124, 249, 255, 0.08);
+        pointer-events: auto;
+        clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 22px 100%, 0 calc(100% - 22px));
+      }
+
+      .tempo-runtime-overlay-title {
+        color: var(--tempo-hud-accent-hot);
+        font: 700 clamp(40px, 8vw, 84px)/0.88 "Tempo Display", ui-sans-serif, sans-serif;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        text-shadow: 0 0 28px rgba(124, 249, 255, 0.18);
+      }
+
+      .tempo-runtime-overlay[data-overlay-state="countdown"] .tempo-runtime-overlay-title {
+        font-size: clamp(78px, 18vw, 150px);
+      }
+
+      .tempo-runtime-overlay-subtitle {
+        margin-top: 12px;
+        color: var(--tempo-hud-muted);
+        font: 600 14px/1.4 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+      }
+
+      .tempo-runtime-overlay-body {
+        display: none;
+        margin-top: 18px;
+      }
+
+      .tempo-runtime-overlay-results {
+        gap: 10px;
+      }
+
+      .tempo-runtime-result-row {
+        display: grid;
+        grid-template-columns: 56px minmax(0, 1fr) auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 14px;
+        background: rgba(9, 20, 32, 0.78);
+        border: 1px solid rgba(124, 249, 255, 0.12);
+      }
+
+      .tempo-runtime-result-row.is-winner {
+        border-color: rgba(134, 255, 86, 0.32);
+        box-shadow: 0 0 26px rgba(134, 255, 86, 0.08);
+      }
+
+      .tempo-runtime-result-rank {
+        color: var(--tempo-hud-accent-hot);
+        font: 700 26px/1 "Tempo Display", ui-sans-serif, sans-serif;
+        letter-spacing: 0.1em;
+      }
+
+      .tempo-runtime-result-copy {
+        min-width: 0;
+      }
+
+      .tempo-runtime-result-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font: 700 20px/1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.08em;
+      }
+
+      .tempo-runtime-result-status {
+        margin-top: 4px;
+        color: var(--tempo-hud-muted);
+        font: 600 11px/1.2 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .tempo-runtime-result-time,
+      .tempo-runtime-result-takedowns {
+        text-align: right;
+        font: 700 16px/1 "Tempo Display", ui-sans-serif, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--tempo-hud-text);
+      }
+
+      .tempo-runtime-result-takedowns {
+        min-width: 56px;
+      }
+
+      .tempo-runtime-overlay-actions {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        margin-top: 22px;
+      }
+
+      .tempo-runtime-overlay-button {
+        min-width: 172px;
+        padding: 12px 18px;
+        border: 1px solid rgba(124, 249, 255, 0.24);
+        background: linear-gradient(135deg, rgba(121, 245, 255, 0.18), rgba(134, 255, 86, 0.16));
+        color: var(--tempo-hud-accent-hot);
+        font: 700 14px/1 "Tempo Sans", ui-sans-serif, sans-serif;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        cursor: pointer;
+        clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+        transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+      }
+
+      .tempo-runtime-overlay-button:hover,
+      .tempo-runtime-overlay-button:focus-visible {
+        transform: translateY(-1px);
+        border-color: rgba(124, 249, 255, 0.46);
+        box-shadow: 0 0 26px rgba(124, 249, 255, 0.14);
+      }
+
+      .tempo-debug-hud {
+        position: fixed;
+        bottom: 16px;
+        left: 16px;
+        z-index: 20;
+        padding: 10px 12px;
+        background: rgba(5, 8, 14, 0.82);
+        border: 1px solid rgba(20, 241, 255, 0.35);
+        color: #d7f9ff;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre;
+        pointer-events: none;
+      }
+
+      @media (max-width: 1100px), (max-height: 760px) {
+        .tempo-hud-race,
+        .tempo-hud-summary {
+          width: min(260px, calc(100vw - 32px));
+        }
+
+        .tempo-hud-combat {
+          grid-template-columns: repeat(2, minmax(0, 156px));
+          width: min(322px, calc(100vw - 32px));
+        }
+
+        .tempo-runtime-result-row {
+          grid-template-columns: 46px minmax(0, 1fr) auto;
+        }
+
+        .tempo-runtime-result-takedowns {
+          grid-column: 2 / -1;
+          text-align: left;
+          min-width: 0;
+        }
+      }
+
+      @media (max-width: 760px), (max-height: 620px) {
+        .tempo-hud-race,
+        .tempo-hud-summary {
+          top: 12px;
+        }
+
+        .tempo-hud-race {
+          left: 12px;
+          width: min(232px, calc(100vw - 24px));
+          gap: 8px;
+        }
+
+        .tempo-hud-summary {
+          right: 12px;
+          width: min(228px, calc(100vw - 24px));
+          padding: 10px 12px 11px;
+        }
+
+        .tempo-hud-place,
+        .tempo-hud-progress,
+        .tempo-hud-slot {
+          padding-inline: 12px;
+        }
+
+        .tempo-hud-place-value {
+          font-size: clamp(28px, 8vw, 34px);
+        }
+
+        .tempo-hud-progress-value,
+        .tempo-hud-slot-value,
+        .tempo-hud-standings-name {
+          font-size: 16px;
+        }
+
+        .tempo-hud-summary-status,
+        .tempo-runtime-overlay-subtitle {
+          font-size: 12px;
+        }
+
+        .tempo-hud-combat {
+          left: 12px;
+          bottom: 12px;
+          width: min(300px, calc(100vw - 24px));
+          gap: 8px;
+        }
+
+        .tempo-runtime-overlay {
+          padding: 14px;
+        }
+
+        .tempo-runtime-overlay-panel {
+          width: min(100%, calc(100vw - 28px));
+          padding: 22px 18px 18px;
+        }
+
+        .tempo-runtime-overlay-actions {
+          flex-direction: column;
+        }
+
+        .tempo-runtime-overlay-button {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .tempo-runtime-result-row {
+          grid-template-columns: 42px minmax(0, 1fr);
+          gap: 10px;
+        }
+
+        .tempo-runtime-result-time,
+        .tempo-runtime-result-takedowns {
+          grid-column: 2;
+          text-align: left;
+        }
+      }
+    `;
+    return style;
+  }
+
   private createHud(): HTMLDivElement {
     const hud = document.createElement("div");
-    hud.style.position = "fixed";
-    hud.style.inset = "0";
-    hud.style.pointerEvents = "none";
-    hud.style.zIndex = "10";
+    hud.className = "tempo-runtime-hud";
     hud.innerHTML = `
-      <div style="position:absolute;top:16px;left:16px;display:flex;flex-direction:column;gap:8px;">
-        <div class="tempo-hud-placement" style="padding:10px 12px;background:rgba(4,8,14,0.72);border:1px solid rgba(120,230,255,0.22);font:700 13px/1.25 ui-monospace,monospace;letter-spacing:0.06em;text-transform:uppercase;color:#ecfbff;">Place: 1</div>
-        <div class="tempo-hud-checkpoint" style="padding:10px 12px;background:rgba(4,8,14,0.72);border:1px solid rgba(120,230,255,0.22);font:700 13px/1.25 ui-monospace,monospace;letter-spacing:0.06em;text-transform:uppercase;color:#ecfbff;">Progress: 0%</div>
-        <div class="tempo-hud-inventory" style="padding:10px 12px;background:rgba(4,8,14,0.72);border:1px solid rgba(120,230,255,0.22);font:700 12px/1.6 ui-monospace,monospace;letter-spacing:0.04em;text-transform:uppercase;color:#ecfbff;">Attack: None<br>Defense: None</div>
+      <div class="tempo-hud-race">
+        <div class="tempo-hud-card tempo-hud-place">
+          <div class="tempo-hud-kicker">Place</div>
+          <div class="tempo-hud-place-value">1</div>
+        </div>
+        <div class="tempo-hud-card tempo-hud-progress">
+          <div class="tempo-hud-progress-head">
+            <div class="tempo-hud-kicker">Progress</div>
+            <div class="tempo-hud-progress-value">0%</div>
+          </div>
+          <div class="tempo-hud-progress-rail">
+            <div class="tempo-hud-progress-fill"></div>
+          </div>
+        </div>
       </div>
-      <div class="tempo-hud-roster" style="position:absolute;top:16px;right:16px;min-width:260px;padding:10px 12px;background:rgba(4,8,14,0.72);border:1px solid rgba(120,230,255,0.22);font:600 12px/1.5 ui-monospace,monospace;letter-spacing:0.02em;color:#dff7ff;white-space:pre;"></div>
+      <div class="tempo-hud-combat">
+        <div class="tempo-hud-card tempo-hud-slot">
+          <div class="tempo-hud-kicker">Attack</div>
+          <div class="tempo-hud-slot-value is-empty" data-slot="attack">Empty</div>
+        </div>
+        <div class="tempo-hud-card tempo-hud-slot">
+          <div class="tempo-hud-kicker">Defense</div>
+          <div class="tempo-hud-slot-value is-empty" data-slot="defense">Empty</div>
+        </div>
+      </div>
+      <div class="tempo-hud-card tempo-hud-summary">
+        <div class="tempo-hud-summary-status">Warmup lane live.</div>
+        <div class="tempo-hud-standings"></div>
+      </div>
     `;
+    hud.dataset.mode = this.launch.mode ?? "solo";
     return hud;
   }
 
   private createNameLabelLayer(): HTMLDivElement {
     const layer = document.createElement("div");
-    layer.style.position = "fixed";
-    layer.style.inset = "0";
-    layer.style.pointerEvents = "none";
-    layer.style.zIndex = "11";
+    layer.className = "tempo-name-label-layer";
     return layer;
   }
 
@@ -827,50 +1397,22 @@ export class App {
     secondaryButton: HTMLButtonElement;
   } {
     const overlay = document.createElement("div");
-    overlay.style.position = "fixed";
-    overlay.style.inset = "0";
-    overlay.style.display = "flex";
-    overlay.style.alignItems = "center";
-    overlay.style.justifyContent = "center";
-    overlay.style.background = "rgba(2, 4, 9, 0.52)";
-    overlay.style.pointerEvents = "none";
-    overlay.style.zIndex = "15";
+    overlay.className = "tempo-runtime-overlay";
 
     const panel = document.createElement("div");
-    panel.style.minWidth = "min(520px, calc(100vw - 48px))";
-    panel.style.padding = "28px 28px 24px";
-    panel.style.borderRadius = "20px";
-    panel.style.border = "1px solid rgba(120, 230, 255, 0.18)";
-    panel.style.background = "rgba(8, 12, 20, 0.9)";
-    panel.style.boxShadow = "0 30px 120px rgba(0, 0, 0, 0.48)";
-    panel.style.textAlign = "center";
-    panel.style.pointerEvents = "auto";
+    panel.className = "tempo-runtime-overlay-panel";
 
     const title = document.createElement("div");
-    title.style.color = "#f4fbff";
-    title.style.font = "700 38px/1.02 system-ui, sans-serif";
-    title.style.letterSpacing = "0.08em";
-    title.style.textTransform = "uppercase";
+    title.className = "tempo-runtime-overlay-title";
 
     const subtitle = document.createElement("div");
-    subtitle.style.marginTop = "10px";
-    subtitle.style.color = "rgba(221, 233, 247, 0.8)";
-    subtitle.style.font = "600 13px/1.45 system-ui, sans-serif";
-    subtitle.style.letterSpacing = "0.08em";
-    subtitle.style.textTransform = "uppercase";
+    subtitle.className = "tempo-runtime-overlay-subtitle";
 
     const body = document.createElement("div");
-    body.style.display = "none";
-    body.style.marginTop = "18px";
-    body.style.color = "#d8f5ff";
-    body.style.font = "600 12px/1.65 ui-monospace, monospace";
-    body.style.whiteSpace = "pre";
+    body.className = "tempo-runtime-overlay-body tempo-runtime-overlay-results";
 
     const actions = document.createElement("div");
-    actions.style.display = "flex";
-    actions.style.justifyContent = "center";
-    actions.style.gap = "12px";
-    actions.style.marginTop = "22px";
+    actions.className = "tempo-runtime-overlay-actions";
 
     const primaryButton = this.createOverlayButton("Retry");
     primaryButton.addEventListener("click", () => {
@@ -930,21 +1472,7 @@ export class App {
     if (existing) return existing;
 
     const label = document.createElement("div");
-    label.style.position = "absolute";
-    label.style.left = "0";
-    label.style.top = "0";
-    label.style.padding = "5px 8px";
-    label.style.borderRadius = "999px";
-    label.style.border = "1px solid rgba(110, 255, 190, 0.34)";
-    label.style.background = "rgba(4, 8, 14, 0.84)";
-    label.style.boxShadow = "0 0 18px rgba(110, 255, 190, 0.18)";
-    label.style.color = "#f5fffd";
-    label.style.font = "700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace";
-    label.style.letterSpacing = "0.08em";
-    label.style.whiteSpace = "nowrap";
-    label.style.transform = "translate(-50%, -100%)";
-    label.style.opacity = "0";
-    label.style.display = "none";
+    label.className = "tempo-name-label";
     this.nameLabels.set(clientId, label);
     this.nameLabelLayer.appendChild(label);
     return label;
@@ -967,21 +1495,15 @@ export class App {
   private createOverlayButton(label: string): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
+    button.className = "tempo-runtime-overlay-button";
     button.textContent = label;
-    button.style.border = "0";
-    button.style.borderRadius = "999px";
-    button.style.padding = "12px 18px";
-    button.style.background = "linear-gradient(135deg, rgba(121, 245, 255, 0.94), rgba(119, 255, 184, 0.94))";
-    button.style.color = "#071019";
-    button.style.font = "800 12px/1 system-ui, sans-serif";
-    button.style.letterSpacing = "0.12em";
-    button.style.textTransform = "uppercase";
-    button.style.cursor = "pointer";
     return button;
   }
 
   private setOverlayMessage(title: string, subtitle: string): void {
+    this.statusOverlay.dataset.overlayState = "message";
     this.statusOverlay.style.display = "flex";
+    this.statusBody.replaceChildren();
     this.statusBody.style.display = "none";
     this.statusTitle.textContent = title;
     this.statusSubtitle.textContent = subtitle;
@@ -996,41 +1518,56 @@ export class App {
       let visual = this.pickupVisuals.get(pickup.id);
       if (!visual) {
         const isMissile = pickup.kind === "missile";
-        const coreColor = isMissile ? "#ff2040" : "#1e3a8a";
-        const emissiveColor = isMissile ? "#ff2040" : "#3b63d9";
+        const coreColor = isMissile ? "#ff3a68" : "#71ffd2";
+        const emissiveColor = isMissile ? "#ff5da0" : "#98ff62";
         const mesh = new Mesh(
-          new SphereGeometry(0.85, 20, 14),
+          new SphereGeometry(1.02, 20, 14),
           new MeshStandardMaterial({
             color: coreColor,
             emissive: emissiveColor,
-            emissiveIntensity: 4.8,
+            emissiveIntensity: 7.6,
+            roughness: 0.24,
+            metalness: 0.08,
+          }),
+        );
+        const glowShell = new Mesh(
+          new SphereGeometry(1.75, 18, 12),
+          new MeshBasicMaterial({
+            color: emissiveColor,
+            transparent: true,
+            opacity: 0.18,
+            depthTest: false,
+            depthWrite: false,
+            blending: AdditiveBlending,
           }),
         );
         const beam = new Mesh(
-          new CylinderGeometry(0.45, 0.45, 16, 12, 1, true),
+          new CylinderGeometry(0.62, 0.62, 22, 12, 1, true),
+          new MeshBasicMaterial({
+            color: emissiveColor,
+            transparent: true,
+            opacity: 0.96,
+            depthTest: false,
+            depthWrite: false,
+            blending: AdditiveBlending,
+            side: DoubleSide,
+          }),
+        );
+        beam.position.y = 11;
+        const ring = new Mesh(
+          new CylinderGeometry(3.7, 3.7, 0.1, 24, 1, true),
           new MeshBasicMaterial({
             color: emissiveColor,
             transparent: true,
             opacity: 0.88,
             depthTest: false,
             depthWrite: false,
+            blending: AdditiveBlending,
             side: DoubleSide,
           }),
         );
-        beam.position.y = 8;
-        const ring = new Mesh(
-          new CylinderGeometry(2.8, 2.8, 0.08, 20, 1, true),
-          new MeshBasicMaterial({
-            color: emissiveColor,
-            transparent: true,
-            opacity: 0.72,
-            depthTest: false,
-            depthWrite: false,
-            side: DoubleSide,
-          }),
-        );
-        ring.position.y = -0.35;
-        mesh.add(beam, ring);
+        ring.position.y = -0.55;
+        mesh.add(beam, ring, glowShell);
         visual = { mesh, kind: pickup.kind, u: pickup.u, lane: pickup.lane };
         this.pickupVisuals.set(pickup.id, visual);
         this.pickupGroup.add(mesh);
@@ -1054,17 +1591,22 @@ export class App {
       const center = this.track.getPointAt(visual.u);
       visual.mesh.position.copy(center);
       visual.mesh.position.addScaledVector(frame.right, visual.lane * NOMINAL_HALF_WIDTH);
-      visual.mesh.position.addScaledVector(frame.up, defaultVehicleTuning.hoverHeight);
+      visual.mesh.position.addScaledVector(frame.up, defaultVehicleTuning.hoverHeight + 0.65);
       this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
       visual.mesh.setRotationFromMatrix(this.orientMat);
+      const pulse = 1 + Math.sin(timeSeconds * 4.2 + visual.u * 23) * 0.16;
+      visual.mesh.scale.setScalar(pulse);
       const beam = visual.mesh.children[0];
       const ring = visual.mesh.children[1];
+      const glowShell = visual.mesh.children[2];
       if (beam) {
-        beam.scale.y = 1 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.12;
+        beam.scale.y = 1 + Math.sin(timeSeconds * 3 + visual.u * 17) * 0.18;
       }
       if (ring) {
-        const pulse = 1 + Math.sin(timeSeconds * 4.2 + visual.u * 23) * 0.16;
         ring.scale.setScalar(pulse);
+      }
+      if (glowShell instanceof Mesh && glowShell.material instanceof MeshBasicMaterial) {
+        glowShell.material.opacity = 0.16 + (pulse - 1) * 0.32;
       }
     }
   }
@@ -1546,29 +2088,115 @@ export class App {
 
   private updateHud(): void {
     const progress = Math.max(0, Math.min(100, Math.round(this.vehicleController.state.trackU * 100)));
-    this.placementHud.textContent = `Place: ${this.localPlacement}`;
-    this.checkpointHud.textContent = `Progress: ${progress}%`;
-    this.inventoryHud.innerHTML = `Attack: ${formatCombatSlot(this.localOffensiveItem, "fire")}<br>Defense: ${formatCombatSlot(this.localDefensiveItem, "shield")}`;
+    this.placementHud.textContent = this.localPlacement.toString();
+    this.checkpointHud.textContent = `${progress}%`;
+    this.checkpointBarHud.style.transform = `scaleX(${Math.max(progress / 100, 0.02).toFixed(3)})`;
+    this.setSlotValue(this.offensiveHud, formatCombatSlot(this.localOffensiveItem, "fire"), this.localOffensiveItem !== null);
+    this.setSlotValue(this.defensiveHud, formatCombatSlot(this.localDefensiveItem, "shield"), this.localDefensiveItem !== null);
     this.renderRoster();
   }
 
   private renderRoster(): void {
-    if (this.latestRoster.length === 0) {
-      this.rosterHud.textContent = `Room Status\n${this.lastStatusMessage || "Warmup lane live."}`;
+    if (this.launch.mode !== "multiplayer") {
+      this.summaryHud.style.display = "none";
       return;
     }
 
-    const lines = this.latestRoster.map((player) => {
-      const state = this.serverPlayers.get(player.clientId);
-      const placement = state ? `${state.placement}.` : "-.";
-      const youTag = player.clientId === this.launch.localPlayerId ? " (You)" : "";
-      return `${placement} ${player.name}${youTag} - ${describePlayerStatus(player)}`;
-    });
-    if (this.lastStatusMessage) {
-      lines.unshift(this.lastStatusMessage, "");
+    this.summaryHud.style.display = "";
+    this.rosterHud.textContent = this.lastStatusMessage || "Warmup lane live.";
+    this.rosterListHud.replaceChildren();
+    if (this.latestRoster.length === 0) {
+      return;
     }
-    lines.unshift("Room Status");
-    this.rosterHud.textContent = lines.join("\n");
+
+    const sortedPlayers = [...this.latestRoster].sort((a, b) => {
+      const placementA = this.serverPlayers.get(a.clientId)?.placement ?? Number.POSITIVE_INFINITY;
+      const placementB = this.serverPlayers.get(b.clientId)?.placement ?? Number.POSITIVE_INFINITY;
+      if (placementA !== placementB) return placementA - placementB;
+      return a.name.localeCompare(b.name);
+    });
+    const visiblePlayers = sortedPlayers.slice(0, this.isCompactHudLayout() ? 2 : 3);
+    const localPlayer = sortedPlayers.find((player) => player.clientId === this.launch.localPlayerId) ?? null;
+    if (localPlayer && !visiblePlayers.some((player) => player.clientId === localPlayer.clientId)) {
+      visiblePlayers.push(localPlayer);
+    }
+    for (const player of visiblePlayers) {
+      this.rosterListHud.appendChild(this.createSummaryRow(player));
+    }
+  }
+
+  private createSummaryRow(player: RoomPlayerState): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "tempo-hud-standings-row";
+    if (player.clientId === this.launch.localPlayerId) {
+      row.classList.add("is-local");
+    }
+
+    const rank = document.createElement("div");
+    rank.className = "tempo-hud-standings-rank";
+    rank.textContent = this.serverPlayers.get(player.clientId)?.placement?.toString() ?? "•";
+
+    const copy = document.createElement("div");
+    copy.className = "tempo-hud-standings-copy";
+
+    const name = document.createElement("div");
+    name.className = "tempo-hud-standings-name";
+    name.textContent = player.clientId === this.launch.localPlayerId ? `${player.name} / You` : player.name;
+
+    const meta = document.createElement("div");
+    meta.className = "tempo-hud-standings-meta";
+    meta.textContent = describePlayerStatus(player);
+
+    copy.append(name, meta);
+    row.append(rank, copy);
+    return row;
+  }
+
+  private createResultRow(entry: RaceResults["entries"][number], isWinner: boolean): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "tempo-runtime-result-row";
+    if (isWinner) {
+      row.classList.add("is-winner");
+    }
+
+    const rank = document.createElement("div");
+    rank.className = "tempo-runtime-result-rank";
+    rank.textContent = entry.placement.toString().padStart(2, "0");
+
+    const copy = document.createElement("div");
+    copy.className = "tempo-runtime-result-copy";
+
+    const name = document.createElement("div");
+    name.className = "tempo-runtime-result-name";
+    name.textContent = entry.name;
+
+    const status = document.createElement("div");
+    status.className = "tempo-runtime-result-status";
+    status.textContent = entry.status === "finished"
+      ? (isWinner ? "Finish leader" : "Finished")
+      : "DNF";
+
+    const time = document.createElement("div");
+    time.className = "tempo-runtime-result-time";
+    time.textContent = entry.finishTimeMs === null ? "DNF" : formatTimeMs(entry.finishTimeMs);
+
+    const takedowns = document.createElement("div");
+    takedowns.className = "tempo-runtime-result-takedowns";
+    takedowns.textContent = `TKD ${entry.takedowns}`;
+
+    copy.append(name, status);
+    row.append(rank, copy, time, takedowns);
+    return row;
+  }
+
+  private setSlotValue(target: HTMLDivElement, value: string, active: boolean): void {
+    target.textContent = active ? value : "Empty";
+    target.classList.toggle("is-active", active);
+    target.classList.toggle("is-empty", !active);
+  }
+
+  private isCompactHudLayout(): boolean {
+    return window.innerWidth <= 760 || window.innerHeight <= 620;
   }
 
   private updateNameLabels(): void {
@@ -1629,18 +2257,7 @@ export class App {
   private createDebugHud(enabled: boolean): HTMLDivElement | null {
     if (!enabled) return null;
     const hud = document.createElement("div");
-    hud.style.position = "fixed";
-    hud.style.bottom = "16px";
-    hud.style.left = "16px";
-    hud.style.zIndex = "20";
-    hud.style.padding = "10px 12px";
-    hud.style.background = "rgba(5, 8, 14, 0.82)";
-    hud.style.border = "1px solid rgba(20, 241, 255, 0.35)";
-    hud.style.borderRadius = "8px";
-    hud.style.color = "#d7f9ff";
-    hud.style.font = "12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace";
-    hud.style.whiteSpace = "pre";
-    hud.style.pointerEvents = "none";
+    hud.className = "tempo-debug-hud";
     return hud;
   }
 

@@ -1070,7 +1070,11 @@ function buildPickups(track: Track, seed: number): PickupSpawnState[] {
       if (Math.abs(object.u - u) <= objectPaddingU) return true;
     }
     for (const feature of blockedFeatures) {
-      const featurePaddingU = feature.kind === "jump" ? 0.03 : 0.05;
+      // The original padding values created huge pickup deserts on feature-heavy
+      // tracks, especially in the first quarter of Firestarter. Keep pickups
+      // clear of the stunt cores, but allow them to exist near the run-in and
+      // exit so combat cadence stays readable across the whole race.
+      const featurePaddingU = feature.kind === "jump" ? 0.008 : 0.014;
       if (Math.abs(feature.u - u) <= featurePaddingU) return true;
     }
     return false;
