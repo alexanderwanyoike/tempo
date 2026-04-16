@@ -1,6 +1,7 @@
 import type { VehicleInputState } from "./input";
 
 type TouchRole = "stick" | "brake" | "fire" | "shield";
+type ArmableRole = "fire" | "shield";
 
 export class TouchControls {
   private overlay: HTMLDivElement | null = null;
@@ -8,6 +9,7 @@ export class TouchControls {
   private stickKnob: HTMLDivElement | null = null;
   private readonly roleElements = new Map<TouchRole, HTMLElement>();
   private readonly touches = new Map<number, TouchRole>();
+  private readonly armed: Record<ArmableRole, boolean> = { fire: false, shield: false };
 
   constructor(
     private readonly inputState: VehicleInputState,
@@ -58,6 +60,8 @@ export class TouchControls {
     const brake = this.createActionButton("brake", "Brake");
     const fire = this.createActionButton("fire", "Fire");
     const shield = this.createActionButton("shield", "Shield");
+    fire.classList.toggle("is-disarmed", !this.armed.fire);
+    shield.classList.toggle("is-disarmed", !this.armed.shield);
 
     wrapper.appendChild(stickArea);
     wrapper.appendChild(shield);
@@ -87,11 +91,13 @@ export class TouchControls {
         this.setRoleActive("brake", true);
         consumed = true;
       } else if (role === "fire") {
+        if (!this.armed.fire) continue;
         this.touches.set(touch.identifier, "fire");
         this.inputState.fire = true;
         this.setRoleActive("fire", true);
         consumed = true;
       } else if (role === "shield") {
+        if (!this.armed.shield) continue;
         this.touches.set(touch.identifier, "shield");
         this.inputState.shield = true;
         this.setRoleActive("shield", true);
@@ -213,5 +219,25 @@ export class TouchControls {
     const element = this.roleElements.get(role);
     if (!element) return;
     element.classList.toggle("is-active", active);
+  }
+
+  setVisible(visible: boolean): void {
+    if (!this.overlay) return;
+    this.overlay.style.display = visible ? "" : "none";
+    if (!visible) this.resetState();
+  }
+
+  setArmed(role: ArmableRole, armed: boolean): void {
+    if (this.armed[role] === armed) return;
+    this.armed[role] = armed;
+    const element = this.roleElements.get(role);
+    element?.classList.toggle("is-disarmed", !armed);
+    if (!armed) {
+      for (const [id, r] of this.touches) {
+        if (r === role) this.touches.delete(id);
+      }
+      this.inputState[role] = false;
+      this.setRoleActive(role, false);
+    }
   }
 }

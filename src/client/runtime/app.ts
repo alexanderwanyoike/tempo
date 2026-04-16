@@ -471,6 +471,7 @@ export class App {
         this.countdownResetSpeed,
       );
     }
+    this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
     this.statusBody.replaceChildren();
@@ -483,6 +484,7 @@ export class App {
     this.phase = "running";
     this.countdownStarted = true;
     this.statusOverlay.style.display = "none";
+    this.touchControls?.setVisible(true);
     this.musicSync?.play();
   }
 
@@ -634,6 +636,7 @@ export class App {
   showResults(results: RaceResults): void {
     this.phase = "finished";
     this.musicSync?.stop();
+    this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "results";
     this.statusOverlay.style.display = "flex";
     this.statusBody.style.display = "grid";
@@ -1446,6 +1449,25 @@ export class App {
 
       .tempo-touch-button.is-active .tempo-touch-button-label {
         text-shadow: 0 0 16px color-mix(in srgb, var(--tempo-touch-accent) 32%, transparent);
+      }
+
+      .tempo-touch-button.is-disarmed {
+        pointer-events: none;
+        opacity: 0.32;
+        filter: grayscale(0.55);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.02),
+          0 14px 24px rgba(0, 0, 0, 0.18);
+      }
+
+      .tempo-touch-button.is-disarmed .tempo-touch-button-label {
+        text-shadow: none;
+      }
+
+      @media (pointer: coarse) {
+        .tempo-hud-combat {
+          display: none;
+        }
       }
 
       .tempo-touch-button--shield {
@@ -2362,6 +2384,8 @@ export class App {
     this.checkpointBarHud.style.transform = `scaleX(${Math.max(progress / 100, 0.02).toFixed(3)})`;
     this.setSlotValue(this.offensiveHud, formatCombatSlot(this.localOffensiveItem, "fire"), this.localOffensiveItem !== null);
     this.setSlotValue(this.defensiveHud, formatCombatSlot(this.localDefensiveItem, "shield"), this.localDefensiveItem !== null);
+    this.touchControls?.setArmed("fire", this.localOffensiveItem !== null);
+    this.touchControls?.setArmed("shield", this.localDefensiveItem !== null);
     this.renderRoster();
   }
 
