@@ -16,6 +16,7 @@ tsconfig.tsbuildinfo
 tools/.venv/
 __pycache__/
 public/music/*.mp3
+public/cars/
 public/songs/*.json
 !public/songs/firestarter.json
 !public/songs/test-track.json
