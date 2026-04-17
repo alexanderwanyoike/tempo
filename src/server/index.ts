@@ -111,7 +111,6 @@ type Room = {
   stagingOpenedAt: number;
   preloadDeadlineAt: number;
   stagingTimer: NodeJS.Timeout | null;
-  stagingReadyTimer: NodeJS.Timeout | null;
   snapshotInterval: NodeJS.Timeout | null;
   countdownTimer: NodeJS.Timeout | null;
   eventSequence: number;
@@ -451,23 +450,7 @@ function maybeStartCountdownWhenEligible(room: Room): void {
     return;
   }
 
-  const minimumReadyAt = room.stagingOpenedAt + serverConfig.stagingReadyDelayMs;
-  const remainingDelayMs = Math.max(0, minimumReadyAt - Date.now());
-  if (remainingDelayMs === 0) {
-    startCountdown(room);
-    return;
-  }
-
-  if (room.stagingReadyTimer) return;
-  room.stagingReadyTimer = setTimeout(() => {
-    room.stagingReadyTimer = null;
-    if (room.phase !== "staging") return;
-    const allReady = [...room.players.values()]
-      .filter((candidate) => candidate.isActiveRacer)
-      .every((candidate) => candidate.preload.sceneReady && candidate.preload.audioReady);
-    if (!allReady) return;
-    startCountdown(room);
-  }, remainingDelayMs);
+  startCountdown(room);
 }
 
 function startCountdown(room: Room): void {
@@ -480,10 +463,6 @@ function startCountdown(room: Room): void {
   if (room.stagingTimer) {
     clearTimeout(room.stagingTimer);
     room.stagingTimer = null;
-  }
-  if (room.stagingReadyTimer) {
-    clearTimeout(room.stagingReadyTimer);
-    room.stagingReadyTimer = null;
   }
   room.phase = "countdown";
   const startAt = Date.now() + COUNTDOWN_MS;
@@ -971,7 +950,6 @@ function makeRoom(params: Pick<Room, "code" | "name" | "hostId" | "phase" | "set
     stagingOpenedAt: 0,
     preloadDeadlineAt: 0,
     stagingTimer: null,
-    stagingReadyTimer: null,
     snapshotInterval: null,
     countdownTimer: null,
     eventSequence: 0,
@@ -1025,10 +1003,6 @@ function clearTimers(room: Room): void {
   if (room.stagingTimer) {
     clearTimeout(room.stagingTimer);
     room.stagingTimer = null;
-  }
-  if (room.stagingReadyTimer) {
-    clearTimeout(room.stagingReadyTimer);
-    room.stagingReadyTimer = null;
   }
   if (room.snapshotInterval) {
     clearInterval(room.snapshotInterval);
