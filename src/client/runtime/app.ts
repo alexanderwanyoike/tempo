@@ -223,10 +223,13 @@ export class App {
   private destroyed = false;
   private visualsInitialized = false;
   private lastFrameTime = 0;
+  private sceneElapsedTime = 0;
   private elapsedRaceTime = 0;
   private latestReactiveBands: ReactiveBands | null = null;
   private phase: AppPhase = "staging";
+  private stagingOpenedAt = 0;
   private pendingStartAt = 0;
+  private countdownDurationMs = 2500;
   private audioReady = false;
   private countdownStarted = false;
   private latestCheckpointCount = 1;
@@ -242,6 +245,7 @@ export class App {
   private lastReportedAt = 0;
   private lastFirePressed = false;
   private lastShieldPressed = false;
+  private soloCountdownTimer: number | null = null;
   private latestRoster: RoomPlayerState[] = [];
   private lastStatusMessage = "";
   private boostSurge = 0;
@@ -393,11 +397,11 @@ export class App {
 
     if (launch.mode === "multiplayer") {
       this.statusOverlay.style.display = "none";
-      this.lastStatusMessage = "Warmup lane live. Audio buffering.";
+      this.lastStatusMessage = "Loading lane forming. Audio buffering.";
     } else {
       this.setOverlayMessage(
-        "Loading Track Audio",
-        "Staging the real map while the track audio buffers.",
+        "Loading Fiction Online",
+        "Spinning up the loading lane while the track audio buffers.",
       );
     }
   }
@@ -406,6 +410,7 @@ export class App {
     this.root.append(this.runtimeUiStyles, this.renderer.domElement, this.hud, this.nameLabelLayer, this.statusOverlay);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.touchControls?.attach(this.root);
+    this.stagingOpenedAt = Date.now();
     this.setupScene();
     this.bindEvents();
     this.renderRoster();
@@ -422,6 +427,10 @@ export class App {
     if (this.animationFrameId !== null) {
       window.cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
+    }
+    if (this.soloCountdownTimer !== null) {
+      window.clearTimeout(this.soloCountdownTimer);
+      this.soloCountdownTimer = null;
     }
 
     window.removeEventListener("resize", this.handleResize);
@@ -442,6 +451,9 @@ export class App {
     this.latestRoster = [...players];
     this.syncNameLabels();
     const nextPhase = phase === "lobby" ? "staging" : phase;
+    if (nextPhase === "staging" && this.phase !== "staging") {
+      this.stagingOpenedAt = Date.now();
+    }
     if (this.launch.mode === "multiplayer" && nextPhase === "running") {
       this.enterRunningPhase();
     } else {
@@ -451,26 +463,24 @@ export class App {
 
     if (this.launch.mode !== "multiplayer") return;
     if (phase === "lobby") return;
-
-    const activePlayers = players.filter((player) => player.isActiveRacer);
-    if (this.phase === "staging" && activePlayers.length > 0) {
-      const readyCount = activePlayers.filter((player) => player.preload.sceneReady && player.preload.audioReady).length;
-      this.lastStatusMessage = `Warmup live. ${readyCount}/${activePlayers.length} synced.`;
-    }
+    this.refreshMultiplayerStatusMessage();
   }
 
   beginCountdown(startAt: number): void {
     if (this.phase === "finished") return;
+    if (this.soloCountdownTimer !== null) {
+      window.clearTimeout(this.soloCountdownTimer);
+      this.soloCountdownTimer = null;
+    }
+    this.countdownDurationMs = Math.max(1, startAt - Date.now());
     this.pendingStartAt = startAt;
     this.phase = "countdown";
     this.countdownStarted = false;
-    if (this.launch.mode === "multiplayer") {
-      this.vehicleController.forceTrackState(
-        this.countdownResetTrackU,
-        this.countdownResetLateralOffset,
-        this.countdownResetSpeed,
-      );
-    }
+    this.vehicleController.forceTrackState(
+      this.countdownResetTrackU,
+      this.countdownResetLateralOffset,
+      this.countdownResetSpeed,
+    );
     this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
@@ -478,6 +488,7 @@ export class App {
     this.statusBody.style.display = "none";
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
+    this.refreshMultiplayerStatusMessage();
   }
 
   private enterRunningPhase(): void {
@@ -486,6 +497,7 @@ export class App {
     this.statusOverlay.style.display = "none";
     this.touchControls?.setVisible(true);
     this.musicSync?.play();
+    this.refreshMultiplayerStatusMessage();
   }
 
   applyRaceSnapshot(players: RacePlayerState[], pickups: PickupSpawnState[], checkpointCount: number): void {
@@ -666,9 +678,9 @@ export class App {
       this.audioReady = true;
       this.launch.onAudioReady?.();
       if (this.launch.mode !== "multiplayer") {
-        this.beginCountdown(Date.now() + 2500);
+        this.scheduleSoloCountdown();
       } else if (this.phase === "staging") {
-        this.lastStatusMessage = "Warmup lane live. Audio ready. Waiting for the room.";
+        this.refreshMultiplayerStatusMessage();
       }
     } catch (error) {
       console.error("Audio preload failed:", error);
@@ -2568,10 +2580,75 @@ export class App {
     ].join("\n");
   }
 
+  private getLoadingBlend(now: number): number {
+    if (this.phase === "staging") return 1;
+    if (this.phase === "countdown") {
+      const remainingMs = Math.max(0, this.pendingStartAt - now);
+      return MathUtils.clamp(remainingMs / Math.max(1, this.countdownDurationMs), 0, 1);
+    }
+    return 0;
+  }
+
+  private refreshMultiplayerStatusMessage(): void {
+    if (this.launch.mode !== "multiplayer") return;
+
+    const activePlayers = this.latestRoster.filter((player) => player.isActiveRacer);
+    if (this.phase === "running") {
+      if (!this.lastStatusMessage.startsWith("Finish locked")) {
+        this.lastStatusMessage = "Race live. Hold the line.";
+      }
+      this.renderRoster();
+      return;
+    }
+
+    if (this.phase === "countdown") {
+      this.lastStatusMessage = "Grid lock engaged. Loading fiction dropping away.";
+      this.renderRoster();
+      return;
+    }
+
+    if (activePlayers.length === 0) {
+      this.lastStatusMessage = this.audioReady
+        ? "Loading lane armed. Waiting for pilots."
+        : "Loading lane forming. Audio buffering.";
+      this.renderRoster();
+      return;
+    }
+
+    const readyCount = activePlayers.filter((player) => player.preload.sceneReady && player.preload.audioReady).length;
+    if (!this.audioReady) {
+      this.lastStatusMessage = `Loading lane forming. ${readyCount}/${activePlayers.length} synced.`;
+    } else if (readyCount < activePlayers.length) {
+      this.lastStatusMessage = `Audio locked. Waiting for pilots ${readyCount}/${activePlayers.length}.`;
+    } else {
+      this.lastStatusMessage = "All pilots synced. Grid lock imminent.";
+    }
+
+    this.renderRoster();
+  }
+
+  private scheduleSoloCountdown(): void {
+    if (this.launch.mode === "multiplayer") return;
+    if (this.phase !== "staging") return;
+    if (this.soloCountdownTimer !== null) {
+      window.clearTimeout(this.soloCountdownTimer);
+      this.soloCountdownTimer = null;
+    }
+
+    const minimumCountdownAt = this.stagingOpenedAt + this.config.stagingReadyDelayMs;
+    const remainingHoldMs = Math.max(0, minimumCountdownAt - Date.now());
+    this.soloCountdownTimer = window.setTimeout(() => {
+      this.soloCountdownTimer = null;
+      if (this.destroyed || this.phase !== "staging") return;
+      this.beginCountdown(Date.now() + 2500);
+    }, remainingHoldMs);
+  }
+
   private readonly render = (time: number): void => {
     if (this.destroyed) return;
     const deltaSeconds = (time - this.lastFrameTime) / 1000;
     this.lastFrameTime = time;
+    this.sceneElapsedTime += deltaSeconds;
     const now = Date.now();
     this.updateSpeedFeedback(deltaSeconds);
 
@@ -2604,6 +2681,9 @@ export class App {
 
     const musicTime = this.phase === "running" ? (this.musicSync?.getCurrentTime() ?? this.elapsedRaceTime) : 0;
     this.latestReactiveBands = this.phase === "running" ? (this.musicSync?.getReactiveBands() ?? null) : null;
+    const loadingBlend = this.getLoadingBlend(now);
+    const loadingPulse = 0.5 + 0.5 * Math.sin(time / 280);
+    this.track.setLoadingBlend(loadingBlend, loadingPulse);
     this.updateCarTransform(deltaSeconds);
     this.updateRemoteCars(deltaSeconds);
     this.updateBoostVisuals();
@@ -2611,7 +2691,13 @@ export class App {
     this.updatePickupVisuals(time / 1000);
     this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);
-    this.environment.update(this.elapsedRaceTime, musicTime, this.vehicleController.state.trackU, this.latestReactiveBands);
+    this.environment.update(
+      this.sceneElapsedTime,
+      musicTime,
+      this.vehicleController.state.trackU,
+      this.latestReactiveBands,
+      loadingBlend,
+    );
     this.updateHud();
     this.updateNameLabels();
     this.updateDebugHud();
@@ -2675,12 +2761,15 @@ function formatCombatSlot(item: PickupSpawnState["kind"] | null, slot: "fire" | 
 function describePlayerStatus(player: RoomPlayerState): string {
   if (player.isActiveRacer) {
     if (player.preload.sceneReady && player.preload.audioReady) {
-      return "Ready";
+      return "Grid locked";
     }
     if (player.preload.audioReady) {
-      return "Waiting for other players";
+      return "Waiting on room";
     }
-    return "Loading track";
+    if (player.preload.sceneReady) {
+      return "Syncing audio";
+    }
+    return "Loading lane";
   }
   if (player.ready) {
     return "Ready in lobby";

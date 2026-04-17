@@ -99,6 +99,18 @@ type AmplitudeProfile = {
   halo: number;
 };
 
+type LoadingCog = {
+  anchor: Group;
+  wheel: Group;
+  basePosition: Vector3;
+  baseQuaternion: Quaternion;
+  baseScale: number;
+  bobAmplitude: number;
+  bobSpeed: number;
+  spinSpeed: number;
+  phase: number;
+};
+
 type ThemePalette = {
   skyBase: Color;
   fogBase: Color;
@@ -192,6 +204,10 @@ const MIN_ENV_CLEARANCE = 10;
 const GATE_CLEARANCE_HEIGHT = 12;
 const SKY_DOME_RADIUS = 520;
 const PHRASE_BEATS = 32;
+const LOADING_GEAR_SKY = "#160d05";
+const LOADING_GEAR_FOG = "#2c1906";
+const LOADING_GEAR_TINT = "#ffcf58";
+const LOADING_GEAR_EMISSIVE = "#ff9f20";
 
 export class EnvironmentRuntime {
   readonly group = new Group();
@@ -211,11 +227,18 @@ export class EnvironmentRuntime {
   private readonly accentMaterial: MeshStandardMaterial;
   private readonly gateMaterial: MeshStandardMaterial;
   private readonly haloMaterial: MeshStandardMaterial;
+  private readonly loadingGroup = new Group();
+  private readonly loadingCogMaterial: MeshStandardMaterial;
+  private readonly loadingCogCoreMaterial: MeshStandardMaterial;
+  private readonly loadingCogDetailMaterial: MeshStandardMaterial;
+  private readonly loadingCogs: LoadingCog[];
   private readonly background = new Color();
   private readonly fogColor = new Color();
   private readonly tmpColorA = new Color();
   private readonly tmpColorB = new Color();
   private readonly tmpColorC = new Color();
+  private readonly tmpColorD = new Color();
+  private readonly tmpColorE = new Color();
   private readonly phraseColors: Color[];
   private readonly dummy = new Object3D();
   private readonly defaultDuration: number;
@@ -263,12 +286,48 @@ export class EnvironmentRuntime {
     this.haloMesh = this.createInstancedMesh(new TorusGeometry(1, 0.08, 10, 26), this.haloMaterial, this.definition.halos.length);
     this.group.add(this.haloMesh);
 
+    this.loadingCogMaterial = new MeshStandardMaterial({
+      color: LOADING_GEAR_TINT,
+      emissive: LOADING_GEAR_EMISSIVE,
+      emissiveIntensity: 2.4,
+      metalness: 0.42,
+      roughness: 0.24,
+      transparent: true,
+      opacity: 0,
+    });
+    this.loadingCogCoreMaterial = new MeshStandardMaterial({
+      color: "#4d2c0d",
+      emissive: "#ff8b1f",
+      emissiveIntensity: 1.45,
+      metalness: 0.32,
+      roughness: 0.38,
+      transparent: true,
+      opacity: 0,
+    });
+    this.loadingCogDetailMaterial = new MeshStandardMaterial({
+      color: "#ffeeb0",
+      emissive: "#ffc54d",
+      emissiveIntensity: 2.8,
+      metalness: 0.12,
+      roughness: 0.12,
+      transparent: true,
+      opacity: 0,
+    });
+    this.loadingCogs = this.createLoadingCogs(seed);
+    this.group.add(this.loadingGroup);
+
     this.group.frustumCulled = false;
     this.scene.fog = new FogExp2(this.palette.fogBase.clone(), 0.0021);
     this.scene.background = this.background.copy(this.palette.skyBase);
   }
 
-  update(elapsedTime: number, musicTime: number, trackU: number, sourceBands: ReactiveBands | null): void {
+  update(
+    elapsedTime: number,
+    musicTime: number,
+    trackU: number,
+    sourceBands: ReactiveBands | null,
+    loadingBlend = 0,
+  ): void {
     const section = this.getSectionAtTime(musicTime);
     const bands = sourceBands ?? this.getFallbackBands(elapsedTime, section.energy);
     const amplitude = this.getAmplitudeProfile(bands, section.energy);
@@ -276,13 +335,15 @@ export class EnvironmentRuntime {
     const beatPhase = ((musicTime * this.getBpm()) / 60) % 1;
     const beatPulse = 0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 2);
     const energyPulse = MathUtils.clamp(section.energy * 0.45 + beatPulse * 0.25 + bands.low * 0.3, 0, 1);
+    const stagingBlend = MathUtils.clamp(loadingBlend, 0, 1);
+    const themedAmplitudeScale = MathUtils.lerp(1, 0.42, stagingBlend);
 
     this.skyDome.position.copy(playerPos);
-    this.updateSceneColors(section.type, musicTime, energyPulse, amplitude);
+    this.updateSceneColors(section.type, musicTime, energyPulse, amplitude, stagingBlend);
     this.updateLayer(
       this.definition.sideStructures,
       this.sideMesh,
-      amplitude.side,
+      amplitude.side * themedAmplitudeScale,
       0.52 + section.energy * 0.16,
       elapsedTime,
       { bob: true, spin: false, scale: true, axisBiased: false },
@@ -290,7 +351,7 @@ export class EnvironmentRuntime {
     this.updateLayer(
       this.definition.skyline,
       this.skylineMesh,
-      amplitude.skyline,
+      amplitude.skyline * themedAmplitudeScale,
       0.92 + section.energy * 0.2,
       elapsedTime,
       { bob: true, spin: false, scale: true, axisBiased: true },
@@ -298,7 +359,7 @@ export class EnvironmentRuntime {
     this.updateLayer(
       this.definition.accents,
       this.accentMesh,
-      amplitude.accent,
+      amplitude.accent * themedAmplitudeScale,
       1.05 + section.energy * 0.24,
       elapsedTime,
       { bob: true, spin: true, scale: true, axisBiased: true },
@@ -319,6 +380,7 @@ export class EnvironmentRuntime {
       elapsedTime,
       { bob: false, spin: false, scale: false, axisBiased: true },
     );
+    this.updateLoadingFiction(elapsedTime, stagingBlend);
   }
 
   private createLitMaterial(color: Color): MeshStandardMaterial {
@@ -343,6 +405,108 @@ export class EnvironmentRuntime {
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.frustumCulled = false;
     return mesh;
+  }
+
+  private createLoadingCogs(seed: number): LoadingCog[] {
+    const rng = mulberry32(seed ^ 0x51f15eed);
+    const cogs: LoadingCog[] = [];
+    const rimGeometry = new TorusGeometry(1.14, 0.18, 10, 22);
+    const hubGeometry = new CylinderGeometry(0.34, 0.34, 0.28, 14);
+    const toothGeometry = new BoxGeometry(0.26, 0.54, 0.2);
+    const spokeGeometry = new BoxGeometry(1.18, 0.1, 0.14);
+    const maxCogBanks = Math.max(14, Math.min(64, Math.ceil(this.track.totalLength / 220)));
+    const targetSpacing = Math.max(46, this.track.totalLength / maxCogBanks);
+
+    let distance = 36;
+    while (distance < this.track.totalLength - 24 && cogs.length < maxCogBanks * 2) {
+      const u = distance / this.track.totalLength;
+      const frame = this.track.getFrameAt(u);
+      const center = this.track.getPointAt(u);
+      const sides = rng() > 0.18 ? ([-1, 1] as const) : ([rng() > 0.5 ? 1 : -1] as const);
+      for (const side of sides) {
+        const lateralOffset = this.track.getHalfWidthAt(u) + 11 + rng() * 10;
+        const verticalOffset = 4.2 + rng() * 8.8;
+        const basePosition = center.clone()
+          .addScaledVector(frame.right, lateralOffset * side)
+          .addScaledVector(frame.up, verticalOffset);
+
+        const anchor = new Group();
+        anchor.position.copy(basePosition);
+        anchor.quaternion.copy(this.quaternionFromFrame(frame));
+
+        const wheel = new Group();
+        const scale = 2.4 + rng() * 2.8;
+        wheel.scale.setScalar(scale);
+
+        const rim = new Mesh(rimGeometry, this.loadingCogMaterial);
+        const hub = new Mesh(hubGeometry, this.loadingCogCoreMaterial);
+        hub.rotation.x = Math.PI / 2;
+        wheel.add(rim, hub);
+
+        for (let toothIndex = 0; toothIndex < 8; toothIndex += 1) {
+          const angle = (toothIndex / 8) * Math.PI * 2;
+          const tooth = new Mesh(toothGeometry, this.loadingCogDetailMaterial);
+          tooth.position.set(Math.cos(angle) * 1.28, Math.sin(angle) * 1.28, 0);
+          tooth.rotation.z = angle;
+          wheel.add(tooth);
+        }
+
+        for (let spokeIndex = 0; spokeIndex < 4; spokeIndex += 1) {
+          const angle = (spokeIndex / 4) * Math.PI * 2 + Math.PI / 4;
+          const spoke = new Mesh(spokeGeometry, this.loadingCogCoreMaterial);
+          spoke.rotation.z = angle;
+          wheel.add(spoke);
+        }
+
+        anchor.add(wheel);
+        this.loadingGroup.add(anchor);
+        cogs.push({
+          anchor,
+          wheel,
+          basePosition,
+          baseQuaternion: anchor.quaternion.clone(),
+          baseScale: scale,
+          bobAmplitude: 0.3 + rng() * 0.9,
+          bobSpeed: 0.55 + rng() * 0.45,
+          spinSpeed: (0.55 + rng() * 1.2) * (side === 1 ? 1 : -1),
+          phase: rng() * Math.PI * 2,
+        });
+      }
+      distance += MathUtils.clamp(
+        targetSpacing * (0.72 + rng() * 0.56),
+        42,
+        92,
+      );
+    }
+
+    this.loadingGroup.visible = false;
+    return cogs;
+  }
+
+  private updateLoadingFiction(elapsedTime: number, loadingBlend: number): void {
+    const visible = loadingBlend > 0.01;
+    this.loadingGroup.visible = visible;
+
+    const rimOpacity = 0.2 + loadingBlend * 0.62;
+    const coreOpacity = 0.18 + loadingBlend * 0.44;
+    const detailOpacity = 0.16 + loadingBlend * 0.56;
+    this.loadingCogMaterial.opacity = visible ? rimOpacity : 0;
+    this.loadingCogMaterial.emissiveIntensity = 1.9 + loadingBlend * 1.35;
+    this.loadingCogCoreMaterial.opacity = visible ? coreOpacity : 0;
+    this.loadingCogCoreMaterial.emissiveIntensity = 1.1 + loadingBlend * 0.9;
+    this.loadingCogDetailMaterial.opacity = visible ? detailOpacity : 0;
+    this.loadingCogDetailMaterial.emissiveIntensity = 2 + loadingBlend * 1.25;
+
+    if (!visible) return;
+
+    for (const cog of this.loadingCogs) {
+      cog.anchor.position.copy(cog.basePosition);
+      cog.anchor.position.y += Math.sin(elapsedTime * cog.bobSpeed + cog.phase) * cog.bobAmplitude * loadingBlend;
+      cog.anchor.quaternion.copy(cog.baseQuaternion);
+      cog.wheel.rotation.z = elapsedTime * cog.spinSpeed * (0.55 + loadingBlend * 1.4) + cog.phase;
+      const pulse = 1 + Math.sin(elapsedTime * 1.6 + cog.phase) * 0.06 * loadingBlend;
+      cog.wheel.scale.setScalar(cog.baseScale * pulse);
+    }
   }
 
   private buildGeometry(kind: ThemeSpec["sideGeometry"] | ThemeSpec["skylineGeometry"] | ThemeSpec["accentGeometry"]): BufferGeometry {
@@ -589,6 +753,7 @@ export class EnvironmentRuntime {
     musicTime: number,
     energyPulse: number,
     amplitude: AmplitudeProfile,
+    loadingBlend: number,
   ): void {
     const phraseA = this.getPhraseColor(musicTime, 0);
     const phraseB = this.getPhraseColor(musicTime, 1);
@@ -596,14 +761,22 @@ export class EnvironmentRuntime {
     const sectionTint = this.tmpColorA.set(SECTION_TINTS[sectionType]);
     const phraseTint = this.tmpColorB.copy(phraseA).lerp(phraseB, phraseProgress);
     const tint = this.tmpColorC.copy(sectionTint).lerp(phraseTint, 0.58);
+    const loadingSky = this.tmpColorD.set(LOADING_GEAR_SKY);
+    const loadingFog = this.tmpColorE.set(LOADING_GEAR_FOG);
 
     this.background.copy(this.palette.skyBase).lerp(tint, 0.05 + energyPulse * 0.08 + amplitude.scene * 0.07);
+    this.background.lerp(loadingSky, loadingBlend * 0.88);
     this.skyMaterial.color.copy(this.background);
 
     if (this.scene.fog instanceof FogExp2) {
       this.fogColor.copy(this.palette.fogBase).lerp(tint, 0.08 + energyPulse * 0.12 + amplitude.scene * 0.1);
+      this.fogColor.lerp(loadingFog, loadingBlend * 0.84);
       this.scene.fog.color.copy(this.fogColor);
-      this.scene.fog.density = MathUtils.lerp(0.0017, 0.0044, energyPulse * 0.42 + amplitude.scene * 0.58);
+      this.scene.fog.density = MathUtils.lerp(
+        MathUtils.lerp(0.0017, 0.0027, loadingBlend),
+        MathUtils.lerp(0.0044, 0.0034, loadingBlend),
+        energyPulse * 0.42 + amplitude.scene * 0.58,
+      );
     }
 
     this.applyMaterialPulse(this.sideMaterial, this.palette.structureBase, tint, 0.54 + amplitude.side * 0.72);
@@ -611,6 +784,16 @@ export class EnvironmentRuntime {
     this.applyMaterialPulse(this.accentMaterial, this.palette.accentBase, tint, 0.45 + amplitude.accent * 1.2);
     this.applyMaterialPulse(this.gateMaterial, this.palette.gateBase, tint, 0.9 + amplitude.gate * 0.82);
     this.applyMaterialPulse(this.haloMaterial, this.palette.haloBase, tint, 0.96 + amplitude.halo * 0.9);
+
+    if (loadingBlend > 0) {
+      const loadingTint = loadingSky.set(LOADING_GEAR_TINT);
+      this.blendTowardLoadingPalette(this.sideMaterial, loadingTint, 1.8, loadingBlend * 0.78);
+      this.blendTowardLoadingPalette(this.skylineMaterial, loadingTint, 2.15, loadingBlend * 0.68);
+      this.blendTowardLoadingPalette(this.accentMaterial, loadingTint, 2.4, loadingBlend * 0.9);
+      this.blendTowardLoadingPalette(this.gateMaterial, loadingTint, 2.9, loadingBlend);
+      this.blendTowardLoadingPalette(this.haloMaterial, loadingTint, 3.15, loadingBlend);
+    }
+    this.applyFictionVisibility(loadingBlend);
   }
 
   private applyMaterialPulse(
@@ -622,6 +805,35 @@ export class EnvironmentRuntime {
     material.color.copy(baseColor).lerp(tint, 0.22 + intensity * 0.24);
     material.emissive.copy(material.color);
     material.emissiveIntensity = 1.4 + intensity * 2.7;
+  }
+
+  private blendTowardLoadingPalette(
+    material: MeshStandardMaterial,
+    loadingColor: Color,
+    emissiveIntensity: number,
+    blend: number,
+  ): void {
+    material.color.lerp(loadingColor, blend);
+    material.emissive.lerp(this.tmpColorE.set(LOADING_GEAR_EMISSIVE), blend * 0.92);
+    material.emissiveIntensity = MathUtils.lerp(material.emissiveIntensity, emissiveIntensity, blend);
+    material.opacity = MathUtils.lerp(material.opacity, 0.78, blend * 0.55);
+  }
+
+  private applyFictionVisibility(loadingBlend: number): void {
+    const revealBlend = MathUtils.clamp((1 - loadingBlend - 0.18) / 0.82, 0, 1);
+    const heavyLayerBlend = revealBlend * revealBlend;
+
+    this.sideMesh.visible = revealBlend > 0.01;
+    this.skylineMesh.visible = revealBlend > 0.01;
+    this.accentMesh.visible = revealBlend > 0.06;
+    this.gateMesh.visible = heavyLayerBlend > 0.08;
+    this.haloMesh.visible = heavyLayerBlend > 0.08;
+
+    this.sideMaterial.opacity = Math.min(this.sideMaterial.opacity, 0.92 * revealBlend);
+    this.skylineMaterial.opacity = Math.min(this.skylineMaterial.opacity, 0.92 * revealBlend);
+    this.accentMaterial.opacity = Math.min(this.accentMaterial.opacity, 0.92 * revealBlend);
+    this.gateMaterial.opacity = Math.min(this.gateMaterial.opacity, 0.92 * heavyLayerBlend);
+    this.haloMaterial.opacity = Math.min(this.haloMaterial.opacity, 0.92 * heavyLayerBlend);
   }
 
   private updateLayer(

@@ -12,6 +12,7 @@ import {
   Vector3,
 } from "three";
 import type { SongSectionType } from "../../../shared/song-schema.js";
+import { TrackPresentationController } from "./track-presentation.js";
 
 const WORLD_UP = new Vector3(0, 1, 0);
 const TRACK_WIDTH = 30;
@@ -68,6 +69,7 @@ export interface Track {
   getTopSpeedAt(u: number): number;
   getTrackObjects(): readonly TrackObject[];
   getTrackFeatures(): readonly TrackFeature[];
+  setLoadingBlend(blend: number, pulse?: number): void;
 }
 
 /**
@@ -103,6 +105,7 @@ export class TestTrack implements Track {
   private readonly rights: Vector3[];
   private readonly ups: Vector3[];
   private readonly trackFeatures: TrackFeature[];
+  private readonly presentation: TrackPresentationController;
 
   constructor() {
     const controlPoints = [
@@ -212,11 +215,17 @@ export class TestTrack implements Track {
     }
 
     // Build meshes
+    const road = this.buildRoad();
+    const leftWall = this.buildWall(-1);
+    const rightWall = this.buildWall(1);
+    const centerLine = this.buildCenterLine();
+
     this.meshGroup = new Group();
-    this.meshGroup.add(this.buildRoad());
-    this.meshGroup.add(this.buildWall(-1));
-    this.meshGroup.add(this.buildWall(1));
-    this.meshGroup.add(this.buildCenterLine());
+    this.meshGroup.add(road);
+    this.meshGroup.add(leftWall);
+    this.meshGroup.add(rightWall);
+    this.meshGroup.add(centerLine);
+    this.presentation = new TrackPresentationController(road, [leftWall, rightWall], centerLine);
   }
 
   getFrameAt(u: number): TrackFrame {
@@ -332,6 +341,10 @@ export class TestTrack implements Track {
 
   getTrackFeatures(): readonly TrackFeature[] {
     return this.trackFeatures;
+  }
+
+  setLoadingBlend(blend: number, pulse = 0): void {
+    this.presentation.setLoadingBlend(blend, pulse);
   }
 
   private xzDistSq(a: Vector3, b: Vector3): number {
