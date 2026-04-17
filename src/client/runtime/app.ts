@@ -2593,7 +2593,13 @@ export class App {
     if (this.phase === "staging") return 1;
     if (this.phase === "countdown") {
       const remainingMs = Math.max(0, this.pendingStartAt - now);
-      return MathUtils.clamp(remainingMs / Math.max(1, this.countdownDurationMs), 0, 1);
+      const countdownProgress = 1 - MathUtils.clamp(
+        remainingMs / Math.max(1, this.countdownDurationMs),
+        0,
+        1,
+      );
+      const fadeProgress = MathUtils.smoothstep(countdownProgress, 0.16, 0.94);
+      return 1 - fadeProgress;
     }
     return 0;
   }
