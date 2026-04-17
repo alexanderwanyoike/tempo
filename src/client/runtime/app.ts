@@ -61,6 +61,7 @@ import {
   createToonGradientMap,
   toToonMaterial,
 } from "./car-toon-shader";
+import { HoverJets } from "./hover-jets";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -100,6 +101,7 @@ type RemoteCarVisual = {
   fallbackCockpitMaterial: MeshToonMaterial;
   feedbackGlow: Mesh;
   feedbackGlowMaterial: MeshBasicMaterial;
+  hoverJets: HoverJets;
   assetGroup: Group | null;
   assetRevision: number;
   targetTrackU: number;
@@ -589,6 +591,7 @@ export class App {
     for (const [clientId, remote] of this.remoteCars) {
       if (!nextIds.has(clientId)) {
         this.scene.remove(remote.group);
+        remote.hoverJets.dispose();
         this.remoteCars.delete(clientId);
         this.removeNameLabel(clientId);
       }
@@ -827,6 +830,9 @@ export class App {
     const bodyPivot = new Group();
     bodyPivot.add(fallbackGroup, feedbackGlow);
 
+    const hoverJets = new HoverJets(palette.body);
+    hoverJets.attachTo(bodyPivot);
+
     const group = new Group();
     group.add(bodyPivot);
 
@@ -840,6 +846,7 @@ export class App {
       fallbackCockpitMaterial: cockpitMaterial,
       feedbackGlow,
       feedbackGlowMaterial,
+      hoverJets,
       assetGroup: null,
       assetRevision: 0,
       targetTrackU: START_TRACK_U,
@@ -2043,6 +2050,10 @@ export class App {
     if (this.localTakenDownUntil > now) {
       this.applySpinoutVisual(this.localVehicle.group, body, state.up, now, this.localTakenDownUntil);
     }
+
+    const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
+    const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
+    this.localVehicle.hoverJets.update(this.sceneElapsedTime, speedRatio, state.boostMultiplier);
   }
 
   private updateRemoteCars(deltaSeconds: number): void {
@@ -2067,6 +2078,9 @@ export class App {
       if (snapshot.takenDownUntil > now) {
         this.applySpinoutVisual(remote.group, body, frame.up, now, snapshot.takenDownUntil);
       }
+
+      const speedRatio = Math.min(1, Math.max(0, snapshot.speed) / 90);
+      remote.hoverJets.update(this.sceneElapsedTime, speedRatio, 1);
     }
   }
 
