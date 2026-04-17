@@ -2172,9 +2172,9 @@ export class App {
     const lookAlpha = 1 - Math.exp(-8 * dt);
     const upAlpha = 1 - Math.exp(-5 * dt);
     if (this.cameraMode === "wild") {
-      const wildCamBack = MathUtils.lerp(9.5, 14.5, speedRatio);
-      const wildCamUp = MathUtils.lerp(5.2, 7.4, speedRatio);
-      const wildLookAhead = MathUtils.lerp(12, 18, speedRatio);
+      const wildCamBack = MathUtils.lerp(9.5, 11.8, speedRatio);
+      const wildCamUp = MathUtils.lerp(5.2, 6.4, speedRatio);
+      const wildLookAhead = MathUtils.lerp(12, 15, speedRatio);
       const wildLateralLead = state.steering * MathUtils.lerp(0.06, 0.2, speedRatio);
       const wildAlpha = 1 - Math.exp(-10 * dt);
       this.stableCameraForward.lerp(state.forward, wildAlpha).normalize();
@@ -2194,9 +2194,9 @@ export class App {
       this.resolveCameraRoadClip(this.desiredCameraPosition, state.trackU);
       this.desiredCameraUp.copy(App.WORLD_UP).lerp(state.up, 0.42).normalize();
     } else {
-      const comfortBack = MathUtils.lerp(8.2, 10.8, speedRatio);
-      const comfortUp = MathUtils.lerp(4.1, 5.6, speedRatio);
-      const comfortLookAhead = MathUtils.lerp(9, 13, speedRatio);
+      const comfortBack = MathUtils.lerp(8.2, 9.6, speedRatio);
+      const comfortUp = MathUtils.lerp(4.1, 4.9, speedRatio);
+      const comfortLookAhead = MathUtils.lerp(9, 11, speedRatio);
       const comfortLateralLead = state.steering * MathUtils.lerp(0.012, 0.04, speedRatio);
       const comfortAlpha = 1 - Math.exp(-11 * dt);
 
@@ -2253,7 +2253,7 @@ export class App {
     this.orientMat.lookAt(this.smoothedCameraPosition, this.smoothedCameraLookTarget, this.smoothedCameraUp);
     this.targetCameraQuaternion.setFromRotationMatrix(this.orientMat);
     this.camera.quaternion.copy(this.targetCameraQuaternion);
-    this.camera.fov = MathUtils.lerp(70, 95, speedRatio * speedRatio);
+    this.camera.fov = MathUtils.lerp(70, 82, speedRatio * speedRatio);
     this.camera.updateProjectionMatrix();
   }
 
