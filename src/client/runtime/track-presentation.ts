@@ -123,25 +123,28 @@ uniform float uChannelGain;
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
-  // Spectral-flux kick is the main punch. Band energies add sustain colour.
   float kickStrength = clamp(uKick, 0.0, 1.0);
-  float bassAmbient = pow(clamp(uBandLow, 0.0, 1.0), 0.7) * 0.45;
+  float bassAmbient = pow(clamp(uBandLow, 0.0, 1.0), 0.6);
+  float midAmbient = pow(clamp(uBandMid, 0.0, 1.0), 0.65);
+  float sustainedEnergy = clamp(bassAmbient * 0.7 + midAmbient * 0.45, 0.0, 1.0);
 
   vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
-  vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
+  vec3 tempoTint = mix(uSectionColor, phraseColor, 0.55);
 
-  // Dim baseline, punches hard on kick. Overshoot slightly above base for bloom bite.
-  float brightnessFactor = 0.28 + kickStrength * 1.05 + bassAmbient * 0.18;
-  vec3 pulsed = totalEmissiveRadiance * brightnessFactor;
+  // Brightness: dim floor, lifted by sustained energy, punches on kick.
+  float brightnessFactor = 0.38 + sustainedEnergy * 0.3 + kickStrength * 0.65;
+  vec3 dimmed = totalEmissiveRadiance * brightnessFactor;
 
-  // Tint shift gated on kick so silent moments stay neutral.
-  pulsed = mix(pulsed, pulsed * tempoTint * 1.3, kickStrength * 0.55);
+  // Colour replacement: road leans into the section palette when audio is active.
+  vec3 tintReplacement = tempoTint * (0.35 + brightnessFactor * 0.95);
+  float tintMix = clamp(sustainedEnergy * 0.7 + kickStrength * 0.25, 0.0, 0.88);
+  vec3 pulsed = mix(dimmed, tintReplacement, tintMix);
 
-  // Ribbon highlight: travels always, brightens hard on kick.
+  // Ribbon: narrow travelling glow, brighter on kicks and active sections.
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
   float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
-  vec3 ribbonAdd = tempoTint * ribbon * (0.08 + kickStrength * 0.65);
+  vec3 ribbonAdd = tempoTint * ribbon * (0.08 + sustainedEnergy * 0.22 + kickStrength * 0.45);
 
   totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
