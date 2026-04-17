@@ -53,7 +53,7 @@ import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
-import { BotSimulator, buildBotConfigs } from "./bot-simulator";
+import { BotSimulator, buildBotConfigs, type BotDifficulty } from "./bot-simulator";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -145,6 +145,7 @@ export type AppLaunchOptions = {
   carVariant?: CarVariant;
   roster?: RoomPlayerState[];
   botCount?: number;
+  botDifficulty?: BotDifficulty;
   onRetry?: (() => void) | null;
   onBackToMenu?: (() => void) | null;
   onBackToLobby?: (() => void) | null;
@@ -161,7 +162,7 @@ const NAME_LABEL_FULL_RANGE = 110;
 const NAME_LABEL_FADE_RANGE = 140;
 // Mirrors server SHIELD_DURATION_MS. Purely cosmetic - the server is the
 // source of truth for the actual shield window.
-const SHIELD_VISUAL_DURATION_MS = 120000;
+const SHIELD_VISUAL_DURATION_MS = 10000;
 
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
@@ -419,7 +420,8 @@ export class App {
       this.soloPickups = simBuildPickups(track, seed);
       const pickedVariant = launch.carVariant ?? "vector";
       const botPool = carVariants.filter((variant) => variant !== pickedVariant);
-      const botConfigs = buildBotConfigs(desiredBotCount, botPool, START_TRACK_U);
+      const difficulty: BotDifficulty = launch.botDifficulty ?? "medium";
+      const botConfigs = buildBotConfigs(desiredBotCount, botPool, START_TRACK_U, difficulty, seed);
       this.botSimulator = new BotSimulator(track, this.soloPickups, this.soloCheckpointUs, botConfigs);
       const localRoster: RoomPlayerState = {
         clientId: launch.localPlayerId ?? "solo",

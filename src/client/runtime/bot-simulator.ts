@@ -14,14 +14,77 @@ import {
 } from "../../../shared/race-sim.js";
 import type { VehicleInputState } from "./input.js";
 import type { Track } from "./track-builder.js";
-import { VehicleController, defaultVehicleTuning } from "./vehicle-controller.js";
+import { VehicleController, defaultVehicleTuning, type VehicleTuning } from "./vehicle-controller.js";
+
+export type BotDifficulty = "easy" | "medium" | "hard";
+
+type DifficultyProfile = {
+  topSpeed: number;
+  thrust: number;
+  steeringRate: number;
+  steeringResponse: number;
+  lateralGrip: number;
+  laneHoldMinMs: number;
+  laneHoldJitterMs: number;
+  fireCooldownMs: number;
+  shieldCooldownMs: number;
+  brakeThresholdRatio: number;
+  throttleDropoutChance: number;
+};
+
+const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
+  easy: {
+    topSpeed: 74,
+    thrust: 48,
+    steeringRate: 48,
+    steeringResponse: 12,
+    lateralGrip: 2.8,
+    laneHoldMinMs: 1700,
+    laneHoldJitterMs: 900,
+    fireCooldownMs: 950,
+    shieldCooldownMs: 2400,
+    brakeThresholdRatio: 1.02,
+    throttleDropoutChance: 0.14,
+  },
+  medium: {
+    topSpeed: 92,
+    thrust: 60,
+    steeringRate: 62,
+    steeringResponse: 16,
+    lateralGrip: 3.3,
+    laneHoldMinMs: 1000,
+    laneHoldJitterMs: 550,
+    fireCooldownMs: 360,
+    shieldCooldownMs: 1100,
+    brakeThresholdRatio: 1.14,
+    throttleDropoutChance: 0.04,
+  },
+  hard: {
+    topSpeed: 108,
+    thrust: 70,
+    steeringRate: 76,
+    steeringResponse: 22,
+    lateralGrip: 4.0,
+    laneHoldMinMs: 650,
+    laneHoldJitterMs: 350,
+    fireCooldownMs: 200,
+    shieldCooldownMs: 420,
+    brakeThresholdRatio: 1.22,
+    throttleDropoutChance: 0,
+  },
+};
 
 const TICK_INTERVAL_MS = 100;
-const FIRE_COOLDOWN_MS = 260;
-const SHIELD_COOLDOWN_MS = 500;
-const LANE_HOLD_MIN_MS = 1100;
-const LANE_HOLD_JITTER_MS = 600;
 const LANE_FRACTION = 0.55;
+
+// Callsigns feel more alive than "Pilot N". Consumed via a seeded shuffle so
+// the grid stays consistent for a given race seed.
+const BOT_CALLSIGNS = [
+  "Vex", "Nova", "Cipher", "Ghost", "Strike", "Null", "Blaze", "Echo",
+  "Drift", "Viper", "Raven", "Shade", "Pyre", "Flux", "Onyx", "Hex",
+  "Halo", "Rook", "Krait", "Atlas", "Helix", "Vortex", "Zenith", "Ember",
+  "Quill", "Rift", "Tempo", "Talon", "Scythe", "Static", "Arc", "Mercer",
+] as const;
 
 type BotConfig = {
   clientId: string;
@@ -29,10 +92,12 @@ type BotConfig = {
   carVariant: CarVariant;
   startTrackU: number;
   startLateralOffset: number;
+  difficulty: BotDifficulty;
 };
 
 type BotAgent = {
   config: BotConfig;
+  profile: DifficultyProfile;
   vehicleController: VehicleController;
   input: VehicleInputState;
   racer: RaceSimRacer;
@@ -45,6 +110,17 @@ type BotAgent = {
   pendingFire: boolean;
   pendingShield: boolean;
 };
+
+function tuningForDifficulty(profile: DifficultyProfile): VehicleTuning {
+  return {
+    ...defaultVehicleTuning,
+    topSpeed: profile.topSpeed,
+    thrust: profile.thrust,
+    steeringRate: profile.steeringRate,
+    steeringResponse: profile.steeringResponse,
+    lateralGrip: profile.lateralGrip,
+  };
+}
 
 function createRacer(config: BotConfig): RaceSimRacer {
   return {
@@ -111,13 +187,15 @@ export class BotSimulator {
     this.pickups = pickups;
     this.checkpointUs = checkpointUs;
     this.agents = configs.map((cfg) => {
-      const vc = new VehicleController(defaultVehicleTuning);
+      const profile = DIFFICULTY_PROFILES[cfg.difficulty];
+      const vc = new VehicleController(tuningForDifficulty(profile));
       vc.setTrack(track);
       vc.setTrackQuery((pos, hintU) => track.queryNearest(pos, hintU));
       vc.forceTrackState(cfg.startTrackU, cfg.startLateralOffset, 0);
       const racer = createRacer(cfg);
       return {
         config: cfg,
+        profile,
         vehicleController: vc,
         input: createInput(),
         racer,
@@ -329,10 +407,11 @@ export class BotSimulator {
 
   private driveAI(agent: BotAgent, localRacer: RaceSimRacer, now: number): void {
     const racer = agent.racer;
+    const profile = agent.profile;
 
     // Re-pick lane periodically using a simple obstacle/pickup score.
     if (now >= agent.laneHoldUntil) {
-      agent.laneHoldUntil = now + LANE_HOLD_MIN_MS + Math.random() * LANE_HOLD_JITTER_MS;
+      agent.laneHoldUntil = now + profile.laneHoldMinMs + Math.random() * profile.laneHoldJitterMs;
       agent.laneChoice = this.chooseLane(agent);
     }
 
@@ -344,24 +423,27 @@ export class BotSimulator {
     agent.input.steerRight = latError > steerDeadband;
 
     // Throttle on by default; brake when approaching a lower top-speed section.
+    // Easy bots occasionally release throttle to feel human-paced.
     const lookAheadU = Math.min(0.999, racer.trackU + 0.012);
     const nextTopSpeed = this.track.getTopSpeedAt(lookAheadU);
-    agent.input.throttle = true;
-    agent.input.brake = racer.speed > nextTopSpeed * 1.12;
+    const throttleHiccup = profile.throttleDropoutChance > 0
+      && Math.random() < profile.throttleDropoutChance;
+    agent.input.throttle = !throttleHiccup;
+    agent.input.brake = racer.speed > nextTopSpeed * profile.brakeThresholdRatio;
 
     // Fire missile at the closest valid target ahead.
     if (racer.offensiveItem === "missile" && now >= agent.fireCooldownUntil) {
       const allRacers = [localRacer, ...this.agents.map((a) => a.racer)];
       if (this.hasFireTarget(allRacers, racer, now)) {
         agent.pendingFire = true;
-        agent.fireCooldownUntil = now + FIRE_COOLDOWN_MS;
+        agent.fireCooldownUntil = now + profile.fireCooldownMs;
       }
     }
 
     // Shield reactively: activate if holding one and shield is due.
     if (racer.defensiveItem === "shield" && now >= agent.shieldCooldownUntil) {
       agent.pendingShield = true;
-      agent.shieldCooldownUntil = now + SHIELD_COOLDOWN_MS;
+      agent.shieldCooldownUntil = now + profile.shieldCooldownMs;
     }
   }
 
@@ -420,27 +502,47 @@ export class BotSimulator {
   }
 }
 
-/** Build bot configs distributed across starting lanes. */
+/** Build bot configs distributed across starting lanes. Callsigns are drawn
+ * from BOT_CALLSIGNS via a seeded shuffle so the same race seed produces the
+ * same grid each retry. */
 export function buildBotConfigs(
   count: number,
   variants: readonly CarVariant[],
   startTrackU: number,
+  difficulty: BotDifficulty,
+  seed: number,
 ): BotConfig[] {
   const configs: BotConfig[] = [];
   const laneScale = 3.2;
+  const rng = mulberry32(seed ^ 0xb07c0de);
+  const callsignPool = [...BOT_CALLSIGNS];
+  for (let i = callsignPool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [callsignPool[i], callsignPool[j]] = [callsignPool[j], callsignPool[i]];
+  }
   for (let i = 0; i < count; i += 1) {
     const variant = variants[i % variants.length] ?? "vector";
-    // Distribute across lanes so bots don't spawn on top of each other.
     const lane = (i % 2 === 0 ? 1 : -1) * Math.ceil((i + 1) / 2);
     configs.push({
       clientId: `bot-${i + 1}`,
-      name: `Pilot ${i + 2}`,
+      name: callsignPool[i % callsignPool.length] ?? `Pilot ${i + 2}`,
       carVariant: variant,
       startTrackU,
       startLateralOffset: Math.max(-10, Math.min(10, lane * laneScale)),
+      difficulty,
     });
   }
   return configs;
+}
+
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6d2b79f5;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 export type { BotConfig };
