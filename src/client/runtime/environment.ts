@@ -1096,7 +1096,6 @@ export class EnvironmentRuntime {
     material.color.lerp(loadingColor, blend);
     material.emissive.lerp(this.tmpColorE.set(LOADING_GEAR_EMISSIVE), blend * 0.92);
     material.emissiveIntensity = MathUtils.lerp(material.emissiveIntensity, emissiveIntensity, blend);
-    material.opacity = MathUtils.lerp(material.opacity, 0.78, blend * 0.55);
   }
 
   private applyFictionVisibility(loadingBlend: number): void {
@@ -1114,11 +1113,11 @@ export class EnvironmentRuntime {
     this.gateMesh.visible = gateOpacity > 0.001;
     this.haloMesh.visible = haloOpacity > 0.001;
 
-    this.sideMaterial.opacity = Math.min(this.sideMaterial.opacity, sideOpacity);
-    this.skylineMaterial.opacity = Math.min(this.skylineMaterial.opacity, skylineOpacity);
-    this.accentMaterial.opacity = Math.min(this.accentMaterial.opacity, accentOpacity);
-    this.gateMaterial.opacity = Math.min(this.gateMaterial.opacity, gateOpacity);
-    this.haloMaterial.opacity = Math.min(this.haloMaterial.opacity, haloOpacity);
+    this.sideMaterial.opacity = sideOpacity;
+    this.skylineMaterial.opacity = skylineOpacity;
+    this.accentMaterial.opacity = accentOpacity;
+    this.gateMaterial.opacity = gateOpacity;
+    this.haloMaterial.opacity = haloOpacity;
   }
 
   private updateLayer(
