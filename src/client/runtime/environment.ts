@@ -52,6 +52,41 @@ export type ReactiveSnapshot = {
   kick: number;
   energyLevel: number;
   sectionEnergy: number;
+  roadCalmColor: Color;
+  roadCruiseColor: Color;
+  roadChargeColor: Color;
+  roadPeakColor: Color;
+};
+
+type RoadPalette = {
+  calm: string;
+  cruise: string;
+  charge: string;
+  peak: string;
+};
+
+const ROAD_ENERGY_PALETTES: Record<number, RoadPalette> = {
+  // Audio Reactor: cool cyan/mint environment. Road leans warm to pop.
+  1: {
+    calm: "#5a1b2a",
+    cruise: "#ff7a2e",
+    charge: "#ff2f6d",
+    peak: "#ff1ea3",
+  },
+  // Signal City: blue + orange mixed. Road leans mint/cyan -> violet to contrast.
+  2: {
+    calm: "#1f8f9f",
+    cruise: "#46ff88",
+    charge: "#823dff",
+    peak: "#ff2dbf",
+  },
+  // Data Cathedral: purple/violet environment. Road leans lime/yellow complementary.
+  3: {
+    calm: "#1a7250",
+    cruise: "#a8ff2f",
+    charge: "#ffd61a",
+    peak: "#ff5a15",
+  },
 };
 
 type GeneratedPlacement = {
@@ -298,6 +333,10 @@ export class EnvironmentRuntime {
   private readonly snapshotSectionTint = new Color();
   private readonly snapshotPhraseA = new Color();
   private readonly snapshotPhraseB = new Color();
+  private readonly roadCalmColor = new Color();
+  private readonly roadCruiseColor = new Color();
+  private readonly roadChargeColor = new Color();
+  private readonly roadPeakColor = new Color();
   private readonly reactiveSnapshot: ReactiveSnapshot = {
     sectionTint: this.snapshotSectionTint,
     phraseColorA: this.snapshotPhraseA,
@@ -310,6 +349,10 @@ export class EnvironmentRuntime {
     kick: 0,
     energyLevel: 0,
     sectionEnergy: 0,
+    roadCalmColor: this.roadCalmColor,
+    roadCruiseColor: this.roadCruiseColor,
+    roadChargeColor: this.roadChargeColor,
+    roadPeakColor: this.roadPeakColor,
   };
   private smoothedSectionEnergy = 0;
   private readonly phraseColors: Color[];
@@ -325,6 +368,11 @@ export class EnvironmentRuntime {
     fictionId: EnvironmentFictionId,
   ) {
     this.theme = SKINNED_THEMES[fictionId];
+    const roadPalette = ROAD_ENERGY_PALETTES[fictionId] ?? ROAD_ENERGY_PALETTES[1];
+    this.roadCalmColor.set(roadPalette.calm);
+    this.roadCruiseColor.set(roadPalette.cruise);
+    this.roadChargeColor.set(roadPalette.charge);
+    this.roadPeakColor.set(roadPalette.peak);
     this.defaultDuration = song?.duration ?? Math.max(track.totalLength / 84, 90);
     this.moodDarkness = this.estimateMoodDarkness();
     this.palette = this.buildPalette();

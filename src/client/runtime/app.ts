@@ -2752,6 +2752,10 @@ export class App {
       kick: reactive.kick,
       energyLevel: reactive.sectionEnergy,
       strength: rhythmicStrength,
+      calmColor: reactive.roadCalmColor,
+      cruiseColor: reactive.roadCruiseColor,
+      chargeColor: reactive.roadChargeColor,
+      peakColor: reactive.roadPeakColor,
     });
     this.updateHud();
     this.updateNameLabels();

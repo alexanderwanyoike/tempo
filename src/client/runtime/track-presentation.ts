@@ -1,4 +1,4 @@
-import { Color, Mesh, MeshStandardMaterial, Object3D } from "three";
+import { Color, Mesh, MeshStandardMaterial, Object3D, Vector3 } from "three";
 
 type MaterialSnapshot = {
   material: MeshStandardMaterial;
@@ -31,6 +31,10 @@ type RhythmicUniforms = {
   uRibbonSpeed: { value: number };
   uRibbonWidth: { value: number };
   uChannelGain: { value: number };
+  uCalmColor: { value: Vector3 };
+  uCruiseColor: { value: Vector3 };
+  uChargeColor: { value: Vector3 };
+  uPeakColor: { value: Vector3 };
 };
 
 export type RhythmicState = {
@@ -38,6 +42,10 @@ export type RhythmicState = {
   kick: number;
   energyLevel: number;
   strength: number;
+  calmColor: Color;
+  cruiseColor: Color;
+  chargeColor: Color;
+  peakColor: Color;
 };
 
 const LOADING_MATERIAL_TARGETS: Record<TrackMaterialChannel, MaterialTarget> = {
@@ -97,6 +105,10 @@ uniform float uRhythmicStrength;
 uniform float uRibbonSpeed;
 uniform float uRibbonWidth;
 uniform float uChannelGain;
+uniform vec3 uCalmColor;
+uniform vec3 uCruiseColor;
+uniform vec3 uChargeColor;
+uniform vec3 uPeakColor;
 `;
 
 // Colour driven by pre-analysed section energy (calm intros -> drops -> breakdowns).
@@ -108,22 +120,14 @@ if (tempoStrength > 0.0) {
   float kickStrength = clamp(uKick, 0.0, 1.0);
   float energy = clamp(uEnergyLevel, 0.0, 1.0);
 
-  //   0.00 deep calm blue
-  //   0.30 cruise cyan
-  //   0.60 magenta
-  //   0.90 hot pink
-  vec3 calmColor = vec3(0.14, 0.32, 0.9);
-  vec3 cruiseColor = vec3(0.25, 0.9, 1.0);
-  vec3 chargeColor = vec3(0.9, 0.3, 0.95);
-  vec3 peakColor = vec3(1.0, 0.45, 0.75);
-
+  // Fiction-specific 4-stop gradient, fed from environment.ts by fictionId.
   vec3 energyColor;
   if (energy < 0.3) {
-    energyColor = mix(calmColor, cruiseColor, energy / 0.3);
+    energyColor = mix(uCalmColor, uCruiseColor, energy / 0.3);
   } else if (energy < 0.6) {
-    energyColor = mix(cruiseColor, chargeColor, (energy - 0.3) / 0.3);
+    energyColor = mix(uCruiseColor, uChargeColor, (energy - 0.3) / 0.3);
   } else {
-    energyColor = mix(chargeColor, peakColor, clamp((energy - 0.6) / 0.3, 0.0, 1.0));
+    energyColor = mix(uChargeColor, uPeakColor, clamp((energy - 0.6) / 0.3, 0.0, 1.0));
   }
 
   float brightnessFactor = 0.45 + kickStrength * 0.5;
@@ -174,6 +178,10 @@ export class TrackPresentationController {
       uniforms.uKick.value = state.kick;
       uniforms.uEnergyLevel.value = state.energyLevel;
       uniforms.uRhythmicStrength.value = strength;
+      colorToVec3(state.calmColor, uniforms.uCalmColor.value);
+      colorToVec3(state.cruiseColor, uniforms.uCruiseColor.value);
+      colorToVec3(state.chargeColor, uniforms.uChargeColor.value);
+      colorToVec3(state.peakColor, uniforms.uPeakColor.value);
     }
   }
 
@@ -192,6 +200,10 @@ export class TrackPresentationController {
         uRibbonSpeed: { value: 0.085 },
         uRibbonWidth: { value: 0.028 },
         uChannelGain: { value: channelGain },
+        uCalmColor: { value: new Vector3(0.14, 0.32, 0.9) },
+        uCruiseColor: { value: new Vector3(0.25, 0.9, 1.0) },
+        uChargeColor: { value: new Vector3(0.9, 0.3, 0.95) },
+        uPeakColor: { value: new Vector3(1.0, 0.45, 0.75) },
       };
       this.rhythmicUniforms.push(uniforms);
       material.userData.rhythmicUniforms = uniforms;
@@ -268,6 +280,10 @@ function collectStandardMaterials(root: Object3D): MaterialSnapshot[] {
 
 function injectBefore(source: string, anchor: string, insertion: string): string {
   return source.replace(anchor, `${insertion}\n${anchor}`);
+}
+
+function colorToVec3(color: Color, out: Vector3): void {
+  out.set(color.r, color.g, color.b);
 }
 
 function injectAfter(source: string, anchor: string, insertion: string): string {
