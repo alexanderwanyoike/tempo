@@ -872,6 +872,7 @@ export class App {
       visual.assetGroup = asset;
       visual.bodyPivot.add(asset);
       visual.fallbackGroup.visible = false;
+      visual.hoverJets.bindToMesh(asset, visual.bodyPivot);
     } catch (error) {
       console.error(`Failed to load race mesh for ${visual.variant}:`, error);
     }
