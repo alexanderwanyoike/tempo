@@ -12,6 +12,7 @@ import type { SongDefinition, SongSection, SongSectionType } from "../../../shar
 import type { ChunkType } from "./chunks.js";
 import { chunkFns, type ChunkParams } from "./chunks.js";
 import { mulberry32 } from "./prng.js";
+import { TrackPresentationController } from "./track-presentation.js";
 import { pickChunkForSection, scaleChunkParams } from "./section-rules.js";
 import type { Track, TrackFeature, TrackFrame, TrackObject, TrackQuery } from "./track-builder.js";
 import {
@@ -60,6 +61,7 @@ export class TrackGenerator implements Track {
   private readonly trackObjects: TrackObject[];
   private readonly trackFeatures: TrackFeature[];
   private readonly sampleCount: number;
+  private readonly presentation: TrackPresentationController;
 
   constructor(
     readonly song: SongDefinition,
@@ -80,12 +82,18 @@ export class TrackGenerator implements Track {
     this.trackObjects = this.generateTrackObjects(seed);
 
     // Build meshes (section-aware walls)
+    const road = buildRoadMesh(this.frames, this.halfWidthSamples, song.sections, this.sectionBoundaries);
+    const leftWall = buildSectionWallMesh(this.frames, this.halfWidthSamples, -1, song.sections, this.sectionBoundaries);
+    const rightWall = buildSectionWallMesh(this.frames, this.halfWidthSamples, 1, song.sections, this.sectionBoundaries);
+    const centerLine = buildCenterLineMesh(this.frames);
+
     this.meshGroup = new Group();
-    this.meshGroup.add(buildRoadMesh(this.frames, this.halfWidthSamples, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, -1, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, 1, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildCenterLineMesh(this.frames));
+    this.meshGroup.add(road);
+    this.meshGroup.add(leftWall);
+    this.meshGroup.add(rightWall);
+    this.meshGroup.add(centerLine);
     this.meshGroup.add(this.buildTrackObjectMeshes());
+    this.presentation = new TrackPresentationController(road, [leftWall, rightWall], centerLine);
   }
 
   private generateControlPoints(seed: number, targetLength: number): { points: Vector3[]; features: TrackFeature[] } {
@@ -314,6 +322,10 @@ export class TrackGenerator implements Track {
 
   getTrackFeatures(): readonly TrackFeature[] {
     return this.trackFeatures;
+  }
+
+  setLoadingBlend(blend: number, pulse = 0): void {
+    this.presentation.setLoadingBlend(blend, pulse);
   }
 
   private getSectionAt(u: number): SongSection | null {

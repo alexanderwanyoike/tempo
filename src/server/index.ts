@@ -108,8 +108,10 @@ type Room = {
   collisionTrack: Track | null;
   raceStartAt: number;
   songEndAt: number;
+  stagingOpenedAt: number;
   preloadDeadlineAt: number;
   stagingTimer: NodeJS.Timeout | null;
+  stagingReadyTimer: NodeJS.Timeout | null;
   snapshotInterval: NodeJS.Timeout | null;
   countdownTimer: NodeJS.Timeout | null;
   eventSequence: number;
@@ -368,7 +370,8 @@ async function startRoomRace(connection: ClientConnection): Promise<void> {
   room.phase = "staging";
   room.checkpointUs = buildCheckpointUs(song);
   room.pickups = buildPickups(room.collisionTrack, room.setup.seed);
-  room.preloadDeadlineAt = Date.now() + LOBBY_PRELOAD_TIMEOUT_MS;
+  room.stagingOpenedAt = Date.now();
+  room.preloadDeadlineAt = room.stagingOpenedAt + LOBBY_PRELOAD_TIMEOUT_MS;
   room.raceStartAt = 0;
   room.songEndAt = 0;
   room.eventSequence = 0;
@@ -412,7 +415,7 @@ async function startRoomRace(connection: ClientConnection): Promise<void> {
     if (room.phase !== "staging") return;
     pruneSlowPlayers(room);
     if (room.phase === "staging") {
-      if (activeRacerCount(room) >= 2) startCountdown(room);
+      if (activeRacerCount(room) >= 2) maybeStartCountdownWhenEligible(room);
       else returnRoomToLobby(room);
     }
   }, LOBBY_PRELOAD_TIMEOUT_MS);
@@ -438,7 +441,33 @@ function updatePreload(connection: ClientConnection, sceneReady?: boolean, audio
     .every((candidate) => candidate.preload.sceneReady && candidate.preload.audioReady);
 
   if (!ready) return;
-  startCountdown(room);
+  maybeStartCountdownWhenEligible(room);
+}
+
+function maybeStartCountdownWhenEligible(room: Room): void {
+  if (room.phase !== "staging") return;
+  if (activeRacerCount(room) < 2) {
+    returnRoomToLobby(room);
+    return;
+  }
+
+  const minimumReadyAt = room.stagingOpenedAt + serverConfig.stagingReadyDelayMs;
+  const remainingDelayMs = Math.max(0, minimumReadyAt - Date.now());
+  if (remainingDelayMs === 0) {
+    startCountdown(room);
+    return;
+  }
+
+  if (room.stagingReadyTimer) return;
+  room.stagingReadyTimer = setTimeout(() => {
+    room.stagingReadyTimer = null;
+    if (room.phase !== "staging") return;
+    const allReady = [...room.players.values()]
+      .filter((candidate) => candidate.isActiveRacer)
+      .every((candidate) => candidate.preload.sceneReady && candidate.preload.audioReady);
+    if (!allReady) return;
+    startCountdown(room);
+  }, remainingDelayMs);
 }
 
 function startCountdown(room: Room): void {
@@ -451,6 +480,10 @@ function startCountdown(room: Room): void {
   if (room.stagingTimer) {
     clearTimeout(room.stagingTimer);
     room.stagingTimer = null;
+  }
+  if (room.stagingReadyTimer) {
+    clearTimeout(room.stagingReadyTimer);
+    room.stagingReadyTimer = null;
   }
   room.phase = "countdown";
   const startAt = Date.now() + COUNTDOWN_MS;
@@ -689,6 +722,7 @@ function returnRoomToLobby(room: Room): void {
   room.racePlayers.clear();
   room.raceStartAt = 0;
   room.songEndAt = 0;
+  room.stagingOpenedAt = 0;
   room.preloadDeadlineAt = 0;
   for (const player of room.players.values()) {
     player.ready = false;
@@ -934,8 +968,10 @@ function makeRoom(params: Pick<Room, "code" | "name" | "hostId" | "phase" | "set
     collisionTrack: null,
     raceStartAt: 0,
     songEndAt: 0,
+    stagingOpenedAt: 0,
     preloadDeadlineAt: 0,
     stagingTimer: null,
+    stagingReadyTimer: null,
     snapshotInterval: null,
     countdownTimer: null,
     eventSequence: 0,
@@ -989,6 +1025,10 @@ function clearTimers(room: Room): void {
   if (room.stagingTimer) {
     clearTimeout(room.stagingTimer);
     room.stagingTimer = null;
+  }
+  if (room.stagingReadyTimer) {
+    clearTimeout(room.stagingReadyTimer);
+    room.stagingReadyTimer = null;
   }
   if (room.snapshotInterval) {
     clearInterval(room.snapshotInterval);
