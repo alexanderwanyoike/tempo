@@ -18,17 +18,17 @@ const HOVER_EMITTERS: Array<[number, number, number]> = [
   [0.72, -0.3, -1.35],
 ];
 
-// Deliberately sparse: with additive blending + scene bloom the old dense
-// cloud saturated into a single white blob. Fewer, smaller particles read as
-// discrete droplets streaming down from the engines.
-const PARTICLES_PER_EMITTER = 10;
+// Tuned for small, fast, readable droplets. Many of them so the jet reads as
+// a steady stream, but each small enough that the bloom pass does not turn
+// close-range particles into a screen-filling cloud.
+const PARTICLES_PER_EMITTER = 18;
 const PARTICLE_COUNT = HOVER_EMITTERS.length * PARTICLES_PER_EMITTER;
-const PARTICLE_LIFETIME_MIN = 0.22;
-const PARTICLE_LIFETIME_MAX = 0.38;
-const BASE_DOWNWARD_SPEED = 3.4;
-const LATERAL_SPREAD = 0.22;
-const GRAVITY_Y = -3.5;
-const POINT_BASE_SIZE = 10;
+const PARTICLE_LIFETIME_MIN = 0.2;
+const PARTICLE_LIFETIME_MAX = 0.34;
+const BASE_DOWNWARD_SPEED = 3.6;
+const LATERAL_SPREAD = 0.2;
+const GRAVITY_Y = -3.0;
+const POINT_BASE_SIZE = 6;
 
 const HOVER_VERTEX = `
   attribute float aLife;
@@ -37,7 +37,9 @@ const HOVER_VERTEX = `
   void main() {
     vLife = clamp(aLife, 0.0, 1.0);
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    float distScale = 300.0 / -mvPosition.z;
+    // Clamp distance attenuation so close-range particles don't balloon into
+    // screen-filling sprites. Max scale of 2.2 keeps a 6px base at ~13px tops.
+    float distScale = clamp(40.0 / max(1.0, -mvPosition.z), 0.35, 2.2);
     gl_PointSize = uPointSize * vLife * distScale;
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -51,11 +53,13 @@ const HOVER_FRAGMENT = `
     vec2 coord = gl_PointCoord - vec2(0.5);
     float dist = length(coord) * 2.0;
     if (dist > 1.0) discard;
-    float core = pow(1.0 - dist, 1.6);
+    float core = pow(1.0 - dist, 1.8);
     float alpha = core * vLife * uIntensity;
-    // Hot centre, cooler toward the outside, so each particle reads as a
-    // droplet with a visible rim rather than a fuzzy glow.
-    vec3 tint = mix(uColor, vec3(1.0), core * 0.5);
+    // Keep the colour pure and saturated. Only the innermost core nudges
+    // toward white so bloom has something to bite but particles don't wash
+    // into a grey fog.
+    float whiteMix = pow(core, 5.0) * 0.55;
+    vec3 tint = mix(uColor, vec3(1.0), whiteMix);
     gl_FragColor = vec4(tint, alpha);
   }
 `;
@@ -138,9 +142,9 @@ export class HoverJets {
   update(deltaSeconds: number, speedRatio: number, boostMultiplier: number): void {
     const dt = Math.min(deltaSeconds, 1 / 20);
     const boost = Math.max(0, boostMultiplier - 1);
-    // Keep intensity modest — NormalBlending + bloom still amplifies these.
-    this.material.uniforms.uIntensity.value = 0.55 + speedRatio * 0.2 + boost * 0.5;
-    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE + speedRatio * 3 + boost * 6;
+    // Modest intensity because bloom amplifies what already renders.
+    this.material.uniforms.uIntensity.value = 0.7 + speedRatio * 0.22 + boost * 0.35;
+    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE + speedRatio * 1.6 + boost * 2.8;
 
     for (let i = 0; i < PARTICLE_COUNT; i += 1) {
       this.ageSeconds[i] += dt;
