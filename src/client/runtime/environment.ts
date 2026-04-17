@@ -40,6 +40,55 @@ type SectionInfo = {
   endTime: number;
 };
 
+export type ReactiveSnapshot = {
+  sectionTint: Color;
+  phraseColorA: Color;
+  phraseColorB: Color;
+  phraseBlend: number;
+  beatPhase: number;
+  bandLow: number;
+  bandMid: number;
+  bandHigh: number;
+  kick: number;
+  energyLevel: number;
+  sectionEnergy: number;
+  roadCalmColor: Color;
+  roadCruiseColor: Color;
+  roadChargeColor: Color;
+  roadPeakColor: Color;
+};
+
+type RoadPalette = {
+  calm: string;
+  cruise: string;
+  charge: string;
+  peak: string;
+};
+
+const ROAD_ENERGY_PALETTES: Record<number, RoadPalette> = {
+  // Audio Reactor: cool cyan/mint environment. Road leans warm to pop.
+  1: {
+    calm: "#5a1b2a",
+    cruise: "#ff7a2e",
+    charge: "#ff2f6d",
+    peak: "#ff1ea3",
+  },
+  // Signal City: blue + orange mixed. Road leans mint/cyan -> violet to contrast.
+  2: {
+    calm: "#1f8f9f",
+    cruise: "#46ff88",
+    charge: "#823dff",
+    peak: "#ff2dbf",
+  },
+  // Data Cathedral: purple/violet environment. Road leans lime/yellow complementary.
+  3: {
+    calm: "#1a7250",
+    cruise: "#a8ff2f",
+    charge: "#ffd61a",
+    peak: "#ff5a15",
+  },
+};
+
 type GeneratedPlacement = {
   position: Vector3;
   quaternion: Quaternion;
@@ -281,6 +330,31 @@ export class EnvironmentRuntime {
   private readonly tmpColorC = new Color();
   private readonly tmpColorD = new Color();
   private readonly tmpColorE = new Color();
+  private readonly snapshotSectionTint = new Color();
+  private readonly snapshotPhraseA = new Color();
+  private readonly snapshotPhraseB = new Color();
+  private readonly roadCalmColor = new Color();
+  private readonly roadCruiseColor = new Color();
+  private readonly roadChargeColor = new Color();
+  private readonly roadPeakColor = new Color();
+  private readonly reactiveSnapshot: ReactiveSnapshot = {
+    sectionTint: this.snapshotSectionTint,
+    phraseColorA: this.snapshotPhraseA,
+    phraseColorB: this.snapshotPhraseB,
+    phraseBlend: 0,
+    beatPhase: 0,
+    bandLow: 0,
+    bandMid: 0,
+    bandHigh: 0,
+    kick: 0,
+    energyLevel: 0,
+    sectionEnergy: 0,
+    roadCalmColor: this.roadCalmColor,
+    roadCruiseColor: this.roadCruiseColor,
+    roadChargeColor: this.roadChargeColor,
+    roadPeakColor: this.roadPeakColor,
+  };
+  private smoothedSectionEnergy = 0;
   private readonly phraseColors: Color[];
   private readonly dummy = new Object3D();
   private readonly defaultDuration: number;
@@ -294,6 +368,11 @@ export class EnvironmentRuntime {
     fictionId: EnvironmentFictionId,
   ) {
     this.theme = SKINNED_THEMES[fictionId];
+    const roadPalette = ROAD_ENERGY_PALETTES[fictionId] ?? ROAD_ENERGY_PALETTES[1];
+    this.roadCalmColor.set(roadPalette.calm);
+    this.roadCruiseColor.set(roadPalette.cruise);
+    this.roadChargeColor.set(roadPalette.charge);
+    this.roadPeakColor.set(roadPalette.peak);
     this.defaultDuration = song?.duration ?? Math.max(track.totalLength / 84, 90);
     this.moodDarkness = this.estimateMoodDarkness();
     this.palette = this.buildPalette();
@@ -370,7 +449,7 @@ export class EnvironmentRuntime {
     trackU: number,
     sourceBands: ReactiveBands | null,
     loadingBlend = 0,
-  ): void {
+  ): ReactiveSnapshot {
     const section = this.getSectionAtTime(musicTime);
     const bands = sourceBands ?? this.getFallbackBands(elapsedTime, section.energy);
     const amplitude = this.getAmplitudeProfile(bands, section.energy);
@@ -380,6 +459,23 @@ export class EnvironmentRuntime {
     const energyPulse = MathUtils.clamp(section.energy * 0.45 + beatPulse * 0.25 + bands.low * 0.3, 0, 1);
     const stagingBlend = MathUtils.clamp(loadingBlend, 0, 1);
     const themedAmplitudeScale = MathUtils.lerp(1, 0.42, stagingBlend);
+    const phraseA = this.getPhraseColor(musicTime, 0);
+    const phraseB = this.getPhraseColor(musicTime, 1);
+    const phraseBlend = this.getPhraseBlend(musicTime);
+    this.snapshotSectionTint.set(SECTION_TINTS[section.type]);
+    this.snapshotPhraseA.copy(phraseA);
+    this.snapshotPhraseB.copy(phraseB);
+    this.reactiveSnapshot.phraseBlend = phraseBlend;
+    this.reactiveSnapshot.beatPhase = beatPhase;
+    this.reactiveSnapshot.bandLow = bands.low;
+    this.reactiveSnapshot.bandMid = bands.mid;
+    this.reactiveSnapshot.bandHigh = bands.high;
+    this.reactiveSnapshot.kick = bands.kick;
+    this.reactiveSnapshot.energyLevel = bands.energyLevel;
+    // Smooth section energy at boundaries (~0.5s transition) so the road hue
+    // fades rather than jumps between sections.
+    this.smoothedSectionEnergy = this.smoothedSectionEnergy * 0.97 + section.energy * 0.03;
+    this.reactiveSnapshot.sectionEnergy = this.smoothedSectionEnergy;
 
     this.skyDome.position.copy(playerPos);
     this.updateSceneColors(section.type, musicTime, energyPulse, amplitude, stagingBlend);
@@ -424,6 +520,7 @@ export class EnvironmentRuntime {
       { bob: false, spin: false, scale: false, axisBiased: true },
     );
     this.updateLoadingFiction(elapsedTime, playerPos, stagingBlend);
+    return this.reactiveSnapshot;
   }
 
   private createLitMaterial(color: Color): MeshStandardMaterial {
@@ -1190,10 +1287,14 @@ export class EnvironmentRuntime {
     const low = 0.2 + energy * 0.55 * (0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 2));
     const mid = 0.16 + energy * 0.48 * (0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 4 + 0.6));
     const high = 0.12 + energy * 0.42 * (0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 8 + 1.2));
+    const beatCycle = (beatPhase % 1);
+    const kick = Math.max(0, 1 - beatCycle * 7) * energy;
     return {
       low: MathUtils.clamp(low, 0, 1),
       mid: MathUtils.clamp(mid, 0, 1),
       high: MathUtils.clamp(high, 0, 1),
+      kick: MathUtils.clamp(kick, 0, 1),
+      energyLevel: MathUtils.clamp(energy, 0, 1),
     };
   }
 

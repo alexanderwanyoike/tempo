@@ -237,6 +237,7 @@ export class App {
   private sceneElapsedTime = 0;
   private elapsedRaceTime = 0;
   private latestReactiveBands: ReactiveBands | null = null;
+  private latestSectionEnergy = 0;
   private phase: AppPhase = "staging";
   private pendingStartAt = 0;
   private countdownDurationMs = 2500;
@@ -2566,6 +2567,11 @@ export class App {
   private updateDebugHud(): void {
     if (!this.debugHud) return;
     const state = this.vehicleController.state;
+    const bands = this.latestReactiveBands;
+    const bandLine = bands
+      ? `band L${bands.low.toFixed(2)} M${bands.mid.toFixed(2)} H${bands.high.toFixed(2)} K${bands.kick.toFixed(2)}`
+      : "band --";
+    const energyLine = `sectionE ${this.latestSectionEnergy.toFixed(2)}`;
     this.debugHud.textContent = [
       `phase ${this.phase}`,
       `trackU ${state.trackU.toFixed(3)}`,
@@ -2573,6 +2579,8 @@ export class App {
       `place ${this.localPlacement}`,
       `cp ${this.localCheckpointIndex + 1}/${this.latestCheckpointCount}`,
       `audio ${this.audioReady ? "ready" : "loading"}`,
+      bandLine,
+      energyLine,
       `last ${this.lastStatusMessage || "--"}`,
     ].join("\n");
   }
@@ -2730,13 +2738,25 @@ export class App {
     this.updatePickupVisuals(time / 1000);
     this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);
-    this.environment.update(
+    const reactive = this.environment.update(
       this.sceneElapsedTime,
       musicTime,
       this.vehicleController.state.trackU,
       this.latestReactiveBands,
       loadingBlend,
     );
+    const rhythmicStrength = this.phase === "running" ? Math.max(0, 1 - loadingBlend) : 0;
+    this.latestSectionEnergy = reactive.sectionEnergy;
+    this.track.setRhythmicPulse({
+      musicTime,
+      kick: reactive.kick,
+      energyLevel: reactive.sectionEnergy,
+      strength: rhythmicStrength,
+      calmColor: reactive.roadCalmColor,
+      cruiseColor: reactive.roadCruiseColor,
+      chargeColor: reactive.roadChargeColor,
+      peakColor: reactive.roadPeakColor,
+    });
     this.updateHud();
     this.updateNameLabels();
     this.updateDebugHud();
