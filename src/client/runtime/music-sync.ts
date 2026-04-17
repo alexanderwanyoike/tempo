@@ -165,7 +165,7 @@ export class MusicSync {
       this.source.buffer = this.buffer;
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
-      this.analyser.smoothingTimeConstant = 0.82;
+      this.analyser.smoothingTimeConstant = 0.25;
       this.analyserData = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
       this.source.connect(this.analyser);
       this.analyser.connect(this.ctx.destination);
@@ -215,6 +215,9 @@ export class MusicSync {
   }
 
   private smoothBand(previous: number, next: number): number {
-    return previous * 0.74 + next * 0.26;
+    if (next > previous) {
+      return previous * 0.1 + next * 0.9;
+    }
+    return previous * 0.78 + next * 0.22;
   }
 }

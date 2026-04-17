@@ -120,25 +120,27 @@ uniform float uChannelGain;
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
-  float bassEnergy = pow(clamp(uBandLow, 0.0, 1.0), 0.5);
-  float midEnergy = pow(clamp(uBandMid, 0.0, 1.0), 0.65);
-  float rhythmEnergy = clamp(bassEnergy * 0.85 + midEnergy * 0.3, 0.0, 1.0);
+  // Pre-amplify bands so mid-range FFT readings register as hits.
+  float bassEnergy = pow(clamp(uBandLow * 1.7, 0.0, 1.0), 0.45);
+  float midEnergy = pow(clamp(uBandMid * 1.4, 0.0, 1.0), 0.6);
+  float rhythmEnergy = clamp(bassEnergy * 0.9 + midEnergy * 0.28, 0.0, 1.0);
+  float kickStrength = smoothstep(0.12, 0.82, rhythmEnergy);
 
   vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
   vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
 
-  // Road breathes: dim baseline, returns to near-base on kick. Never above base.
-  float brightnessFactor = 0.35 + rhythmEnergy * 0.65;
+  // Dim baseline, punches up on kicks. Small overshoot allowed for bloom bite.
+  float brightnessFactor = 0.32 + kickStrength * 0.85;
   vec3 pulsed = totalEmissiveRadiance * brightnessFactor;
 
-  // Tint shift only when energy is active (silent moments stay neutral).
-  pulsed = mix(pulsed, pulsed * tempoTint * 1.2, rhythmEnergy * 0.45);
+  // Tint shift gated on kick.
+  pulsed = mix(pulsed, pulsed * tempoTint * 1.25, kickStrength * 0.55);
 
-  // Narrow ribbon highlight, visible but modest.
+  // Narrow ribbon, brighter on kick.
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
   float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
-  vec3 ribbonAdd = tempoTint * ribbon * (0.12 + rhythmEnergy * 0.35);
+  vec3 ribbonAdd = tempoTint * ribbon * (0.1 + kickStrength * 0.5);
 
   totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
