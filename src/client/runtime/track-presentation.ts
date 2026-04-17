@@ -117,10 +117,18 @@ if (tempoStrength > 0.0) {
   float mid = clamp(uBandMid, 0.0, 1.0);
   float high = clamp(uBandHigh, 0.0, 1.0);
 
-  float bandTotal = max(0.02, low + mid + high);
-  float lowRatio = low / bandTotal;
-  float midRatio = mid / bandTotal;
-  float highRatio = high / bandTotal;
+  // Boost highs (roll off faster in mixes) and sharpen so the dominant band
+  // actually shows instead of a grey wash from three-way averaging.
+  float lowAdj = pow(low, 0.9);
+  float midAdj = pow(mid, 0.65);
+  float highAdj = pow(high, 0.4);
+  float lowW = pow(lowAdj, 3.0);
+  float midW = pow(midAdj, 3.0);
+  float highW = pow(highAdj, 3.0);
+  float bandTotal = max(0.0001, lowW + midW + highW);
+  float lowRatio = lowW / bandTotal;
+  float midRatio = midW / bandTotal;
+  float highRatio = highW / bandTotal;
 
   vec3 bassColor = vec3(0.14, 0.36, 1.0);
   vec3 midColor = vec3(0.22, 0.95, 0.92);

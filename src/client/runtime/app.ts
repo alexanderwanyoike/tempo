@@ -2566,6 +2566,10 @@ export class App {
   private updateDebugHud(): void {
     if (!this.debugHud) return;
     const state = this.vehicleController.state;
+    const bands = this.latestReactiveBands;
+    const bandLine = bands
+      ? `band L${bands.low.toFixed(2)} M${bands.mid.toFixed(2)} H${bands.high.toFixed(2)} K${bands.kick.toFixed(2)}`
+      : "band --";
     this.debugHud.textContent = [
       `phase ${this.phase}`,
       `trackU ${state.trackU.toFixed(3)}`,
@@ -2573,6 +2577,7 @@ export class App {
       `place ${this.localPlacement}`,
       `cp ${this.localCheckpointIndex + 1}/${this.latestCheckpointCount}`,
       `audio ${this.audioReady ? "ready" : "loading"}`,
+      bandLine,
       `last ${this.lastStatusMessage || "--"}`,
     ].join("\n");
   }
