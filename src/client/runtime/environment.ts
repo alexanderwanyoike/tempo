@@ -639,21 +639,22 @@ export class EnvironmentRuntime {
   }
 
   private updateLoadingFiction(elapsedTime: number, playerPos: Vector3, loadingBlend: number): void {
-    const visible = loadingBlend > 0.01;
+    const loadingAlpha = MathUtils.smoothstep(loadingBlend, 0, 1);
+    const visible = loadingAlpha > 0.001;
     this.loadingGroup.visible = visible;
 
-    const rimOpacity = 0.2 + loadingBlend * 0.62;
-    const coreOpacity = 0.18 + loadingBlend * 0.44;
-    const detailOpacity = 0.16 + loadingBlend * 0.56;
-    this.loadingCogMaterial.opacity = visible ? rimOpacity : 0;
+    const rimOpacity = (0.2 + loadingBlend * 0.62) * loadingAlpha;
+    const coreOpacity = (0.18 + loadingBlend * 0.44) * loadingAlpha;
+    const detailOpacity = (0.16 + loadingBlend * 0.56) * loadingAlpha;
+    this.loadingCogMaterial.opacity = rimOpacity;
     this.loadingCogMaterial.emissiveIntensity = 1.9 + loadingBlend * 1.35;
-    this.loadingCogCoreMaterial.opacity = visible ? coreOpacity : 0;
+    this.loadingCogCoreMaterial.opacity = coreOpacity;
     this.loadingCogCoreMaterial.emissiveIntensity = 1.1 + loadingBlend * 0.9;
-    this.loadingCogDetailMaterial.opacity = visible ? detailOpacity : 0;
+    this.loadingCogDetailMaterial.opacity = detailOpacity;
     this.loadingCogDetailMaterial.emissiveIntensity = 2 + loadingBlend * 1.25;
     for (const sign of this.loadingSigns) {
-      sign.textMaterial.opacity = visible ? 1 : 0;
-      sign.metalMaterial.opacity = visible ? (0.9 + loadingBlend * 0.06) : 0;
+      sign.textMaterial.opacity = loadingAlpha;
+      sign.metalMaterial.opacity = (0.84 + loadingBlend * 0.12) * loadingAlpha;
       sign.metalMaterial.emissiveIntensity = 0.4 + loadingBlend * 0.6;
     }
 
@@ -1101,18 +1102,23 @@ export class EnvironmentRuntime {
   private applyFictionVisibility(loadingBlend: number): void {
     const revealBlend = MathUtils.clamp((1 - loadingBlend - 0.18) / 0.82, 0, 1);
     const heavyLayerBlend = revealBlend * revealBlend;
+    const sideOpacity = 0.92 * revealBlend;
+    const skylineOpacity = 0.92 * revealBlend;
+    const accentOpacity = 0.92 * Math.pow(revealBlend, 1.15);
+    const gateOpacity = 0.92 * Math.pow(revealBlend, 1.5);
+    const haloOpacity = 0.92 * Math.pow(heavyLayerBlend, 0.9);
 
-    this.sideMesh.visible = revealBlend > 0.01;
-    this.skylineMesh.visible = revealBlend > 0.01;
-    this.accentMesh.visible = revealBlend > 0.06;
-    this.gateMesh.visible = heavyLayerBlend > 0.08;
-    this.haloMesh.visible = heavyLayerBlend > 0.08;
+    this.sideMesh.visible = sideOpacity > 0.001;
+    this.skylineMesh.visible = skylineOpacity > 0.001;
+    this.accentMesh.visible = accentOpacity > 0.001;
+    this.gateMesh.visible = gateOpacity > 0.001;
+    this.haloMesh.visible = haloOpacity > 0.001;
 
-    this.sideMaterial.opacity = Math.min(this.sideMaterial.opacity, 0.92 * revealBlend);
-    this.skylineMaterial.opacity = Math.min(this.skylineMaterial.opacity, 0.92 * revealBlend);
-    this.accentMaterial.opacity = Math.min(this.accentMaterial.opacity, 0.92 * revealBlend);
-    this.gateMaterial.opacity = Math.min(this.gateMaterial.opacity, 0.92 * heavyLayerBlend);
-    this.haloMaterial.opacity = Math.min(this.haloMaterial.opacity, 0.92 * heavyLayerBlend);
+    this.sideMaterial.opacity = Math.min(this.sideMaterial.opacity, sideOpacity);
+    this.skylineMaterial.opacity = Math.min(this.skylineMaterial.opacity, skylineOpacity);
+    this.accentMaterial.opacity = Math.min(this.accentMaterial.opacity, accentOpacity);
+    this.gateMaterial.opacity = Math.min(this.gateMaterial.opacity, gateOpacity);
+    this.haloMaterial.opacity = Math.min(this.haloMaterial.opacity, haloOpacity);
   }
 
   private updateLayer(
