@@ -2741,7 +2741,9 @@ export class App {
     this.track.setRhythmicPulse({
       musicTime,
       kick: reactive.kick,
-      energyLevel: reactive.energyLevel,
+      bandLow: reactive.bandLow,
+      bandMid: reactive.bandMid,
+      bandHigh: reactive.bandHigh,
       strength: rhythmicStrength,
     });
     this.updateHud();
