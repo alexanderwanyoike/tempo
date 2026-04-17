@@ -124,27 +124,34 @@ const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
   float kickStrength = clamp(uKick, 0.0, 1.0);
-  float bassAmbient = pow(clamp(uBandLow, 0.0, 1.0), 0.6);
-  float midAmbient = pow(clamp(uBandMid, 0.0, 1.0), 0.65);
-  float sustainedEnergy = clamp(bassAmbient * 0.7 + midAmbient * 0.45, 0.0, 1.0);
+  float bassAmbient = pow(clamp(uBandLow, 0.0, 1.0), 0.55);
+  float midAmbient = pow(clamp(uBandMid, 0.0, 1.0), 0.6);
+  float highAmbient = pow(clamp(uBandHigh, 0.0, 1.0), 0.55);
+  float sustainedEnergy = clamp(bassAmbient * 0.6 + midAmbient * 0.45 + highAmbient * 0.25, 0.0, 1.0);
 
   vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
-  vec3 tempoTint = mix(uSectionColor, phraseColor, 0.55);
+  vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
 
-  // Brightness: dim floor, lifted by sustained energy, punches on kick.
-  float brightnessFactor = 0.38 + sustainedEnergy * 0.3 + kickStrength * 0.65;
+  // Brightness: dim floor, lifted by energy, punches on kick.
+  float brightnessFactor = 0.42 + sustainedEnergy * 0.35 + kickStrength * 0.55;
   vec3 dimmed = totalEmissiveRadiance * brightnessFactor;
 
-  // Colour replacement: road leans into the section palette when audio is active.
-  vec3 tintReplacement = tempoTint * (0.35 + brightnessFactor * 0.95);
-  float tintMix = clamp(sustainedEnergy * 0.7 + kickStrength * 0.25, 0.0, 0.88);
-  vec3 pulsed = mix(dimmed, tintReplacement, tintMix);
+  // Vivid tint: pushed well above baseline so section colour dominates during music,
+  // even when baked vertex colour is already in the same family.
+  vec3 vividTint = tempoTint * (1.4 + sustainedEnergy * 1.1 + kickStrength * 0.8);
+
+  // Near-full replacement once energy is up.
+  float tintMix = clamp(sustainedEnergy * 0.95 + kickStrength * 0.15, 0.0, 0.97);
+  vec3 pulsed = mix(dimmed, vividTint, tintMix);
+
+  // Clamp to keep bloom from hellfiring at coordinated peaks.
+  pulsed = min(pulsed, vec3(2.4));
 
   // Ribbon: narrow travelling glow, brighter on kicks and active sections.
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
   float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
-  vec3 ribbonAdd = tempoTint * ribbon * (0.08 + sustainedEnergy * 0.22 + kickStrength * 0.45);
+  vec3 ribbonAdd = tempoTint * ribbon * (0.1 + sustainedEnergy * 0.3 + kickStrength * 0.5);
 
   totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
