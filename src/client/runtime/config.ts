@@ -4,7 +4,7 @@ export type ClientConfig = {
   stagingReadyDelayMs: number;
 };
 
-const DEFAULT_STAGING_READY_DELAY_MS = import.meta.env.DEV ? 5000 : 0;
+const DEFAULT_STAGING_READY_DELAY_MS = import.meta.env.DEV ? 12000 : 0;
 
 export const clientConfig: ClientConfig = {
   websocketUrl: import.meta.env.VITE_WS_URL ?? "ws://localhost:8080",

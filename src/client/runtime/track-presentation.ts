@@ -19,32 +19,40 @@ type MaterialTarget = {
   opacity: number;
   roughness: number;
   metalness: number;
+  blendStrength: number;
+  emissiveBlendStrength: number;
 };
 
 const LOADING_MATERIAL_TARGETS: Record<TrackMaterialChannel, MaterialTarget> = {
   road: {
-    color: new Color("#ffe08a"),
-    emissive: new Color("#ffb21e"),
-    emissiveIntensity: 3.25,
-    opacity: 0.94,
-    roughness: 0.16,
-    metalness: 0.28,
+    color: new Color("#4c390f"),
+    emissive: new Color("#6e4b10"),
+    emissiveIntensity: 1.25,
+    opacity: 0.76,
+    roughness: 0.24,
+    metalness: 0.22,
+    blendStrength: 0.38,
+    emissiveBlendStrength: 0.42,
   },
   wall: {
     color: new Color("#ffd372"),
     emissive: new Color("#ff981f"),
-    emissiveIntensity: 2.6,
-    opacity: 0.72,
+    emissiveIntensity: 2.05,
+    opacity: 0.64,
     roughness: 0.14,
     metalness: 0.18,
+    blendStrength: 0.58,
+    emissiveBlendStrength: 0.72,
   },
   centerline: {
     color: new Color("#fff4c2"),
     emissive: new Color("#ffd760"),
-    emissiveIntensity: 3.6,
+    emissiveIntensity: 2.5,
     opacity: 1,
     roughness: 0.12,
     metalness: 0.12,
+    blendStrength: 0.68,
+    emissiveBlendStrength: 0.84,
   },
 };
 
@@ -77,8 +85,8 @@ export class TrackPresentationController {
   ): void {
     const target = LOADING_MATERIAL_TARGETS[channel];
     for (const snapshot of materials) {
-      snapshot.material.color.copy(snapshot.color).lerp(target.color, blend * 0.82);
-      snapshot.material.emissive.copy(snapshot.emissive).lerp(target.emissive, blend * 0.92);
+      snapshot.material.color.copy(snapshot.color).lerp(target.color, blend * target.blendStrength);
+      snapshot.material.emissive.copy(snapshot.emissive).lerp(target.emissive, blend * target.emissiveBlendStrength);
       snapshot.material.emissiveIntensity = lerp(
         snapshot.emissiveIntensity,
         target.emissiveIntensity + shimmer,

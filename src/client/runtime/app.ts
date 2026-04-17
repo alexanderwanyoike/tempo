@@ -99,6 +99,17 @@ type PickupVisual = {
   lane: number;
 };
 
+type CountdownResetTransition = {
+  startedAt: number;
+  durationMs: number;
+  fromTrackU: number;
+  fromLateralOffset: number;
+  fromSpeed: number;
+  toTrackU: number;
+  toLateralOffset: number;
+  toSpeed: number;
+};
+
 type CarPalette = {
   body: Color;
   bodyEmissive: Color;
@@ -230,6 +241,7 @@ export class App {
   private stagingOpenedAt = 0;
   private pendingStartAt = 0;
   private countdownDurationMs = 2500;
+  private countdownResetTransition: CountdownResetTransition | null = null;
   private audioReady = false;
   private countdownStarted = false;
   private latestCheckpointCount = 1;
@@ -476,11 +488,7 @@ export class App {
     this.pendingStartAt = startAt;
     this.phase = "countdown";
     this.countdownStarted = false;
-    this.vehicleController.forceTrackState(
-      this.countdownResetTrackU,
-      this.countdownResetLateralOffset,
-      this.countdownResetSpeed,
-    );
+    this.beginCountdownResetTransition();
     this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
@@ -492,6 +500,7 @@ export class App {
   }
 
   private enterRunningPhase(): void {
+    this.countdownResetTransition = null;
     this.phase = "running";
     this.countdownStarted = true;
     this.statusOverlay.style.display = "none";
@@ -2627,6 +2636,58 @@ export class App {
     this.renderRoster();
   }
 
+  private beginCountdownResetTransition(): void {
+    const state = this.vehicleController.state;
+    const fromTrackU = state.trackU;
+    const fromLateralOffset = state.lateralOffset;
+    const fromSpeed = state.speed;
+    const toTrackU = this.countdownResetTrackU;
+    const toLateralOffset = this.countdownResetLateralOffset;
+    const toSpeed = this.countdownResetSpeed;
+    const needsTransition = Math.abs(fromTrackU - toTrackU) > 0.002
+      || Math.abs(fromLateralOffset - toLateralOffset) > 0.15
+      || Math.abs(fromSpeed - toSpeed) > 0.5;
+
+    if (!needsTransition) {
+      this.countdownResetTransition = null;
+      this.vehicleController.forceTrackState(toTrackU, toLateralOffset, toSpeed);
+      return;
+    }
+
+    this.countdownResetTransition = {
+      startedAt: performance.now(),
+      durationMs: 1450,
+      fromTrackU,
+      fromLateralOffset,
+      fromSpeed,
+      toTrackU,
+      toLateralOffset,
+      toSpeed,
+    };
+  }
+
+  private updateCountdownResetTransition(nowMs: number): void {
+    const transition = this.countdownResetTransition;
+    if (!transition) return;
+
+    const rawT = MathUtils.clamp((nowMs - transition.startedAt) / transition.durationMs, 0, 1);
+    const easedT = rawT * rawT * (3 - 2 * rawT);
+    this.vehicleController.forceTrackState(
+      MathUtils.lerp(transition.fromTrackU, transition.toTrackU, easedT),
+      MathUtils.lerp(transition.fromLateralOffset, transition.toLateralOffset, easedT),
+      MathUtils.lerp(transition.fromSpeed, transition.toSpeed, easedT),
+    );
+
+    if (rawT >= 1) {
+      this.vehicleController.forceTrackState(
+        transition.toTrackU,
+        transition.toLateralOffset,
+        transition.toSpeed,
+      );
+      this.countdownResetTransition = null;
+    }
+  }
+
   private scheduleSoloCountdown(): void {
     if (this.launch.mode === "multiplayer") return;
     if (this.phase !== "staging") return;
@@ -2653,6 +2714,7 @@ export class App {
     this.updateSpeedFeedback(deltaSeconds);
 
     if (this.phase === "countdown") {
+      this.updateCountdownResetTransition(time);
       const remainingMs = Math.max(0, this.pendingStartAt - now);
       const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
       this.statusTitle.textContent = seconds.toString();
