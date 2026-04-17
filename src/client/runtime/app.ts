@@ -2053,7 +2053,7 @@ export class App {
 
     const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
     const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
-    this.localVehicle.hoverJets.update(this.sceneElapsedTime, speedRatio, state.boostMultiplier);
+    this.localVehicle.hoverJets.update(deltaSeconds, speedRatio, state.boostMultiplier);
   }
 
   private updateRemoteCars(deltaSeconds: number): void {
@@ -2080,7 +2080,7 @@ export class App {
       }
 
       const speedRatio = Math.min(1, Math.max(0, snapshot.speed) / 90);
-      remote.hoverJets.update(this.sceneElapsedTime, speedRatio, 1);
+      remote.hoverJets.update(deltaSeconds, speedRatio, 1);
     }
   }
 

@@ -1,64 +1,107 @@
 import {
   AdditiveBlending,
+  BufferAttribute,
+  BufferGeometry,
   Color,
   Group,
-  Mesh,
-  PlaneGeometry,
+  Points,
   ShaderMaterial,
-  type Texture,
+  type Object3D,
 } from "three";
 
 // Local-space positions of the four hover engines relative to the car's
-// bodyPivot. X is half-width, Z is forward/back, Y sits just under the car so
-// discs land on the road surface. Values tuned for the ~3-unit-long race cars.
-const HOVER_POINTS: Array<[number, number, number]> = [
-  [-0.72, -0.35, 1.35],
-  [0.72, -0.35, 1.35],
-  [-0.72, -0.35, -1.35],
-  [0.72, -0.35, -1.35],
+// bodyPivot. Particles spawn at these points and stream downward.
+const HOVER_EMITTERS: Array<[number, number, number]> = [
+  [-0.72, -0.3, 1.35],
+  [0.72, -0.3, 1.35],
+  [-0.72, -0.3, -1.35],
+  [0.72, -0.3, -1.35],
 ];
 
-const BASE_DISC_SIZE = 1.45;
-const DISC_PULSE_AMPLITUDE = 0.12;
-const DISC_PULSE_FREQUENCY_HZ = 1.4;
-
-const HOVER_FRAGMENT = `
-uniform vec3 uColor;
-uniform float uIntensity;
-varying vec2 vUv;
-void main() {
-  vec2 centered = vUv - 0.5;
-  float dist = length(centered) * 2.0;
-  float falloff = pow(1.0 - clamp(dist, 0.0, 1.0), 2.4);
-  float ring = smoothstep(0.42, 0.58, dist) * (1.0 - smoothstep(0.58, 0.82, dist));
-  float alpha = (falloff * 0.85 + ring * 1.1) * uIntensity;
-  gl_FragColor = vec4(uColor * (1.4 + ring * 0.7), alpha);
-}
-`;
+const PARTICLES_PER_EMITTER = 28;
+const PARTICLE_COUNT = HOVER_EMITTERS.length * PARTICLES_PER_EMITTER;
+const PARTICLE_LIFETIME_MIN = 0.32;
+const PARTICLE_LIFETIME_MAX = 0.55;
+const BASE_DOWNWARD_SPEED = 2.4;
+const LATERAL_SPREAD = 0.38;
+const GRAVITY_Y = -4.2;
+const POINT_BASE_SIZE = 26;
 
 const HOVER_VERTEX = `
-varying vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
+  attribute float aLife;
+  uniform float uPointSize;
+  varying float vLife;
+  void main() {
+    vLife = clamp(aLife, 0.0, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    float distScale = 300.0 / -mvPosition.z;
+    gl_PointSize = uPointSize * vLife * distScale;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const HOVER_FRAGMENT = `
+  uniform vec3 uColor;
+  uniform float uIntensity;
+  varying float vLife;
+  void main() {
+    vec2 coord = gl_PointCoord - vec2(0.5);
+    float dist = length(coord) * 2.0;
+    if (dist > 1.0) discard;
+    // Soft falloff: bright hot core, faint outer halo.
+    float core = pow(1.0 - dist, 2.2);
+    float halo = smoothstep(1.0, 0.35, dist) * 0.35;
+    float shape = core + halo;
+    float alpha = shape * vLife * uIntensity;
+    vec3 tint = uColor * (1.35 + core * 0.9);
+    gl_FragColor = vec4(tint, alpha);
+  }
 `;
 
 /**
- * Four hover-engine ground discs anchored under a car. The tint is the car's
- * accent colour so each variant gets its own signature hover glow. Discs pulse
- * gently on their own cadence and brighten with speed / boost.
+ * Particle-jet exhaust under each of a car's four hover engines. Each
+ * particle spawns at a random emitter, drifts downward with a little lateral
+ * spread, and fades as it ages. Tinted with the car variant's accent colour
+ * so each car has its own signature hover plume.
  */
 export class HoverJets {
+  private readonly geometry: BufferGeometry;
   private readonly material: ShaderMaterial;
-  private readonly discs: Mesh[];
+  private readonly points: Points;
+  private readonly positions: Float32Array;
+  private readonly velocities: Float32Array;
+  private readonly lives: Float32Array;
+  private readonly ageSeconds: Float32Array;
+  private readonly lifetimeSeconds: Float32Array;
+  private readonly emitterIndices: Uint8Array;
 
   constructor(color: Color) {
-    const baseColor = color.clone();
+    this.positions = new Float32Array(PARTICLE_COUNT * 3);
+    this.velocities = new Float32Array(PARTICLE_COUNT * 3);
+    this.lives = new Float32Array(PARTICLE_COUNT);
+    this.ageSeconds = new Float32Array(PARTICLE_COUNT);
+    this.lifetimeSeconds = new Float32Array(PARTICLE_COUNT);
+    this.emitterIndices = new Uint8Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+      this.emitterIndices[i] = i % HOVER_EMITTERS.length;
+      // Stagger lifetimes so particles don't all respawn on the same frame.
+      this.lifetimeSeconds[i] = randRange(PARTICLE_LIFETIME_MIN, PARTICLE_LIFETIME_MAX);
+      this.ageSeconds[i] = Math.random() * this.lifetimeSeconds[i];
+      this.respawn(i);
+    }
+
+    this.geometry = new BufferGeometry();
+    this.geometry.setAttribute("position", new BufferAttribute(this.positions, 3));
+    this.geometry.setAttribute("aLife", new BufferAttribute(this.lives, 1));
+    this.geometry.boundingSphere = null;
+    this.geometry.boundingBox = null;
+
     this.material = new ShaderMaterial({
       uniforms: {
-        uColor: { value: baseColor },
+        uColor: { value: color.clone() },
         uIntensity: { value: 1 },
+        uPointSize: { value: POINT_BASE_SIZE },
       },
       vertexShader: HOVER_VERTEX,
       fragmentShader: HOVER_FRAGMENT,
@@ -66,43 +109,52 @@ export class HoverJets {
       depthWrite: false,
       blending: AdditiveBlending,
     });
-    this.discs = HOVER_POINTS.map(([x, y, z], index) => {
-      const geometry = new PlaneGeometry(BASE_DISC_SIZE, BASE_DISC_SIZE);
-      const disc = new Mesh(geometry, this.material);
-      disc.rotation.x = -Math.PI / 2;
-      disc.position.set(x, y, z);
-      disc.renderOrder = 2;
-      disc.frustumCulled = false;
-      disc.userData.hoverPhase = index * 0.37;
-      return disc;
-    });
+
+    this.points = new Points(this.geometry, this.material);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 2;
+  }
+
+  get object(): Object3D {
+    return this.points;
   }
 
   attachTo(parent: Group): void {
-    for (const disc of this.discs) parent.add(disc);
+    parent.add(this.points);
   }
 
   detachFrom(parent: Group): void {
-    for (const disc of this.discs) parent.remove(disc);
+    parent.remove(this.points);
   }
 
   /**
-   * Called per frame. speedRatio [0..1] is speed/topSpeed; boostMultiplier is
-   * the vehicle's current boost multiplier (1 at rest, higher during pads).
+   * Per-frame update. Advances each particle's age, recycles expired ones
+   * back to their emitter, and refreshes the GPU buffers.
    */
-  update(elapsedSeconds: number, speedRatio: number, boostMultiplier: number): void {
-    const twoPi = Math.PI * 2;
-    const pulse = 0.5 + 0.5 * Math.sin(elapsedSeconds * DISC_PULSE_FREQUENCY_HZ * twoPi);
+  update(deltaSeconds: number, speedRatio: number, boostMultiplier: number): void {
+    const dt = Math.min(deltaSeconds, 1 / 20);
     const boost = Math.max(0, boostMultiplier - 1);
-    const intensity = 0.65 + pulse * 0.25 + speedRatio * 0.35 + boost * 0.9;
-    this.material.uniforms.uIntensity.value = intensity;
+    this.material.uniforms.uIntensity.value = 0.8 + speedRatio * 0.35 + boost * 1.2;
+    // On boost the jet fattens; on rest it's a tight column.
+    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE + speedRatio * 8 + boost * 14;
 
-    for (const disc of this.discs) {
-      const phase = (disc.userData.hoverPhase as number) ?? 0;
-      const wobble = Math.sin(elapsedSeconds * DISC_PULSE_FREQUENCY_HZ * twoPi + phase);
-      const scale = 1 + wobble * DISC_PULSE_AMPLITUDE + boost * 0.08;
-      disc.scale.set(scale, scale, scale);
+    for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+      this.ageSeconds[i] += dt;
+      if (this.ageSeconds[i] >= this.lifetimeSeconds[i]) {
+        this.respawn(i);
+        continue;
+      }
+      const ix = i * 3;
+      this.velocities[ix + 1] += GRAVITY_Y * dt;
+      this.positions[ix] += this.velocities[ix] * dt;
+      this.positions[ix + 1] += this.velocities[ix + 1] * dt;
+      this.positions[ix + 2] += this.velocities[ix + 2] * dt;
+      // Life = 1 at spawn, decaying to 0 at end of lifetime.
+      this.lives[i] = 1 - this.ageSeconds[i] / this.lifetimeSeconds[i];
     }
+
+    (this.geometry.getAttribute("position") as BufferAttribute).needsUpdate = true;
+    (this.geometry.getAttribute("aLife") as BufferAttribute).needsUpdate = true;
   }
 
   setColor(color: Color): void {
@@ -110,12 +162,31 @@ export class HoverJets {
   }
 
   dispose(): void {
-    for (const disc of this.discs) disc.geometry.dispose();
+    this.geometry.dispose();
     this.material.dispose();
+  }
+
+  private respawn(index: number): void {
+    const emitterIndex = this.emitterIndices[index];
+    const [ex, ey, ez] = HOVER_EMITTERS[emitterIndex];
+    const ix = index * 3;
+    // Slight jitter around the emitter so particles don't all emit from a
+    // single point.
+    const jitterX = (Math.random() - 0.5) * 0.12;
+    const jitterZ = (Math.random() - 0.5) * 0.12;
+    this.positions[ix] = ex + jitterX;
+    this.positions[ix + 1] = ey;
+    this.positions[ix + 2] = ez + jitterZ;
+    // Velocity is mostly downward with a little lateral / rearward spread.
+    this.velocities[ix] = (Math.random() - 0.5) * LATERAL_SPREAD;
+    this.velocities[ix + 1] = -BASE_DOWNWARD_SPEED - Math.random() * 0.6;
+    this.velocities[ix + 2] = (Math.random() - 0.5) * LATERAL_SPREAD;
+    this.lifetimeSeconds[index] = randRange(PARTICLE_LIFETIME_MIN, PARTICLE_LIFETIME_MAX);
+    this.ageSeconds[index] = 0;
+    this.lives[index] = 1;
   }
 }
 
-/** Optional helper — lets callers drop in a shared radial glow texture later
- *  if the procedural shader ends up being too heavy on mobile. Kept as a type
- *  hook so callers can pass a texture later without a signature change. */
-export type HoverJetsTexture = Texture | null;
+function randRange(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
