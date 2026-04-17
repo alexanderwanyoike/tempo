@@ -1,12 +1,15 @@
 import type { VehicleInputState } from "./input";
 
 type TouchRole = "stick" | "brake" | "fire" | "shield";
+type ArmableRole = "fire" | "shield";
 
 export class TouchControls {
   private overlay: HTMLDivElement | null = null;
   private stickBase: HTMLDivElement | null = null;
   private stickKnob: HTMLDivElement | null = null;
+  private readonly roleElements = new Map<TouchRole, HTMLElement>();
   private readonly touches = new Map<number, TouchRole>();
+  private readonly armed: Record<ArmableRole, boolean> = { fire: false, shield: false };
 
   constructor(
     private readonly inputState: VehicleInputState,
@@ -33,83 +36,32 @@ export class TouchControls {
     this.overlay = null;
     this.stickBase = null;
     this.stickKnob = null;
+    this.roleElements.clear();
     this.resetState();
   }
 
   private createOverlayDom(): HTMLDivElement {
     const wrapper = document.createElement("div");
-    wrapper.className = "tempo-touch";
-    wrapper.style.position = "fixed";
-    wrapper.style.inset = "0";
-    wrapper.style.zIndex = "25";
-    wrapper.style.pointerEvents = "none";
+    wrapper.className = "tempo-touch-overlay";
 
     const stickArea = document.createElement("div");
     stickArea.className = "tempo-touch-stick-area";
     stickArea.dataset.role = "stick";
-    stickArea.style.position = "absolute";
-    stickArea.style.left = "18px";
-    stickArea.style.bottom = "18px";
-    stickArea.style.width = "144px";
-    stickArea.style.height = "144px";
-    stickArea.style.pointerEvents = "auto";
 
     const stickBase = document.createElement("div");
     stickBase.className = "tempo-touch-stick-base";
-    stickBase.style.position = "absolute";
-    stickBase.style.inset = "0";
-    stickBase.style.borderRadius = "999px";
-    stickBase.style.border = "1px solid rgba(130, 232, 255, 0.24)";
-    stickBase.style.background = "rgba(4, 8, 14, 0.42)";
-    stickBase.style.backdropFilter = "blur(10px)";
 
     const stickKnob = document.createElement("div");
     stickKnob.className = "tempo-touch-stick-knob";
-    stickKnob.style.position = "absolute";
-    stickKnob.style.left = "50%";
-    stickKnob.style.top = "50%";
-    stickKnob.style.width = "64px";
-    stickKnob.style.height = "64px";
-    stickKnob.style.marginLeft = "-32px";
-    stickKnob.style.marginTop = "-32px";
-    stickKnob.style.borderRadius = "999px";
-    stickKnob.style.background = "rgba(120, 230, 255, 0.24)";
-    stickKnob.style.border = "1px solid rgba(160, 245, 255, 0.55)";
-    stickKnob.style.boxShadow = "0 0 24px rgba(120, 230, 255, 0.2)";
 
     stickBase.appendChild(stickKnob);
     stickArea.appendChild(stickBase);
 
-    const brake = document.createElement("button");
-    brake.className = "tempo-touch-brake";
-    brake.type = "button";
-    brake.dataset.role = "brake";
-    brake.textContent = "BRAKE";
-    this.styleActionButton(brake, {
-      right: "18px",
-      bottom: "18px",
-      accent: "#ff9a7a",
-    });
-
-    const fire = document.createElement("button");
-    fire.type = "button";
-    fire.dataset.role = "fire";
-    fire.textContent = "FIRE";
-    this.styleActionButton(fire, {
-      right: "18px",
-      bottom: "92px",
-      accent: "#ff5d84",
-    });
-
-    const shield = document.createElement("button");
-    shield.type = "button";
-    shield.dataset.role = "shield";
-    shield.textContent = "SHIELD";
-    this.styleActionButton(shield, {
-      right: "18px",
-      bottom: "166px",
-      accent: "#7ce7ff",
-    });
+    const brake = this.createActionButton("brake", "Brake");
+    const fire = this.createActionButton("fire", "Fire");
+    const shield = this.createActionButton("shield", "Shield");
+    fire.classList.toggle("is-disarmed", !this.armed.fire);
+    shield.classList.toggle("is-disarmed", !this.armed.shield);
 
     wrapper.appendChild(stickArea);
     wrapper.appendChild(shield);
@@ -118,6 +70,10 @@ export class TouchControls {
 
     this.stickBase = stickBase;
     this.stickKnob = stickKnob;
+    this.roleElements.set("stick", stickArea);
+    this.roleElements.set("brake", brake);
+    this.roleElements.set("fire", fire);
+    this.roleElements.set("shield", shield);
     return wrapper;
   }
 
@@ -132,14 +88,19 @@ export class TouchControls {
       } else if (role === "brake") {
         this.touches.set(touch.identifier, "brake");
         this.inputState.brake = true;
+        this.setRoleActive("brake", true);
         consumed = true;
       } else if (role === "fire") {
+        if (!this.armed.fire) continue;
         this.touches.set(touch.identifier, "fire");
         this.inputState.fire = true;
+        this.setRoleActive("fire", true);
         consumed = true;
       } else if (role === "shield") {
+        if (!this.armed.shield) continue;
         this.touches.set(touch.identifier, "shield");
         this.inputState.shield = true;
+        this.setRoleActive("shield", true);
         consumed = true;
       }
     }
@@ -174,10 +135,13 @@ export class TouchControls {
         this.resetKnobVisual();
       } else if (role === "brake") {
         this.inputState.brake = false;
+        this.setRoleActive("brake", false);
       } else if (role === "fire") {
         this.inputState.fire = false;
+        this.setRoleActive("fire", false);
       } else if (role === "shield") {
         this.inputState.shield = false;
+        this.setRoleActive("shield", false);
       }
     }
     if (consumed) event.preventDefault();
@@ -210,6 +174,7 @@ export class TouchControls {
     this.inputState.steerLeft = dx < -deadZone;
     this.inputState.steerRight = dx > deadZone;
     this.inputState.throttle = dy < -deadZone;
+    this.setRoleActive("stick", true);
 
     if (this.stickKnob) {
       this.stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
@@ -217,6 +182,7 @@ export class TouchControls {
   }
 
   private resetKnobVisual(): void {
+    this.setRoleActive("stick", false);
     if (this.stickKnob) {
       this.stickKnob.style.transform = "translate(0, 0)";
     }
@@ -230,26 +196,48 @@ export class TouchControls {
     this.inputState.brake = false;
     this.inputState.fire = false;
     this.inputState.shield = false;
+    this.setRoleActive("stick", false);
+    this.setRoleActive("brake", false);
+    this.setRoleActive("fire", false);
+    this.setRoleActive("shield", false);
+    this.resetKnobVisual();
   }
 
-  private styleActionButton(
-    button: HTMLButtonElement,
-    options: { right: string; bottom: string; accent: string },
-  ): void {
-    button.style.position = "absolute";
-    button.style.right = options.right;
-    button.style.bottom = options.bottom;
-    button.style.width = "112px";
-    button.style.height = "58px";
-    button.style.borderRadius = "18px";
-    button.style.border = `1px solid ${options.accent}`;
-    button.style.background = "rgba(4, 8, 14, 0.62)";
-    button.style.backdropFilter = "blur(10px)";
-    button.style.boxShadow = "0 0 24px rgba(0, 0, 0, 0.24)";
-    button.style.color = options.accent;
-    button.style.font = "800 12px/1 system-ui, sans-serif";
-    button.style.letterSpacing = "0.14em";
-    button.style.textTransform = "uppercase";
-    button.style.pointerEvents = "auto";
+  private createActionButton(role: Exclude<TouchRole, "stick">, label: string): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.role = role;
+    button.className = `tempo-touch-button tempo-touch-button--${role}`;
+    const copy = document.createElement("span");
+    copy.className = "tempo-touch-button-label";
+    copy.textContent = label;
+    button.appendChild(copy);
+    return button;
+  }
+
+  private setRoleActive(role: TouchRole, active: boolean): void {
+    const element = this.roleElements.get(role);
+    if (!element) return;
+    element.classList.toggle("is-active", active);
+  }
+
+  setVisible(visible: boolean): void {
+    if (!this.overlay) return;
+    this.overlay.style.display = visible ? "" : "none";
+    if (!visible) this.resetState();
+  }
+
+  setArmed(role: ArmableRole, armed: boolean): void {
+    if (this.armed[role] === armed) return;
+    this.armed[role] = armed;
+    const element = this.roleElements.get(role);
+    element?.classList.toggle("is-disarmed", !armed);
+    if (!armed) {
+      for (const [id, r] of this.touches) {
+        if (r === role) this.touches.delete(id);
+      }
+      this.inputState[role] = false;
+      this.setRoleActive(role, false);
+    }
   }
 }

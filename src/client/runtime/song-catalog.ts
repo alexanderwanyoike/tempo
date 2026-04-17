@@ -9,11 +9,15 @@ export const songCatalogEntrySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   artist: z.string().min(1),
+  genre: z.string().min(1).default("Breaks"),
   bpm: z.number().positive(),
   duration: z.number().positive(),
   baseSeed: z.number().int().nonnegative(),
   songPath: z.string().min(1),
   musicPath: z.string().min(1),
+  albumArtPath: z.string().default(""),
+  previewStartTime: z.number().nonnegative().default(0),
+  searchTerms: z.array(z.string().min(1)).default([]),
   fictionIds: z.array(fictionIdSchema).min(1).default([1, 2, 3]),
 });
 
@@ -49,6 +53,22 @@ export function resolveSongLaunchUrls(
     songUrl: resolveAssetUrl(config, entry.songPath),
     musicUrl: resolveAssetUrl(config, entry.musicPath),
   };
+}
+
+export function resolveSongAlbumArtUrl(
+  config: ClientConfig,
+  entry: Pick<SongCatalogEntry, "albumArtPath">,
+): string | null {
+  return entry.albumArtPath ? resolveAssetUrl(config, entry.albumArtPath) : null;
+}
+
+export function buildSongSearchText(
+  entry: Pick<SongCatalogEntry, "title" | "artist" | "genre" | "searchTerms">,
+): string {
+  return [entry.title, entry.artist, entry.genre, ...entry.searchTerms]
+    .join(" ")
+    .trim()
+    .toLowerCase();
 }
 
 export function clampCatalogFictions(

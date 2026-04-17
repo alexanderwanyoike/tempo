@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="title desc">
+  <title id="title">Firestarter Album Art</title>
+  <desc id="desc">Abstract red and cyan cyberpunk cover art for Firestarter.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1c0b11"/>
+      <stop offset="100%" stop-color="#070d14"/>
+    </linearGradient>
+    <linearGradient id="flare" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b4a"/>
+      <stop offset="100%" stop-color="#6ef4ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="720" fill="url(#bg)"/>
+  <circle cx="150" cy="126" r="160" fill="#ff6b4a" fill-opacity="0.22"/>
+  <circle cx="578" cy="590" r="190" fill="#6ef4ff" fill-opacity="0.14"/>
+  <path d="M82 492 318 168 444 280 614 76 658 118 472 372 604 466 520 544 398 446 210 650Z" fill="url(#flare)" fill-opacity="0.9"/>
+  <rect x="56" y="56" width="608" height="608" fill="none" stroke="#f4efe8" stroke-opacity="0.12" stroke-width="2"/>
+  <text x="72" y="592" fill="#f7f1e8" font-family="Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="6">FIRESTARTER</text>
+  <text x="74" y="638" fill="#aab2bb" font-family="Arial, sans-serif" font-size="22" letter-spacing="9">THE PRODIGY / BIG BEAT</text>
+</svg>

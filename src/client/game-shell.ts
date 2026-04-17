@@ -9,14 +9,22 @@ import type {
   ServerMessage,
 } from "../../shared/network-types";
 import type { App, AppLaunchOptions } from "./runtime/app";
+import {
+  carAssetDefinitions,
+  prefetchCarMesh,
+} from "./runtime/car-assets";
+import { CarPreview } from "./runtime/car-preview";
 import type { ClientConfig } from "./runtime/config";
 import { clampFictionId, type EnvironmentFictionId } from "./runtime/fiction-id";
 import { MenuPreview } from "./runtime/menu-preview";
 import { unlockAudioContext } from "./runtime/music-sync";
 import { RoomClient } from "./runtime/room-client";
+import { SongAuditionPlayer, type SongAuditionState } from "./runtime/song-audition";
 import {
+  buildSongSearchText,
   clampCatalogFictions,
   loadSongCatalog,
+  resolveSongAlbumArtUrl,
   resolveSongLaunchUrls,
   type SongCatalog,
   type SongCatalogEntry,
@@ -45,12 +53,14 @@ const FICTION_OPTIONS: Array<{ id: EnvironmentFictionId; label: string; blurb: s
   { id: 3, label: "Data Cathedral", blurb: "Ceremonial spectral architecture" },
 ];
 
-const CAR_VARIANTS: Array<{ id: CarVariant; label: string }> = [
-  { id: "vector", label: "Vector" },
-  { id: "ember", label: "Ember" },
-  { id: "nova", label: "Nova" },
-  { id: "ghost", label: "Ghost" },
-];
+const CAR_VARIANTS = carAssetDefinitions.map((definition) => ({
+  id: definition.variant,
+  label: definition.displayName,
+  accent: definition.fallbackPreviewSpec.accent,
+  trim: definition.fallbackPreviewSpec.trim,
+  canopy: definition.fallbackPreviewSpec.canopy,
+  silhouette: definition.fallbackPreviewSpec.silhouette,
+}));
 
 const STEERING_PRESETS = [
   { id: "balanced", label: "Balanced", value: 1.0 },
@@ -58,8 +68,24 @@ const STEERING_PRESETS = [
   { id: "sharp", label: "Sharp", value: 2.45 },
 ] as const;
 
+const PLAYER_NAME_STORAGE_KEY = "tempo.player-name";
 const STEERING_STORAGE_KEY = "tempo.steering-preset";
+const PLAYER_NAME_MIN_LENGTH = 2;
+const PLAYER_NAME_MAX_LENGTH = 18;
 const DEFAULT_STEERING_PRESET = "responsive";
+const SONG_FILTER_ALL = "All";
+const SONG_GENRE_ORDER = [
+  "House",
+  "Techno",
+  "Drum & Bass",
+  "Jungle",
+  "Breaks",
+  "Electro",
+  "Big Beat",
+  "Industrial",
+  "Trance",
+  "UKG",
+] as const;
 
 export class GameShell {
   private static readonly MULTIPLAYER_RESULTS_DWELL_MS = 4500;
@@ -75,7 +101,22 @@ export class GameShell {
   private readonly panelToggleRow = document.createElement("div");
   private readonly panelToggleButton = document.createElement("button");
   private readonly songSection = document.createElement("div");
-  private readonly songSelect = document.createElement("select");
+  private readonly songBrowserHint = document.createElement("div");
+  private readonly songSelectionMeta = document.createElement("div");
+  private readonly songOpenModalButton = document.createElement("button");
+  private readonly songModal = document.createElement("div");
+  private readonly songModalDialog = document.createElement("div");
+  private readonly songModalCloseButton = document.createElement("button");
+  private readonly songModalMeta = document.createElement("div");
+  private readonly songSearchInput = document.createElement("input");
+  private readonly songGenreToggle = document.createElement("button");
+  private readonly songGenreDeck = document.createElement("div");
+  private readonly songBrowserList = document.createElement("div");
+  private readonly roomModal = document.createElement("div");
+  private readonly roomModalDialog = document.createElement("div");
+  private readonly roomModalCloseButton = document.createElement("button");
+  private readonly roomModalBody = document.createElement("div");
+  private readonly configureRoomButton = document.createElement("button");
   private readonly seedSection = document.createElement("div");
   private readonly seedInput = document.createElement("input");
   private readonly fictionSection = document.createElement("div");
@@ -84,7 +125,13 @@ export class GameShell {
   private readonly playerCapSelect = document.createElement("select");
   private readonly playerCapSection = document.createElement("div");
   private readonly carSection = document.createElement("div");
-  private readonly carSelect = document.createElement("select");
+  private readonly carCarousel = document.createElement("div");
+  private readonly carCarouselName = document.createElement("div");
+  private readonly carCarouselSwatch = document.createElement("div");
+  private readonly carCarouselPrev = document.createElement("button");
+  private readonly carCarouselNext = document.createElement("button");
+  private readonly playerNameSection = document.createElement("div");
+  private readonly playerNameInput = document.createElement("input");
   private readonly steeringSection = document.createElement("div");
   private readonly steeringSelect = document.createElement("select");
   private readonly roomNameInput = document.createElement("input");
@@ -107,21 +154,33 @@ export class GameShell {
   private readonly rosterPanel = document.createElement("div");
   private readonly roomMeta = document.createElement("div");
   private readonly trackStats = document.createElement("div");
+  private readonly songArt = document.createElement("img");
   private readonly songName = document.createElement("div");
   private readonly songInfo = document.createElement("div");
   private readonly previewTitle = document.createElement("div");
   private readonly previewSubline = document.createElement("div");
+  private readonly carPreviewHost = document.createElement("div");
   private readonly rotatePrompt = document.createElement("div");
   private readonly menuPreview: MenuPreview;
+  private readonly auditionPlayer = new SongAuditionPlayer();
+  private readonly carPreview: CarPreview;
 
   private orientationQuery: MediaQueryList | null = null;
   private catalog: SongCatalog | null = null;
   private availableSongs: ShellSongEntry[] = [];
   private selectedSongId = "";
+  private browseSongId = "";
+  private songSearchQuery = "";
+  private songGenreFilter = SONG_FILTER_ALL;
+  private songGenresExpanded = false;
+  private songModalOpen = false;
+  private roomModalOpen = false;
+  private auditionState: SongAuditionState = { songId: null, status: "idle", error: null };
   private selectedFictionId: EnvironmentFictionId = 1;
   private seedOverride: number | null = null;
   private selectedPlayerCap = 4;
   private selectedCarVariant: CarVariant = "vector";
+  private selectedPlayerName = loadPlayerNamePreference();
   private selectedSteeringPreset = loadSteeringPresetPreference();
   private panelView: ShellPanelView = "setup";
   private mode: ShellMode = "solo";
@@ -145,6 +204,7 @@ export class GameShell {
   private activeApp: App | null = null;
   private lastLaunch: AppLaunchOptions | null = null;
   private previewDebounce: number | null = null;
+  private carPrefetchTimer: number | null = null;
   private launchInFlight = false;
 
   constructor(
@@ -154,6 +214,11 @@ export class GameShell {
     this.injectStyles();
     this.configureLayout();
     this.menuPreview = new MenuPreview(this.previewHost);
+    this.carPreview = new CarPreview(this.carPreviewHost, this.config);
+    this.auditionPlayer.onStateChange = (state) => {
+      this.auditionState = state;
+      this.renderSongBrowser();
+    };
     this.buildShellUi();
     this.buildRotatePrompt();
     this.setupOrientationWatch();
@@ -162,6 +227,7 @@ export class GameShell {
   async start(): Promise<void> {
     this.root.replaceChildren(this.raceHost, this.uiLayer, this.rotatePrompt);
     this.menuPreview.start();
+    this.carPreview.start();
     this.setStatus("Loading circuit database...");
 
     try {
@@ -179,12 +245,13 @@ export class GameShell {
     this.seedOverride = queryState.seed;
     this.selectedFictionId = queryState.fictionId;
     this.selectedSongId = this.resolveInitialSongId(queryState);
+    this.browseSongId = this.selectedSongId;
 
-    this.populateSongSelect();
     this.populatePlayerCapSelect();
-    this.populateCarSelect();
     this.populateSteeringSelect();
+    this.renderCarSelection();
     this.renderFictionButtons();
+    this.renderSongBrowser();
     this.renderSelection();
     this.renderMode();
     this.syncUrl();
@@ -222,17 +289,21 @@ export class GameShell {
         z-index: 1;
         display: grid;
         grid-template-rows: auto 1fr;
+        height: 100%;
         min-height: 100%;
-        padding: 36px 52px 32px;
-        gap: 28px;
+        padding: 28px 40px 24px;
+        gap: 20px;
+        box-sizing: border-box;
       }
       .tempo-shell-topline { display:flex; align-items:baseline; gap:18px; }
-      .tempo-shell-brand { font-size: clamp(34px, 4vw, 52px); font-weight:800; letter-spacing:-0.04em; line-height:1; }
+      .tempo-shell-brand { font-size: clamp(28px, 3.4vw, 48px); font-weight:800; letter-spacing:-0.04em; line-height:1; }
       .tempo-shell-tagline { font-size:11px; font-weight:500; letter-spacing:0.22em; text-transform:uppercase; color:#6b757a; }
-      .tempo-shell-main { display:grid; grid-template-columns:minmax(330px, 420px) minmax(0, 1fr); gap:40px; min-height:0; }
-      .tempo-shell-left { display:flex; flex-direction:column; gap:18px; min-width:0; }
-      .tempo-shell-right { min-width:0; min-height:0; }
-      .tempo-shell-section { display:flex; flex-direction:column; gap:10px; }
+      .tempo-shell-main { display:grid; grid-template-columns:minmax(300px, 380px) minmax(0, 1fr); gap:28px; min-height:0; }
+      .tempo-shell-left { display:flex; flex-direction:column; gap:12px; min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:2px; }
+      .tempo-shell-left::-webkit-scrollbar { width:6px; }
+      .tempo-shell-left::-webkit-scrollbar-thumb { background:rgba(243,245,242,0.12); border-radius:3px; }
+      .tempo-shell-right { min-width:0; min-height:0; display:flex; }
+      .tempo-shell-section { display:flex; flex-direction:column; gap:8px; }
       .tempo-shell-label { font-size:10px; font-weight:600; letter-spacing:0.24em; text-transform:uppercase; color:#6b757a; }
       .tempo-shell-select, .tempo-shell-input, .tempo-shell-code {
         width:100%;
@@ -248,6 +319,346 @@ export class GameShell {
       .tempo-shell-select:focus, .tempo-shell-input:focus, .tempo-shell-code:focus { outline:none; border-color:var(--tempo-accent); }
       .tempo-shell-select option { background:#0a0c10; color:#f3f5f2; }
       .tempo-shell-modes, .tempo-shell-fictions, .tempo-shell-actions { display:flex; gap:8px; flex-wrap:wrap; }
+      .tempo-shell-song-search {
+        width:100%;
+        border:1px solid rgba(243,245,242,0.12);
+        background:rgba(243,245,242,0.03);
+        color:#f3f5f2;
+        padding:12px 14px;
+        font-size:14px;
+        font-weight:500;
+        border-radius:2px;
+        font-family:inherit;
+      }
+      .tempo-shell-song-search:focus { outline:none; border-color:var(--tempo-accent); }
+      .tempo-shell-song-hint {
+        font-size:10px;
+        line-height:1.55;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
+      .tempo-shell-song-current {
+        display:grid;
+        grid-template-columns:56px minmax(0, 1fr);
+        gap:12px;
+        align-items:center;
+        padding:10px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:rgba(243,245,242,0.03);
+      }
+      .tempo-shell-song-current-art {
+        width:56px;
+        height:56px;
+        object-fit:cover;
+        border-radius:2px;
+        border:1px solid rgba(243,245,242,0.08);
+        background:#0a0d12;
+      }
+      .tempo-shell-song-current-copy {
+        min-width:0;
+      }
+      .tempo-shell-song-current-title {
+        font-size:14px;
+        font-weight:700;
+        line-height:1.2;
+        color:#f3f5f2;
+      }
+      .tempo-shell-song-current-sub {
+        margin-top:4px;
+        font-size:10px;
+        font-weight:500;
+        letter-spacing:0.16em;
+        text-transform:uppercase;
+        color:#8a9297;
+      }
+      .tempo-shell-car-carousel {
+        display:grid;
+        grid-template-columns:auto minmax(0, 1fr) auto;
+        align-items:center;
+        gap:6px;
+      }
+      .tempo-shell-car-carousel-arrow {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        width:32px;
+        height:32px;
+        border:0;
+        background:transparent;
+        color:#9aa4aa;
+        cursor:pointer;
+        font-size:22px;
+        font-weight:400;
+        line-height:1;
+      }
+      .tempo-shell-car-carousel-arrow:hover {
+        color:var(--car-accent, var(--tempo-accent));
+      }
+      .tempo-shell-car-carousel-stage {
+        display:flex;
+        flex-direction:column;
+        align-items:stretch;
+        gap:4px;
+        min-width:0;
+      }
+      .tempo-shell-car-carousel-name {
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
+        font-size:11px;
+        font-weight:700;
+        letter-spacing:0.22em;
+        text-transform:uppercase;
+        color:#f3f5f2;
+      }
+      .tempo-shell-car-carousel-swatch {
+        width:8px;
+        height:8px;
+        border-radius:999px;
+        background:var(--car-accent, var(--tempo-accent));
+        box-shadow:0 0 12px color-mix(in srgb, var(--car-accent, var(--tempo-accent)) 55%, transparent);
+      }
+      .tempo-shell-car-carousel-canvas {
+        position:relative;
+        height:118px;
+        overflow:hidden;
+      }
+      .tempo-shell-car-carousel-canvas canvas {
+        width:100% !important;
+        height:100% !important;
+        display:block;
+      }
+      .tempo-shell-song-genres {
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+      }
+      .tempo-shell-song-genres.is-collapsed { display:none; }
+      .tempo-shell-song-genre-toggle {
+        align-self:flex-start;
+        display:inline-flex;
+        align-items:center;
+        gap:8px;
+        border:1px solid rgba(243,245,242,0.16);
+        background:transparent;
+        color:#d4dadd;
+        font:600 11px/1 inherit;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        border-radius:2px;
+        padding:10px 14px;
+        cursor:pointer;
+        min-height:40px;
+      }
+      .tempo-shell-song-genre-toggle:hover { border-color:var(--tempo-accent); color:var(--tempo-accent); }
+      .tempo-shell-song-genre-toggle.is-active { border-color:var(--tempo-accent); color:var(--tempo-accent); }
+      .tempo-shell-song-genre-toggle-caret { opacity:0.7; font-size:9px; }
+      .tempo-shell-song-list {
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        max-height:340px;
+        overflow-y:auto;
+        padding-right:4px;
+      }
+      .tempo-shell-song-card {
+        width:100%;
+        display:grid;
+        grid-template-columns:64px minmax(0, 1fr) auto;
+        gap:12px;
+        align-items:center;
+        padding:10px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:rgba(243,245,242,0.03);
+        color:inherit;
+        text-align:left;
+        cursor:pointer;
+      }
+      .tempo-shell-song-card:hover {
+        border-color:rgba(243,245,242,0.22);
+        background:rgba(243,245,242,0.05);
+      }
+      .tempo-shell-song-card.is-selected {
+        border-color:var(--tempo-accent);
+        background:rgba(103, 201, 215, 0.08);
+      }
+      .tempo-shell-song-card.is-focused:not(.is-selected) {
+        border-color:rgba(243,245,242,0.22);
+      }
+      .tempo-shell-song-card.is-locked {
+        opacity:0.92;
+      }
+      .tempo-shell-song-card-art {
+        width:64px;
+        height:64px;
+        border-radius:2px;
+        object-fit:cover;
+        background:#0a0d12;
+        border:1px solid rgba(243,245,242,0.08);
+      }
+      .tempo-shell-song-card-meta {
+        min-width:0;
+        display:flex;
+        flex-direction:column;
+        gap:5px;
+      }
+      .tempo-shell-song-card-title {
+        font-size:15px;
+        font-weight:700;
+        line-height:1.2;
+        color:#f3f5f2;
+      }
+      .tempo-shell-song-card-sub {
+        font-size:10px;
+        font-weight:500;
+        letter-spacing:0.18em;
+        text-transform:uppercase;
+        color:#8a9297;
+      }
+      .tempo-shell-song-card-tags {
+        display:flex;
+        flex-wrap:wrap;
+        gap:6px;
+      }
+      .tempo-shell-song-card-tag {
+        border:1px solid rgba(243,245,242,0.12);
+        padding:4px 6px;
+        font-size:9px;
+        font-weight:700;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#d8dfe4;
+      }
+      .tempo-shell-song-card-status {
+        justify-self:end;
+        display:flex;
+        flex-direction:row;
+        align-items:flex-end;
+        gap:6px;
+      }
+      .tempo-shell-song-audition {
+        width:36px;
+        height:36px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        border:1px solid rgba(243,245,242,0.16);
+        background:transparent;
+        color:#d9e2e8;
+        border-radius:2px;
+        cursor:pointer;
+      }
+      .tempo-shell-song-audition:hover {
+        border-color:var(--tempo-accent);
+        color:var(--tempo-accent);
+      }
+      .tempo-shell-song-audition.is-playing {
+        border-color:var(--tempo-accent);
+        color:var(--tempo-accent);
+        background:rgba(103, 201, 215, 0.08);
+      }
+      .tempo-shell-song-audition:disabled {
+        opacity:0.45;
+        cursor:wait;
+      }
+      .tempo-shell-song-card-pill {
+        padding:4px 6px;
+        font-size:9px;
+        font-weight:700;
+        letter-spacing:0.18em;
+        text-transform:uppercase;
+        color:#8f9aa1;
+        border:1px solid rgba(243,245,242,0.12);
+      }
+      .tempo-shell-song-card-pill.is-accent {
+        color:var(--tempo-accent);
+        border-color:rgba(103, 201, 215, 0.45);
+      }
+      .tempo-shell-song-selection-meta {
+        min-width:0;
+        font-size:10px;
+        line-height:1.45;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
+      .tempo-shell-modal {
+        position:fixed;
+        inset:0;
+        z-index:120;
+        display:none;
+        align-items:center;
+        justify-content:center;
+        padding:28px;
+        background:rgba(3, 6, 9, 0.78);
+        backdrop-filter:blur(10px);
+      }
+      .tempo-shell-modal.is-open { display:flex; }
+      .tempo-shell-modal-dialog {
+        width:min(980px, 100%);
+        max-height:min(88vh, 900px);
+        display:flex;
+        flex-direction:column;
+        gap:16px;
+        padding:18px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:
+          radial-gradient(circle at 20% 18%, rgba(103, 201, 215, 0.08), transparent 28%),
+          linear-gradient(180deg, rgba(16, 20, 26, 0.98), rgba(7, 10, 15, 0.98));
+        box-shadow:0 24px 80px rgba(0,0,0,0.45);
+      }
+      .tempo-shell-modal-head {
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:14px;
+      }
+      .tempo-shell-modal-title {
+        font-size:13px;
+        font-weight:700;
+        letter-spacing:0.22em;
+        text-transform:uppercase;
+        color:#f3f5f2;
+      }
+      .tempo-shell-modal-sub {
+        margin-top:6px;
+        font-size:10px;
+        line-height:1.55;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
+      .tempo-shell-modal-close {
+        min-width:44px;
+        min-height:44px;
+      }
+      .tempo-shell-modal-body {
+        display:flex;
+        flex-direction:column;
+        gap:12px;
+        min-height:0;
+        flex:1 1 auto;
+        overflow-y:auto;
+        padding-right:4px;
+      }
+      .tempo-shell-modal-meta {
+        font-size:10px;
+        line-height:1.45;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
+      .tempo-shell-song-empty {
+        padding:14px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:rgba(243,245,242,0.03);
+        font-size:11px;
+        letter-spacing:0.14em;
+        text-transform:uppercase;
+        color:#8e9aa0;
+      }
       .tempo-shell-chip, .tempo-shell-action, .tempo-shell-play {
         border:1px solid rgba(243,245,242,0.16);
         background:transparent;
@@ -353,17 +764,18 @@ export class GameShell {
         color:#7f8b91;
       }
       .tempo-shell-room-meta { font-size:11px; line-height:1.55; color:#98a5ab; text-transform:uppercase; letter-spacing:0.12em; min-height:16px; }
-      .tempo-shell-stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
-      .tempo-shell-stat { display:flex; flex-direction:column; gap:4px; }
+      .tempo-shell-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(72px, 1fr)); gap:10px; }
+      .tempo-shell-stat { display:flex; flex-direction:column; gap:3px; }
       .tempo-shell-stat-key { font-size:9px; font-weight:600; letter-spacing:0.2em; text-transform:uppercase; color:#6b757a; }
-      .tempo-shell-stat-value { font-size:16px; font-weight:600; color:#f3f5f2; }
-      .tempo-shell-play { margin-top:auto; padding:18px 22px; font-size:14px; font-weight:700; letter-spacing:0.22em; }
+      .tempo-shell-stat-value { font-size:14px; font-weight:600; color:#f3f5f2; }
+      .tempo-shell-play { margin-top:auto; padding:14px 18px; font-size:13px; font-weight:700; letter-spacing:0.22em; min-height:48px; }
       .tempo-shell-status { font-size:10px; font-weight:500; letter-spacing:0.16em; text-transform:uppercase; color:#6b757a; min-height:14px; }
       .tempo-shell-preview-box {
         position:relative;
         width:100%;
-        height:min(72vh, 720px);
-        min-height:480px;
+        flex:1 1 auto;
+        height:100%;
+        min-height:0;
         border:1px solid rgba(243,245,242,0.08);
         background:
           radial-gradient(circle at 18% 14%, rgba(96, 224, 255, 0.08), transparent 26%),
@@ -477,6 +889,24 @@ export class GameShell {
         line-height:1.05;
         text-shadow:0 0 18px rgba(255,255,255,0.08);
       }
+      .tempo-shell-preview-info {
+        display:flex;
+        align-items:flex-start;
+        gap:14px;
+        min-width:0;
+      }
+      .tempo-shell-song-art {
+        width:76px;
+        height:76px;
+        object-fit:cover;
+        border-radius:2px;
+        border:1px solid rgba(243,245,242,0.1);
+        background:#0a0d12;
+        box-shadow:0 0 24px rgba(0,0,0,0.25);
+      }
+      .tempo-shell-song-copy {
+        min-width:0;
+      }
       .tempo-shell-song-info { margin-top:7px; font-size:10px; font-weight:500; letter-spacing:0.2em; text-transform:uppercase; color:#8a9297; }
       .tempo-shell-preview-meta {
         text-align:right;
@@ -492,51 +922,61 @@ export class GameShell {
         100% { transform:translate3d(18%, 10%, 0); }
       }
       .tempo-hidden { display:none !important; }
-      @media (max-width: 980px) {
-        .tempo-shell-ui { overflow-y:auto; overscroll-behavior:contain; }
-        .tempo-shell { padding:24px 22px; }
-        .tempo-shell-main { grid-template-columns:1fr; gap:24px; }
-        .tempo-shell-preview-box { min-height:340px; }
-        .tempo-shell-preview-grid { background-size:52px 52px, 52px 52px; }
-        .tempo-shell-preview-caption { left:20px; bottom:16px; letter-spacing:0.18em; }
-        .tempo-shell-room-card {
-          grid-template-columns:1fr;
-          padding:12px;
-          gap:10px;
-        }
-        .tempo-shell-room-card-meta {
-          font-size:12px;
-          line-height:1.55;
-        }
-        .tempo-shell-room-card .tempo-shell-action,
-        .tempo-shell-room-card .tempo-shell-chip {
-          width:100%;
-          min-height:44px;
-        }
-        .tempo-shell-directory { max-height:42vh; overflow-y:auto; }
+      .tempo-shell-directory { max-height:46vh; overflow-y:auto; padding-right:4px; }
+      @media (max-width: 1099px) {
+        .tempo-shell { padding:22px 28px 20px; gap:16px; }
+        .tempo-shell-main { grid-template-columns:minmax(280px, 340px) minmax(0, 1fr); gap:20px; }
+        .tempo-shell-brand { font-size:30px; }
+        .tempo-shell-left { gap:10px; }
+        .tempo-shell-section { gap:6px; }
+        .tempo-shell-preview-box { min-height:0; height:100%; }
+        .tempo-shell-car-carousel-canvas { height:104px; }
       }
-      @media (max-width: 900px) and (orientation: landscape) {
-        .tempo-shell { padding:12px 20px 14px; gap:12px; min-height:100vh; }
+      @media (max-width: 819px) {
+        .tempo-shell { padding:14px 18px 14px; gap:10px; }
         .tempo-shell-topline { gap:10px; }
         .tempo-shell-brand { font-size:22px; }
         .tempo-shell-tagline { display:none; }
-        .tempo-shell-main { grid-template-columns:minmax(220px, 300px) minmax(0, 1fr); gap:18px; }
-        .tempo-shell-left { gap:12px; }
-        .tempo-shell-section { gap:6px; }
+        .tempo-shell-main { grid-template-columns:minmax(220px, 280px) minmax(0, 1fr); gap:14px; }
+        .tempo-shell-left { gap:8px; }
+        .tempo-shell-section { gap:5px; }
+        .tempo-shell-label { font-size:9px; letter-spacing:0.2em; }
         .tempo-shell-select,
         .tempo-shell-input,
-        .tempo-shell-code { padding:10px 12px; font-size:14px; }
+        .tempo-shell-code,
+        .tempo-shell-song-search { padding:9px 11px; font-size:13px; }
         .tempo-shell-chip,
-        .tempo-shell-action { padding:9px 12px; }
-        .tempo-shell-stats { gap:10px; }
-        .tempo-shell-stat-value { font-size:14px; }
-        .tempo-shell-play { margin-top:4px; padding:12px 16px; font-size:12px; letter-spacing:0.18em; }
+        .tempo-shell-action { padding:9px 12px; min-height:38px; }
+        .tempo-shell-song-genre-toggle { min-height:38px; padding:9px 12px; }
+        .tempo-shell-car-carousel-arrow { width:28px; height:28px; font-size:18px; }
+        .tempo-shell-car-carousel-name { font-size:10px; letter-spacing:0.2em; }
+        .tempo-shell-car-carousel-canvas { height:80px; }
+        .tempo-shell-song-current { padding:8px; grid-template-columns:44px minmax(0, 1fr); gap:10px; }
+        .tempo-shell-song-current-art { width:44px; height:44px; }
+        .tempo-shell-song-current-title { font-size:12px; }
+        .tempo-shell-song-current-sub { font-size:9px; }
+        .tempo-shell-stats { gap:8px; grid-template-columns:repeat(auto-fit, minmax(64px, 1fr)); }
+        .tempo-shell-stat-value { font-size:12px; }
+        .tempo-shell-play { margin-top:4px; padding:11px 14px; font-size:12px; letter-spacing:0.18em; min-height:42px; }
+        .tempo-shell-status { font-size:9px; }
         .tempo-shell-preview-box { min-height:0; height:100%; }
         .tempo-shell-preview-grid,
         .tempo-shell-preview-scan { opacity:0.32; }
         .tempo-shell-preview-caption { display:none; }
-        .tempo-shell-directory { max-height:38vh; }
-        .tempo-shell-room-block { padding:10px; }
+        .tempo-shell-preview-head { top:12px; left:14px; right:14px; }
+        .tempo-shell-preview-info { gap:10px; }
+        .tempo-shell-song-art { width:52px; height:52px; }
+        .tempo-shell-song-name { font-size:18px; }
+        .tempo-shell-song-info { font-size:9px; }
+        .tempo-shell-modal { padding:14px; }
+        .tempo-shell-modal-dialog { max-height:92vh; padding:14px; gap:12px; }
+        .tempo-shell-modal-title { font-size:12px; }
+        .tempo-shell-song-list { max-height:48vh; }
+        .tempo-shell-directory { max-height:46vh; }
+        .tempo-shell-room-card { grid-template-columns:minmax(0, 1fr) auto; padding:9px 10px; gap:10px; }
+        .tempo-shell-room-card-title { font-size:11px; }
+        .tempo-shell-room-card-summary { font-size:10px; }
+        .tempo-shell-roster { min-height:60px; padding:8px 10px; font-size:10px; line-height:1.5; }
       }
       .tempo-rotate-prompt {
         position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
@@ -633,20 +1073,21 @@ export class GameShell {
     this.songSection.className = "tempo-shell-section";
     const songLabel = document.createElement("div");
     songLabel.className = "tempo-shell-label";
-    songLabel.textContent = "Tune";
-    this.songSelect.className = "tempo-shell-select";
-    this.songSelect.addEventListener("change", () => {
-      this.selectedSongId = this.songSelect.value;
-      const song = this.getSelectedSong();
-      if (song) this.selectedFictionId = clampCatalogFictions(song, this.selectedFictionId);
-      this.seedOverride = null;
-      this.seedInput.value = "";
-      this.renderFictionButtons();
-      this.renderSelection();
-      this.syncUrl();
-      this.syncRoomSetup();
+    songLabel.textContent = "Track";
+    this.songBrowserHint.className = "tempo-shell-song-hint";
+    this.songSelectionMeta.className = "tempo-shell-song-selection-meta";
+    this.songOpenModalButton.type = "button";
+    this.songOpenModalButton.className = "tempo-shell-action is-primary";
+    this.songOpenModalButton.textContent = "Browse Music";
+    this.songOpenModalButton.addEventListener("click", () => {
+      this.openSongModal();
     });
-    this.songSection.append(songLabel, this.songSelect);
+    this.songSection.append(
+      songLabel,
+      this.songBrowserHint,
+      this.songSelectionMeta,
+      this.songOpenModalButton,
+    );
 
     this.fictionSection.className = "tempo-shell-section";
     const fictionLabel = document.createElement("div");
@@ -690,14 +1131,57 @@ export class GameShell {
     const carLabel = document.createElement("div");
     carLabel.className = "tempo-shell-label";
     carLabel.textContent = "Car";
-    this.carSelect.className = "tempo-shell-select";
-    this.carSelect.addEventListener("change", () => {
-      this.selectedCarVariant = this.carSelect.value as CarVariant;
-      if (this.mode === "multiplayer" && this.roomClient && this.roomCode) {
-        this.roomClient.send({ type: "room.selectCar", carVariant: this.selectedCarVariant });
+    this.carCarousel.className = "tempo-shell-car-carousel";
+    this.carCarouselPrev.type = "button";
+    this.carCarouselPrev.className = "tempo-shell-car-carousel-arrow";
+    this.carCarouselPrev.setAttribute("aria-label", "Previous car");
+    this.carCarouselPrev.textContent = "‹";
+    this.carCarouselPrev.addEventListener("click", () => {
+      this.cycleCar(-1);
+    });
+    this.carCarouselNext.type = "button";
+    this.carCarouselNext.className = "tempo-shell-car-carousel-arrow";
+    this.carCarouselNext.setAttribute("aria-label", "Next car");
+    this.carCarouselNext.textContent = "›";
+    this.carCarouselNext.addEventListener("click", () => {
+      this.cycleCar(1);
+    });
+    const carStage = document.createElement("div");
+    carStage.className = "tempo-shell-car-carousel-stage";
+    this.carCarouselName.className = "tempo-shell-car-carousel-name";
+    this.carCarouselSwatch.className = "tempo-shell-car-carousel-swatch";
+    const carName = document.createElement("span");
+    this.carCarouselName.append(this.carCarouselSwatch, carName);
+    this.carPreviewHost.className = "tempo-shell-car-carousel-canvas";
+    carStage.append(this.carCarouselName, this.carPreviewHost);
+    this.carCarousel.append(this.carCarouselPrev, carStage, this.carCarouselNext);
+    this.carSection.append(carLabel, this.carCarousel);
+
+    this.playerNameSection.className = "tempo-shell-section";
+    const playerNameLabel = document.createElement("div");
+    playerNameLabel.className = "tempo-shell-label";
+    playerNameLabel.textContent = "Pilot Tag";
+    this.playerNameInput.className = "tempo-shell-input";
+    this.playerNameInput.type = "text";
+    this.playerNameInput.maxLength = PLAYER_NAME_MAX_LENGTH;
+    this.playerNameInput.placeholder = "Pilot Name";
+    this.playerNameInput.value = this.selectedPlayerName;
+    this.playerNameInput.addEventListener("blur", () => {
+      this.commitPlayerName();
+    });
+    this.playerNameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.commitPlayerName();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.playerNameInput.value = this.selectedPlayerName;
+        this.playerNameInput.blur();
       }
     });
-    this.carSection.append(carLabel, this.carSelect);
+    this.playerNameSection.append(playerNameLabel, this.playerNameInput);
 
     this.steeringSection.className = "tempo-shell-section";
     const steeringLabel = document.createElement("div");
@@ -800,15 +1284,19 @@ export class GameShell {
     this.directoryPanel.className = "tempo-shell-directory";
     this.directoryPager.className = "tempo-shell-directory-pager";
     this.rosterPanel.className = "tempo-shell-roster";
+
+    this.configureRoomButton.type = "button";
+    this.configureRoomButton.className = "tempo-shell-action is-primary";
+    this.configureRoomButton.textContent = "Rooms";
+    this.configureRoomButton.addEventListener("click", () => {
+      this.openRoomModal();
+    });
+
     this.multiplayerPanel.append(
       this.roomMeta,
+      this.configureRoomButton,
       this.roomActionRow,
       this.rosterPanel,
-      this.roomViewDeck,
-      this.hostRoomSection,
-      this.browseRoomsSection,
-      this.directoryPanel,
-      this.directoryPager,
     );
     this.roomSection.append(roomLabel, this.multiplayerPanel);
 
@@ -830,6 +1318,7 @@ export class GameShell {
       modeSection,
       this.panelToggleRow,
       this.carSection,
+      this.playerNameSection,
       this.steeringSection,
       this.roomSection,
       this.songSection,
@@ -865,9 +1354,15 @@ export class GameShell {
     const previewHead = document.createElement("div");
     previewHead.className = "tempo-shell-preview-head";
     const previewInfo = document.createElement("div");
+    previewInfo.className = "tempo-shell-preview-info";
+    this.songArt.className = "tempo-shell-song-art";
+    this.songArt.alt = "";
+    const previewCopy = document.createElement("div");
+    previewCopy.className = "tempo-shell-song-copy";
     this.songName.className = "tempo-shell-song-name";
     this.songInfo.className = "tempo-shell-song-info";
-    previewInfo.append(this.songName, this.songInfo);
+    previewCopy.append(this.songName, this.songInfo);
+    previewInfo.append(this.songArt, previewCopy);
     const previewMeta = document.createElement("div");
     previewMeta.className = "tempo-shell-preview-meta";
     previewMeta.append(this.previewTitle, this.previewSubline);
@@ -878,17 +1373,376 @@ export class GameShell {
 
     main.append(left, right);
     this.shell.append(topline, main);
+
+    this.songModal.className = "tempo-shell-modal";
+    this.songModal.addEventListener("click", (event) => {
+      if (event.target === this.songModal) {
+        this.closeSongModal();
+      }
+    });
+    this.songModalDialog.className = "tempo-shell-modal-dialog";
+    this.songModalDialog.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    const modalHead = document.createElement("div");
+    modalHead.className = "tempo-shell-modal-head";
+    const modalCopy = document.createElement("div");
+    const modalTitle = document.createElement("div");
+    modalTitle.className = "tempo-shell-modal-title";
+    modalTitle.textContent = "Music Browser";
+    const modalSub = document.createElement("div");
+    modalSub.className = "tempo-shell-modal-sub";
+    modalSub.textContent = "Filter by genre, search title or artist, and tap the speaker icon to audition.";
+    modalCopy.append(modalTitle, modalSub);
+    this.songModalCloseButton.type = "button";
+    this.songModalCloseButton.className = "tempo-shell-action tempo-shell-modal-close";
+    this.songModalCloseButton.textContent = "Close";
+    this.songModalCloseButton.addEventListener("click", () => {
+      this.closeSongModal();
+    });
+    modalHead.append(modalCopy, this.songModalCloseButton);
+    this.songModalMeta.className = "tempo-shell-modal-meta";
+    this.songSearchInput.className = "tempo-shell-song-search";
+    this.songSearchInput.type = "search";
+    this.songSearchInput.placeholder = "Search title or artist";
+    this.songSearchInput.addEventListener("input", () => {
+      this.songSearchQuery = this.songSearchInput.value.trim().toLowerCase();
+      this.renderSongBrowser();
+    });
+    this.songGenreToggle.type = "button";
+    this.songGenreToggle.className = "tempo-shell-song-genre-toggle";
+    this.songGenreToggle.addEventListener("click", () => {
+      this.songGenresExpanded = !this.songGenresExpanded;
+      this.renderSongBrowser();
+    });
+    this.songGenreDeck.className = "tempo-shell-song-genres";
+    this.songBrowserList.className = "tempo-shell-song-list";
+    this.songModalDialog.append(
+      modalHead,
+      this.songModalMeta,
+      this.songSearchInput,
+      this.songGenreToggle,
+      this.songGenreDeck,
+      this.songBrowserList,
+    );
+    this.songModal.appendChild(this.songModalDialog);
+    this.uiLayer.appendChild(this.songModal);
+
+    this.roomModal.className = "tempo-shell-modal";
+    this.roomModal.addEventListener("click", (event) => {
+      if (event.target === this.roomModal) {
+        this.closeRoomModal();
+      }
+    });
+    this.roomModalDialog.className = "tempo-shell-modal-dialog";
+    this.roomModalDialog.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    const roomModalHead = document.createElement("div");
+    roomModalHead.className = "tempo-shell-modal-head";
+    const roomModalCopy = document.createElement("div");
+    const roomModalTitle = document.createElement("div");
+    roomModalTitle.className = "tempo-shell-modal-title";
+    roomModalTitle.textContent = "Rooms";
+    const roomModalSub = document.createElement("div");
+    roomModalSub.className = "tempo-shell-modal-sub";
+    roomModalSub.textContent = "Host a room or join one from the waiting list.";
+    roomModalCopy.append(roomModalTitle, roomModalSub);
+    this.roomModalCloseButton.type = "button";
+    this.roomModalCloseButton.className = "tempo-shell-action tempo-shell-modal-close";
+    this.roomModalCloseButton.textContent = "Close";
+    this.roomModalCloseButton.addEventListener("click", () => {
+      this.closeRoomModal();
+    });
+    roomModalHead.append(roomModalCopy, this.roomModalCloseButton);
+    this.roomModalBody.className = "tempo-shell-modal-body";
+    this.roomModalBody.append(
+      this.roomViewDeck,
+      this.hostRoomSection,
+      this.browseRoomsSection,
+      this.directoryPanel,
+      this.directoryPager,
+    );
+    this.roomModalDialog.append(roomModalHead, this.roomModalBody);
+    this.roomModal.appendChild(this.roomModalDialog);
+    this.uiLayer.appendChild(this.roomModal);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (this.roomModalOpen) {
+        event.preventDefault();
+        this.closeRoomModal();
+      } else if (this.songModalOpen) {
+        event.preventDefault();
+        this.closeSongModal();
+      }
+    });
   }
 
-  private populateSongSelect(): void {
-    this.songSelect.replaceChildren();
-    for (const song of this.availableSongs) {
-      const option = document.createElement("option");
-      option.value = song.id;
-      option.textContent = `${song.title} / ${song.artist}`;
-      this.songSelect.appendChild(option);
+  private renderSongBrowser(): void {
+    const selectedSong = this.getSelectedSong();
+    const focusedSong = this.getFocusedSong();
+    const canCommit = this.canEditSongSelection();
+
+    this.songBrowserHint.textContent = this.describeSongBrowserMode();
+    this.songSelectionMeta.replaceChildren();
+    if (selectedSong) {
+      const current = document.createElement("div");
+      current.className = "tempo-shell-song-current";
+      const art = document.createElement("img");
+      art.className = "tempo-shell-song-current-art";
+      art.alt = "";
+      art.src = this.getSongAlbumArtUrl(selectedSong);
+      const copy = document.createElement("div");
+      copy.className = "tempo-shell-song-current-copy";
+      const title = document.createElement("div");
+      title.className = "tempo-shell-song-current-title";
+      title.textContent = selectedSong.title;
+      const sub = document.createElement("div");
+      sub.className = "tempo-shell-song-current-sub";
+      sub.textContent = `${selectedSong.artist} / ${selectedSong.genre} / ${selectedSong.bpm.toFixed(0)} BPM`;
+      copy.append(title, sub);
+      current.append(art, copy);
+      this.songSelectionMeta.appendChild(current);
     }
-    this.songSelect.value = this.selectedSongId;
+    this.songOpenModalButton.textContent = "Browse Music";
+    this.songOpenModalButton.disabled = this.launchInFlight;
+
+    this.songGenreDeck.replaceChildren();
+    for (const genre of [SONG_FILTER_ALL, ...this.listAvailableGenres()]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tempo-shell-chip";
+      button.textContent = genre;
+      button.classList.toggle("is-active", this.songGenreFilter === genre);
+      button.addEventListener("click", () => {
+        this.songGenreFilter = genre;
+        this.songGenresExpanded = false;
+        this.renderSongBrowser();
+      });
+      this.songGenreDeck.appendChild(button);
+    }
+    const genreLabel = this.songGenreFilter === SONG_FILTER_ALL
+      ? "Filters: All Genres"
+      : `Filters: ${this.songGenreFilter}`;
+    const caret = this.songGenresExpanded ? "▲" : "▼";
+    this.songGenreToggle.innerHTML = `<span>${genreLabel}</span><span class="tempo-shell-song-genre-toggle-caret">${caret}</span>`;
+    this.songGenreToggle.classList.toggle("is-active", this.songGenreFilter !== SONG_FILTER_ALL);
+    this.songGenreDeck.classList.toggle("is-collapsed", !this.songGenresExpanded);
+    this.songModalMeta.textContent = this.describeSongSelectionMeta(selectedSong, focusedSong, canCommit);
+    this.songModal.classList.toggle("is-open", this.songModalOpen);
+
+    this.songBrowserList.replaceChildren();
+    const visibleSongs = this.listVisibleSongs();
+    if (visibleSongs.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "tempo-shell-song-empty";
+      empty.textContent = "No tracks match this search.";
+      this.songBrowserList.appendChild(empty);
+    }
+
+    for (const song of visibleSongs) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "tempo-shell-song-card";
+      row.classList.toggle("is-selected", song.id === selectedSong?.id);
+      row.classList.toggle("is-focused", song.id === focusedSong?.id);
+      row.classList.toggle("is-locked", !canCommit && song.id !== selectedSong?.id);
+      row.addEventListener("click", () => {
+        this.handleSongActivation(song.id);
+      });
+
+      const art = document.createElement("img");
+      art.className = "tempo-shell-song-card-art";
+      art.alt = "";
+      art.src = this.getSongAlbumArtUrl(song);
+
+      const meta = document.createElement("div");
+      meta.className = "tempo-shell-song-card-meta";
+      const title = document.createElement("div");
+      title.className = "tempo-shell-song-card-title";
+      title.textContent = song.title;
+      const sub = document.createElement("div");
+      sub.className = "tempo-shell-song-card-sub";
+      sub.textContent = `${song.artist} / ${song.genre}`;
+      const tags = document.createElement("div");
+      tags.className = "tempo-shell-song-card-tags";
+      tags.append(
+        createSongTag(song.genre),
+        createSongTag(`${song.bpm.toFixed(0)} BPM`),
+        createSongTag(formatDuration(song.duration)),
+      );
+      meta.append(title, sub, tags);
+
+      const status = document.createElement("div");
+      status.className = "tempo-shell-song-card-status";
+      const auditionButton = document.createElement("button");
+      auditionButton.type = "button";
+      auditionButton.className = "tempo-shell-song-audition";
+      auditionButton.classList.toggle("is-playing", this.auditionState.songId === song.id && this.auditionState.status === "playing");
+      auditionButton.disabled = this.launchInFlight;
+      auditionButton.setAttribute("aria-label", `Audition ${song.title}`);
+      auditionButton.innerHTML = speakerIconSvg();
+      auditionButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.toggleSongAudition(song.id);
+      });
+      status.appendChild(auditionButton);
+      if (song.id === selectedSong?.id) {
+        status.appendChild(createSongPill(this.mode === "multiplayer" ? "Room" : "Selected", true));
+      }
+      if (song.id === focusedSong?.id && song.id !== selectedSong?.id) {
+        status.appendChild(createSongPill("Browsing"));
+      }
+      if (!canCommit && song.id !== selectedSong?.id) {
+        status.appendChild(createSongPill("Local"));
+      }
+      if (this.songShouldBePinned(song)) {
+        status.appendChild(createSongPill("Pinned"));
+      }
+
+      row.append(art, meta, status);
+      this.songBrowserList.appendChild(row);
+    }
+  }
+
+  private listAvailableGenres(): string[] {
+    const genres = new Set(this.availableSongs.map((song) => song.genre));
+    return SONG_GENRE_ORDER.filter((genre) => genres.has(genre));
+  }
+
+  private listVisibleSongs(): ShellSongEntry[] {
+    const filtered = this.availableSongs.filter((song) => {
+      if (this.songGenreFilter !== SONG_FILTER_ALL && song.genre !== this.songGenreFilter) return false;
+      if (!this.songSearchQuery) return true;
+      return buildSongSearchText(song).includes(this.songSearchQuery);
+    }).sort(compareSongsForBrowser);
+
+    const pinned = [this.getSelectedSong()].filter((song): song is ShellSongEntry => Boolean(song));
+    const visible = new Map<string, ShellSongEntry>();
+    for (const song of pinned) {
+      if (!filtered.includes(song)) {
+        visible.set(song.id, song);
+      }
+    }
+    for (const song of filtered) {
+      visible.set(song.id, song);
+    }
+    return [...visible.values()];
+  }
+
+  private handleSongActivation(songId: string): void {
+    const song = this.findSongById(songId);
+    if (!song) return;
+
+    this.browseSongId = song.id;
+    if (this.canEditSongSelection()) {
+      this.selectedSongId = song.id;
+      this.selectedFictionId = clampCatalogFictions(song, this.selectedFictionId);
+      this.seedOverride = null;
+      this.seedInput.value = "";
+      this.renderFictionButtons();
+      this.syncUrl();
+      this.syncRoomSetup();
+      this.closeSongModal();
+    }
+
+    this.renderSelection();
+    this.renderSongBrowser();
+  }
+
+  private describeSongBrowserMode(): string {
+    if (this.mode === "solo") {
+      return "Browse by genre, search by title or artist, then audition the selected track.";
+    }
+    if (!this.roomCode && this.multiplayerView === "host") {
+      return "Host setup uses the same browser as solo. Lock the room after choosing a track.";
+    }
+    if (!this.roomCode) {
+      return "Join rooms below or browse the catalog locally before hosting.";
+    }
+    if (this.roomHostId === this.clientId) {
+      return "Host control is live. Track changes update every client in the lobby.";
+    }
+    return "Host controls the selected track. You can still browse locally and audition without changing room state.";
+  }
+
+  private describeSongSelectionMeta(
+    selectedSong: ShellSongEntry | null,
+    focusedSong: ShellSongEntry | null,
+    canCommit: boolean,
+  ): string {
+    if (!selectedSong) return "No track selected.";
+    const focusedLine = focusedSong && focusedSong.id !== selectedSong.id
+      ? `Browsing ${focusedSong.title} locally.`
+      : `Locked on ${selectedSong.title}.`;
+    if (this.auditionState.error && focusedSong && this.auditionState.songId === focusedSong.id) {
+      return `${focusedLine} ${this.auditionState.error}`;
+    }
+    if (canCommit) {
+      return `${focusedLine} ${selectedSong.genre} / ${selectedSong.bpm.toFixed(0)} BPM.`;
+    }
+    return `Room track: ${selectedSong.title}. ${focusedLine}`;
+  }
+
+  private canEditSongSelection(): boolean {
+    if (this.mode === "solo") return true;
+    if (!this.roomCode) return this.multiplayerView === "host";
+    return this.roomHostId === this.clientId && this.roomPhase === "lobby";
+  }
+
+  private getFocusedSong(): ShellSongEntry | null {
+    return this.findSongById(this.browseSongId) ?? this.getSelectedSong();
+  }
+
+  private findSongById(songId: string | null): ShellSongEntry | null {
+    if (!songId) return null;
+    return this.availableSongs.find((song) => song.id === songId) ?? null;
+  }
+
+  private songShouldBePinned(song: ShellSongEntry): boolean {
+    const matchesFilter = (this.songGenreFilter === SONG_FILTER_ALL || song.genre === this.songGenreFilter)
+      && (!this.songSearchQuery || buildSongSearchText(song).includes(this.songSearchQuery));
+    if (matchesFilter) return false;
+    return song.id === this.selectedSongId;
+  }
+
+  private getSongAlbumArtUrl(song: ShellSongEntry): string {
+    return resolveSongAlbumArtUrl(this.config, song) ?? buildFallbackAlbumArt(song);
+  }
+
+  private async toggleSongAudition(songId: string): Promise<void> {
+    const song = this.findSongById(songId);
+    if (!song) return;
+    unlockAudioContext();
+    const { musicUrl } = resolveSongLaunchUrls(this.config, song);
+    await this.auditionPlayer.toggle(song.id, musicUrl, song.previewStartTime);
+  }
+
+  private openSongModal(): void {
+    this.songModalOpen = true;
+    this.browseSongId = this.selectedSongId;
+    this.renderSongBrowser();
+  }
+
+  private closeSongModal(): void {
+    this.dismissSongModal();
+    this.renderSongBrowser();
+  }
+
+  private openRoomModal(): void {
+    this.roomModalOpen = true;
+    this.renderRoomState();
+    this.renderMode();
+  }
+
+  private closeRoomModal(): void {
+    this.dismissRoomModal();
+    this.renderMode();
+  }
+
+  private dismissRoomModal(): void {
+    this.roomModalOpen = false;
   }
 
   private populatePlayerCapSelect(): void {
@@ -900,17 +1754,6 @@ export class GameShell {
       this.playerCapSelect.appendChild(option);
     }
     this.playerCapSelect.value = String(this.selectedPlayerCap);
-  }
-
-  private populateCarSelect(): void {
-    this.carSelect.replaceChildren();
-    for (const car of CAR_VARIANTS) {
-      const option = document.createElement("option");
-      option.value = car.id;
-      option.textContent = car.label;
-      this.carSelect.appendChild(option);
-    }
-    this.carSelect.value = this.selectedCarVariant;
   }
 
   private populateSteeringSelect(): void {
@@ -938,20 +1781,23 @@ export class GameShell {
     const setupLocked = this.mode === "multiplayer" && inRoom && (!isHost || this.roomPhase !== "lobby");
     const showHostSetup = this.mode === "solo" || (this.mode === "multiplayer" && (isHost || (!inRoom && this.multiplayerView === "host")));
     const showJoinBrowser = this.mode === "multiplayer" && !inRoom && this.multiplayerView === "join";
+    const showSongBrowser = this.mode === "solo" || this.multiplayerView === "host" || inRoom;
     const showSetupPanel = this.panelView === "setup";
     const showSettingsPanel = this.panelView === "settings";
     this.panelToggleButton.textContent = showSettingsPanel ? "← Back" : "⚙ Settings";
 
     this.multiplayerPanel.classList.toggle("tempo-hidden", this.mode !== "multiplayer");
     this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer");
-    this.songSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
+    this.songSection.classList.toggle("tempo-hidden", !showSetupPanel || !showSongBrowser);
     this.fictionSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
     this.seedSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup);
     this.playerCapSection.classList.toggle("tempo-hidden", !showSetupPanel || !showHostSetup || this.mode !== "multiplayer");
     this.carSection.classList.toggle("tempo-hidden", !showSetupPanel);
+    this.playerNameSection.classList.toggle("tempo-hidden", !showSettingsPanel);
     this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !showSetupPanel);
     this.steeringSection.classList.toggle("tempo-hidden", !showSettingsPanel);
     this.trackStats.parentElement?.classList.toggle("tempo-hidden", !showSetupPanel);
+    this.configureRoomButton.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
     this.roomViewDeck.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
     this.hostRoomSection.classList.toggle("tempo-hidden", !showHostSetup || inRoom || this.mode !== "multiplayer");
     this.browseRoomsSection.classList.toggle("tempo-hidden", !showJoinBrowser);
@@ -959,8 +1805,9 @@ export class GameShell {
     this.directoryPager.classList.toggle("tempo-hidden", !showJoinBrowser);
     this.roomActionRow.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !inRoom);
     this.rosterPanel.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !inRoom);
+    this.roomModal.classList.toggle("is-open", this.roomModalOpen);
     this.playerCapSelect.disabled = this.mode !== "multiplayer" || !showHostSetup || setupLocked;
-    this.songSelect.disabled = this.mode === "multiplayer" ? !showHostSetup || setupLocked : false;
+    this.songSearchInput.disabled = !showSetupPanel || !showSongBrowser;
     this.seedInput.disabled = this.mode === "multiplayer" ? !showHostSetup || setupLocked : false;
     const song = this.getSelectedSong();
     for (const button of this.fictionButtons.values()) {
@@ -973,6 +1820,9 @@ export class GameShell {
       this.playButton.classList.toggle("tempo-hidden", !showSetupPanel);
     }
 
+    this.carCarouselPrev.disabled = this.launchInFlight;
+    this.carCarouselNext.disabled = this.launchInFlight;
+
     const localPlayer = this.roomPlayers.find((player) => player.clientId === this.clientId) ?? null;
     this.readyButton.textContent = localPlayer?.ready ? "Unready" : "Ready";
     this.readyButton.disabled = !inRoom || this.roomPhase !== "lobby";
@@ -981,6 +1831,49 @@ export class GameShell {
     this.createRoomButton.disabled = this.mode !== "multiplayer" || inRoom || this.multiplayerView !== "host";
     this.roomNameInput.disabled = this.mode !== "multiplayer" || inRoom || this.multiplayerView !== "host";
     this.roomSearchInput.disabled = !showJoinBrowser;
+  }
+
+  private renderCarSelection(): void {
+    const selectedCar = getCarVariantMeta(this.selectedCarVariant);
+    this.carCarousel.style.setProperty("--car-accent", selectedCar.accent);
+    const nameSpan = this.carCarouselName.querySelector("span");
+    if (nameSpan) nameSpan.textContent = selectedCar.label;
+    this.carPreview.setVariant(this.selectedCarVariant);
+    this.scheduleCarPrefetch();
+  }
+
+  private handleCarSelection(variant: CarVariant): void {
+    if (variant === this.selectedCarVariant) return;
+    this.selectedCarVariant = variant;
+    this.renderCarSelection();
+    if (this.mode === "multiplayer" && this.roomClient && this.roomCode) {
+      this.roomClient.send({ type: "room.selectCar", carVariant: this.selectedCarVariant });
+    }
+  }
+
+  private cycleCar(delta: 1 | -1): void {
+    const index = CAR_VARIANTS.findIndex((car) => car.id === this.selectedCarVariant);
+    const count = CAR_VARIANTS.length;
+    const nextIndex = (index + delta + count) % count;
+    this.handleCarSelection(CAR_VARIANTS[nextIndex].id);
+  }
+
+  private scheduleCarPrefetch(): void {
+    if (this.carPrefetchTimer !== null) {
+      window.clearTimeout(this.carPrefetchTimer);
+    }
+    const index = CAR_VARIANTS.findIndex((car) => car.id === this.selectedCarVariant);
+    const count = CAR_VARIANTS.length;
+    const adjacent = [
+      CAR_VARIANTS[(index + 1) % count]?.id,
+      CAR_VARIANTS[(index - 1 + count) % count]?.id,
+    ].filter((variant): variant is CarVariant => Boolean(variant));
+    this.carPrefetchTimer = window.setTimeout(() => {
+      this.carPrefetchTimer = null;
+      for (const variant of adjacent) {
+        prefetchCarMesh(this.config, variant);
+      }
+    }, 180);
   }
 
   private renderFictionButtons(): void {
@@ -1002,15 +1895,22 @@ export class GameShell {
     if (!song) return;
 
     const fiction = FICTION_OPTIONS.find((candidate) => candidate.id === this.selectedFictionId) ?? FICTION_OPTIONS[0];
-    const seed = this.seedOverride ?? song.baseSeed;
+    const seed = !this.canEditSongSelection() && song.id !== this.selectedSongId
+      ? song.baseSeed
+      : (this.seedOverride ?? song.baseSeed);
     const resolved = resolveSongLaunchUrls(this.config, song);
+    const albumArtUrl = this.getSongAlbumArtUrl(song);
 
     this.uiLayer.dataset.fiction = String(fiction.id);
     this.songName.textContent = song.title;
-    this.songInfo.textContent = `${song.artist} / ${song.bpm.toFixed(0)} BPM / ${formatDuration(song.duration)}`;
+    this.songInfo.textContent = `${song.artist} / ${song.genre} / ${song.bpm.toFixed(0)} BPM / ${formatDuration(song.duration)}`;
+    this.songArt.src = albumArtUrl;
+    this.songArt.alt = `${song.title} cover art`;
+    this.songArt.style.display = "";
     this.previewTitle.textContent = fiction.label;
     this.previewSubline.textContent = fiction.blurb;
     this.trackStats.replaceChildren(
+      createStat("Genre", song.genre),
       createStat("Length", formatDuration(song.duration)),
       createStat("Tempo", `${song.bpm.toFixed(0)} BPM`),
       createStat("Seed", seed.toString()),
@@ -1040,6 +1940,7 @@ export class GameShell {
         : "Browse waiting rooms below and join one with a single tap.";
       this.rosterPanel.textContent = "";
       this.renderDirectory();
+      this.renderSongBrowser();
       this.renderMode();
       return;
     }
@@ -1068,11 +1969,15 @@ export class GameShell {
         player.ready ? "RDY" : "   ",
         player.isActiveRacer ? "GRID" : "----",
       ];
-      return `${flags.join(" ")}  ${player.name.padEnd(8, " ")} ${player.carVariant.toUpperCase()}`;
+      const carLabel = getCarVariantMeta(player.carVariant).label.toUpperCase();
+      return `${flags.join(" ")}  ${player.name.padEnd(8, " ")} ${carLabel}`;
     }));
-    this.roomMeta.textContent = `${this.roomName || "Room"} / ${this.roomPhase?.toUpperCase() ?? "LOBBY"}`;
+    const selectedSong = this.getSelectedSong();
+    const songLabel = selectedSong ? `${selectedSong.title} / ${selectedSong.genre}` : this.selectedSongId;
+    this.roomMeta.textContent = `${this.roomName || "Room"} / ${this.roomPhase?.toUpperCase() ?? "LOBBY"} / ${songLabel}`;
     this.rosterPanel.textContent = lines.join("\n");
     this.renderDirectory();
+    this.renderSongBrowser();
     this.renderMode();
   }
 
@@ -1090,12 +1995,15 @@ export class GameShell {
     const query = this.roomSearchInput.value.trim().toLowerCase();
     const waitingRooms = this.roomDirectory
       .filter((room) => room.phase === "lobby")
-      .filter((room) =>
-        query.length === 0
-        || room.roomName.toLowerCase().includes(query)
-        || room.hostName.toLowerCase().includes(query)
-        || room.songId.toLowerCase().includes(query)
-      );
+      .filter((room) => {
+        if (query.length === 0) return true;
+        const roomSong = this.findSongById(room.songId);
+        const songSearch = roomSong ? buildSongSearchText(roomSong) : room.songId.toLowerCase();
+        return room.roomName.toLowerCase().includes(query)
+          || room.hostName.toLowerCase().includes(query)
+          || room.songId.toLowerCase().includes(query)
+          || songSearch.includes(query);
+      });
     const pageCount = Math.max(1, Math.ceil(waitingRooms.length / GameShell.DIRECTORY_PAGE_SIZE));
     this.currentDirectoryPage = Math.min(this.currentDirectoryPage, pageCount);
     const pageStart = (this.currentDirectoryPage - 1) * GameShell.DIRECTORY_PAGE_SIZE;
@@ -1120,7 +2028,9 @@ export class GameShell {
       title.textContent = room.roomName;
       const summary = document.createElement("div");
       summary.className = "tempo-shell-room-card-summary";
-      summary.textContent = `Host ${room.hostName} / ${room.playerCount}/${room.playerCap} / ${room.songId}`;
+      const roomSong = this.findSongById(room.songId);
+      const roomSongLabel = roomSong ? `${roomSong.title} / ${roomSong.genre}` : room.songId;
+      summary.textContent = `Host ${room.hostName} / ${room.playerCount}/${room.playerCap} / ${roomSongLabel}`;
       meta.append(title, summary);
       const joinButton = document.createElement("button");
       joinButton.type = "button";
@@ -1202,11 +2112,15 @@ export class GameShell {
       id: `custom-${filename}`,
       title: filename.replace(/[-_]+/g, " "),
       artist: "Linked Track",
+      genre: "Breaks",
       bpm: 120,
       duration: 180,
       baseSeed: 0,
       songPath,
       musicPath: musicPath ?? songPath.replace(/\.json$/i, ".mp3").replace("/songs/", "/music/"),
+      albumArtPath: "",
+      previewStartTime: 0,
+      searchTerms: ["linked", "custom"],
       fictionIds: [1, 2, 3],
       custom: true,
     };
@@ -1228,6 +2142,8 @@ export class GameShell {
 
   private async setMode(mode: ShellMode): Promise<void> {
     if (mode === this.mode) return;
+    this.dismissSongModal();
+    this.dismissRoomModal();
     if (mode === "solo" && this.roomCode) {
       await this.leaveRoom();
     }
@@ -1245,6 +2161,11 @@ export class GameShell {
         return;
       }
     }
+    if (this.mode === "solo" || this.multiplayerView === "host") {
+      this.browseSongId = this.selectedSongId;
+    }
+    this.renderSongBrowser();
+    this.renderSelection();
     this.renderMode();
     this.setStatus(mode === "solo" ? "Solo launch armed." : "Room browser ready.");
   }
@@ -1254,6 +2175,7 @@ export class GameShell {
       this.roomClient = new RoomClient(this.config.websocketUrl);
       this.roomClient.onMessage = (message) => this.handleServerMessage(message);
       this.roomClient.onClose = () => {
+        this.dismissSongModal();
         this.roomCode = null;
         this.roomName = "";
         this.roomPhase = null;
@@ -1262,11 +2184,13 @@ export class GameShell {
         this.roomHostId = null;
         this.roomBrowserReady = false;
         this.currentDirectoryPage = 1;
+        this.browseSongId = this.selectedSongId;
         this.renderRoomState();
         this.setStatus("Room connection closed.");
       };
     }
     await this.roomClient.ensureConnected();
+    this.syncPlayerIdentity();
     this.startDirectoryPolling();
     this.requestDirectoryRefresh();
     return this.roomClient;
@@ -1306,6 +2230,7 @@ export class GameShell {
 
   private async leaveRoom(): Promise<void> {
     this.clearResultsReturnTimer();
+    this.dismissSongModal();
     this.roomClient?.send({ type: "room.leave" });
     this.roomCode = null;
     this.roomName = "";
@@ -1316,6 +2241,7 @@ export class GameShell {
     this.multiplayerResultsActive = false;
     this.pendingLobbyStatus = null;
     this.currentDirectoryPage = 1;
+    this.browseSongId = this.selectedSongId;
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
@@ -1327,6 +2253,26 @@ export class GameShell {
     const player = this.roomPlayers.find((candidate) => candidate.clientId === this.clientId);
     if (!player) return;
     this.roomClient?.send({ type: "room.setReady", ready: !player.ready });
+  }
+
+  private commitPlayerName(): void {
+    const nextName = sanitizePlayerName(this.playerNameInput.value);
+    if (!nextName) {
+      this.playerNameInput.value = this.selectedPlayerName;
+      return;
+    }
+    this.playerNameInput.value = nextName;
+    if (nextName === this.selectedPlayerName) return;
+    this.selectedPlayerName = nextName;
+    savePreference(PLAYER_NAME_STORAGE_KEY, nextName);
+    this.syncPlayerIdentity();
+  }
+
+  private syncPlayerIdentity(): void {
+    this.roomClient?.send({
+      type: "room.setPlayerName",
+      name: this.selectedPlayerName,
+    });
   }
 
   private syncRoomSetup(): void {
@@ -1341,6 +2287,7 @@ export class GameShell {
   private async launchSoloRace(reuseLastLaunch = false): Promise<void> {
     if (this.launchInFlight) return;
     this.clearResultsReturnTimer();
+    this.dismissSongModal();
     const song = this.getSelectedSong();
     if (!song && !reuseLastLaunch) {
       this.setStatus("Pick a valid circuit before launch.");
@@ -1355,7 +2302,10 @@ export class GameShell {
     try {
       await this.stopActiveRace();
       const launchOptions = reuseLastLaunch && this.lastLaunch
-        ? this.lastLaunch
+        ? {
+            ...this.lastLaunch,
+            localPlayerName: this.selectedPlayerName,
+          }
         : this.buildSoloLaunchOptions(song!);
       const runtime = await import("./runtime/app");
       const app = await runtime.App.create(this.raceHost, this.config, launchOptions);
@@ -1392,6 +2342,7 @@ export class GameShell {
       debugHud: this.debugHud,
       steeringSensitivity: steeringPresetValue(this.selectedSteeringPreset),
       localPlayerId: "solo",
+      localPlayerName: this.selectedPlayerName,
       carVariant: this.selectedCarVariant,
       onRetry: () => {
         void this.launchSoloRace(true);
@@ -1405,6 +2356,7 @@ export class GameShell {
   private async startMultiplayerRace(): Promise<void> {
     if (this.launchInFlight || !this.roomCode) return;
     this.clearResultsReturnTimer();
+    this.dismissSongModal();
     const song = this.getSelectedSong();
     if (!song) return;
 
@@ -1426,6 +2378,7 @@ export class GameShell {
         debugHud: this.debugHud,
         steeringSensitivity: steeringPresetValue(this.selectedSteeringPreset),
         localPlayerId: this.clientId,
+        localPlayerName: this.selectedPlayerName,
         carVariant: player?.carVariant ?? this.selectedCarVariant,
         roster: this.roomPlayers,
         onSceneReady: () => {
@@ -1467,11 +2420,13 @@ export class GameShell {
 
   private async showLobby(statusMessage?: string): Promise<void> {
     this.clearResultsReturnTimer();
+    this.dismissSongModal();
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
     this.mode = "multiplayer";
     this.multiplayerResultsActive = false;
+    this.renderSongBrowser();
     this.renderMode();
     this.renderSelection();
     this.renderRoomState();
@@ -1480,11 +2435,23 @@ export class GameShell {
 
   private async showMenu(): Promise<void> {
     this.clearResultsReturnTimer();
+    this.dismissSongModal();
     await this.stopActiveRace();
     this.uiLayer.style.display = "";
     this.menuPreview.start();
+    this.browseSongId = this.selectedSongId;
+    this.renderSongBrowser();
     this.renderSelection();
     this.setStatus("Circuit select ready.");
+  }
+
+  private stopSongAudition(): void {
+    this.auditionPlayer.stop();
+  }
+
+  private dismissSongModal(): void {
+    this.songModalOpen = false;
+    this.stopSongAudition();
   }
 
   private async stopActiveRace(): Promise<void> {
@@ -1525,20 +2492,43 @@ export class GameShell {
         return;
       case "room.state":
         const previousPhase = this.roomPhase;
+        const previousSelectedSongId = this.selectedSongId;
+        const previousRoomCode = this.roomCode;
         this.roomCode = message.roomCode;
         this.roomName = message.roomName;
         this.roomPhase = message.phase;
         this.roomHostId = message.hostId;
         this.roomPlayers = message.players;
         this.multiplayerView = message.hostId === this.clientId ? "host" : "join";
+        const localPlayer = message.players.find((player) => player.clientId === this.clientId) ?? null;
+        if (localPlayer) {
+          this.selectedCarVariant = localPlayer.carVariant;
+          if (document.activeElement !== this.playerNameInput && localPlayer.name !== this.selectedPlayerName) {
+            this.selectedPlayerName = localPlayer.name;
+            this.playerNameInput.value = localPlayer.name;
+            savePreference(PLAYER_NAME_STORAGE_KEY, localPlayer.name);
+          }
+        }
         this.selectedSongId = message.setup.songId;
         this.selectedFictionId = clampFictionId(message.setup.fictionId);
         this.seedOverride = message.setup.seed;
         this.selectedPlayerCap = message.setup.playerCap;
-        this.songSelect.value = this.selectedSongId;
+        const keepDetachedBrowse =
+          previousRoomCode === message.roomCode
+          && message.hostId !== this.clientId
+          && this.browseSongId.length > 0
+          && this.browseSongId !== previousSelectedSongId;
+        if (!keepDetachedBrowse || !this.findSongById(this.browseSongId)) {
+          this.browseSongId = this.selectedSongId;
+        }
         this.seedInput.value = String(this.seedOverride);
         this.playerCapSelect.value = String(this.selectedPlayerCap);
+        if (previousRoomCode !== message.roomCode && message.roomCode) {
+          this.dismissRoomModal();
+        }
+        this.renderCarSelection();
         this.renderFictionButtons();
+        this.renderSongBrowser();
         this.renderSelection();
         this.renderRoomState();
         if (message.phase === "staging" || message.phase === "countdown" || message.phase === "running") {
@@ -1660,6 +2650,31 @@ function createStat(key: string, value: string): HTMLDivElement {
   return row;
 }
 
+function createSongTag(value: string): HTMLDivElement {
+  const tag = document.createElement("div");
+  tag.className = "tempo-shell-song-card-tag";
+  tag.textContent = value;
+  return tag;
+}
+
+function createSongPill(value: string, accent = false): HTMLDivElement {
+  const pill = document.createElement("div");
+  pill.className = "tempo-shell-song-card-pill";
+  pill.classList.toggle("is-accent", accent);
+  pill.textContent = value;
+  return pill;
+}
+
+function speakerIconSvg(): string {
+  return `
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M11 5 7.8 8H5a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.8L11 19z"/>
+      <path d="M15 9.5a4 4 0 0 1 0 5"/>
+      <path d="M17.8 7a7.5 7.5 0 0 1 0 10"/>
+    </svg>
+  `.trim();
+}
+
 function parseInteger(value: string | null): number | null {
   if (!value) return null;
   const parsed = parseInt(value, 10);
@@ -1680,6 +2695,20 @@ function savePreference(key: string, value: string): void {
   }
 }
 
+function loadPlayerNamePreference(): string {
+  const fallback = generateDefaultPlayerName();
+  try {
+    const stored = sanitizePlayerName(window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY));
+    const resolved = stored ?? fallback;
+    if (stored !== resolved) {
+      window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, resolved);
+    }
+    return resolved;
+  } catch {
+    return fallback;
+  }
+}
+
 function loadSteeringPresetPreference(): string {
   try {
     return normalizeSteeringPreset(window.localStorage.getItem(STEERING_STORAGE_KEY));
@@ -1692,6 +2721,102 @@ function normalizeSteeringPreset(value: string | null): string {
   return STEERING_PRESETS.some((preset) => preset.id === value) ? (value as string) : DEFAULT_STEERING_PRESET;
 }
 
+function sanitizePlayerName(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9 _'-]/g, "")
+    .slice(0, PLAYER_NAME_MAX_LENGTH)
+    .trim();
+  return normalized.length >= PLAYER_NAME_MIN_LENGTH ? normalized : null;
+}
+
+function generateDefaultPlayerName(): string {
+  return `Pilot ${generatePlayerToken()}`;
+}
+
+function generatePlayerToken(): string {
+  try {
+    const values = new Uint32Array(1);
+    window.crypto.getRandomValues(values);
+    return (values[0] % (36 ** 4)).toString(36).toUpperCase().padStart(4, "0");
+  } catch {
+    return Math.floor(Math.random() * (36 ** 4)).toString(36).toUpperCase().padStart(4, "0");
+  }
+}
+
 function steeringPresetValue(presetId: string): number {
   return STEERING_PRESETS.find((preset) => preset.id === presetId)?.value ?? STEERING_PRESETS[1].value;
+}
+
+function compareSongsForBrowser(a: SongCatalogEntry, b: SongCatalogEntry): number {
+  const genreIndexA = SONG_GENRE_ORDER.indexOf(a.genre as (typeof SONG_GENRE_ORDER)[number]);
+  const genreIndexB = SONG_GENRE_ORDER.indexOf(b.genre as (typeof SONG_GENRE_ORDER)[number]);
+  const normalizedGenreIndexA = genreIndexA === -1 ? SONG_GENRE_ORDER.length : genreIndexA;
+  const normalizedGenreIndexB = genreIndexB === -1 ? SONG_GENRE_ORDER.length : genreIndexB;
+  if (normalizedGenreIndexA !== normalizedGenreIndexB) {
+    return normalizedGenreIndexA - normalizedGenreIndexB;
+  }
+  if (Math.abs(a.bpm - b.bpm) > 0.01) {
+    return b.bpm - a.bpm;
+  }
+  return a.title.localeCompare(b.title);
+}
+
+function getCarVariantMeta(variant: CarVariant) {
+  return CAR_VARIANTS.find((car) => car.id === variant) ?? CAR_VARIANTS[0];
+}
+
+function buildFallbackAlbumArt(song: Pick<SongCatalogEntry, "title" | "artist" | "genre">): string {
+  const accent = accentForGenre(song.genre);
+  const safeTitle = escapeSvgText(song.title.toUpperCase());
+  const safeArtist = escapeSvgText(song.artist.toUpperCase());
+  const safeGenre = escapeSvgText(song.genre.toUpperCase());
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320">
+      <rect width="320" height="320" fill="#071017"/>
+      <circle cx="74" cy="72" r="84" fill="${accent}" fill-opacity="0.16"/>
+      <rect x="30" y="30" width="260" height="260" fill="none" stroke="${accent}" stroke-opacity="0.38" stroke-width="2"/>
+      <rect x="46" y="188" width="228" height="88" fill="#0d151d" fill-opacity="0.92"/>
+      <text x="56" y="228" fill="#f5f7fa" font-family="Arial, sans-serif" font-size="30" font-weight="700">${safeTitle}</text>
+      <text x="56" y="252" fill="#95a1ab" font-family="Arial, sans-serif" font-size="12" letter-spacing="3">${safeArtist}</text>
+      <text x="56" y="272" fill="${accent}" font-family="Arial, sans-serif" font-size="12" letter-spacing="4">${safeGenre}</text>
+    </svg>
+  `.trim();
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function accentForGenre(genre: string): string {
+  switch (genre) {
+    case "House":
+      return "#66e0ff";
+    case "Techno":
+      return "#ff8366";
+    case "Drum & Bass":
+      return "#7dff74";
+    case "Jungle":
+      return "#ffd35a";
+    case "Breaks":
+      return "#ff7bc7";
+    case "Electro":
+      return "#76ffd8";
+    case "Big Beat":
+      return "#ff735c";
+    case "Industrial":
+      return "#d6dde6";
+    case "Trance":
+      return "#c59aff";
+    case "UKG":
+      return "#6ec2ff";
+    default:
+      return "#67c9d7";
+  }
+}
+
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="title desc">
+  <title id="title">DARE Club Mix Album Art</title>
+  <desc id="desc">Abstract house cover art with grid, spotlight circle, and bold magenta title.</desc>
+  <rect width="720" height="720" fill="#061015"/>
+  <g stroke="#173744" stroke-width="2" opacity="0.72">
+    <path d="M0 120H720"/>
+    <path d="M0 216H720"/>
+    <path d="M0 312H720"/>
+    <path d="M0 408H720"/>
+    <path d="M0 504H720"/>
+    <path d="M0 600H720"/>
+    <path d="M120 0V720"/>
+    <path d="M216 0V720"/>
+    <path d="M312 0V720"/>
+    <path d="M408 0V720"/>
+    <path d="M504 0V720"/>
+    <path d="M600 0V720"/>
+  </g>
+  <circle cx="516" cy="212" r="124" fill="#70e4ff" fill-opacity="0.18"/>
+  <rect x="98" y="420" width="524" height="158" fill="#09171f" stroke="#70e4ff" stroke-opacity="0.18" stroke-width="2"/>
+  <text x="126" y="506" fill="#ff5aa9" font-family="Arial, sans-serif" font-size="88" font-weight="700" letter-spacing="6">DARE</text>
+  <text x="128" y="548" fill="#f1f5f8" font-family="Arial, sans-serif" font-size="24" letter-spacing="8">DAVE AUDE CLUB MIX / HOUSE</text>
+</svg>

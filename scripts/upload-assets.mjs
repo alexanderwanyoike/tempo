@@ -14,6 +14,7 @@ const publicDir = join(repoRoot, "public");
 const uploadRoots = [
   join(publicDir, "music"),
   join(publicDir, "songs"),
+  join(publicDir, "cars"),
   join(publicDir, "song-catalog.json"),
 ];
 
@@ -48,6 +49,7 @@ const client = new S3Client({
 const contentTypes = {
   ".mp3": "audio/mpeg",
   ".json": "application/json",
+  ".glb": "model/gltf-binary",
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",
 };
@@ -116,7 +118,7 @@ async function uploadFile(fullPath) {
 async function main() {
   const files = (await Promise.all(uploadRoots.map(walk))).flat();
   if (files.length === 0) {
-    console.log("No files found under public/music or public/songs.");
+    console.log("No files found under configured public asset roots.");
     return;
   }
   console.log(`Uploading ${files.length} file(s) to bucket "${bucket}"${force ? " (force)" : ""}.`);
