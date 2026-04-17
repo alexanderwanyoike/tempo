@@ -32,6 +32,11 @@ type DifficultyProfile = {
   throttleDropoutChance: number;
 };
 
+// The human player's default VehicleController runs topSpeed 90. Keeping bots
+// within a window around that floor keeps races winnable: Easy bots are
+// visibly slower so the player naturally pulls ahead, Medium bots are roughly
+// matched, Hard bots edge slightly above so the player has to race well to
+// win, but not so far above that a takedown means the race is over.
 const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
   easy: {
     topSpeed: 74,
@@ -41,35 +46,35 @@ const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
     lateralGrip: 2.8,
     laneHoldMinMs: 1700,
     laneHoldJitterMs: 900,
-    fireCooldownMs: 950,
-    shieldCooldownMs: 2400,
+    fireCooldownMs: 1200,
+    shieldCooldownMs: 3200,
     brakeThresholdRatio: 1.02,
     throttleDropoutChance: 0.14,
   },
   medium: {
-    topSpeed: 92,
-    thrust: 60,
-    steeringRate: 62,
-    steeringResponse: 16,
-    lateralGrip: 3.3,
-    laneHoldMinMs: 1000,
-    laneHoldJitterMs: 550,
-    fireCooldownMs: 360,
-    shieldCooldownMs: 1100,
-    brakeThresholdRatio: 1.14,
+    topSpeed: 86,
+    thrust: 56,
+    steeringRate: 60,
+    steeringResponse: 15,
+    lateralGrip: 3.2,
+    laneHoldMinMs: 1100,
+    laneHoldJitterMs: 600,
+    fireCooldownMs: 520,
+    shieldCooldownMs: 1600,
+    brakeThresholdRatio: 1.12,
     throttleDropoutChance: 0.04,
   },
   hard: {
-    topSpeed: 108,
-    thrust: 70,
-    steeringRate: 76,
-    steeringResponse: 22,
-    lateralGrip: 4.0,
-    laneHoldMinMs: 650,
-    laneHoldJitterMs: 350,
-    fireCooldownMs: 200,
-    shieldCooldownMs: 420,
-    brakeThresholdRatio: 1.22,
+    topSpeed: 94,
+    thrust: 62,
+    steeringRate: 66,
+    steeringResponse: 18,
+    lateralGrip: 3.5,
+    laneHoldMinMs: 850,
+    laneHoldJitterMs: 450,
+    fireCooldownMs: 320,
+    shieldCooldownMs: 900,
+    brakeThresholdRatio: 1.18,
     throttleDropoutChance: 0,
   },
 };

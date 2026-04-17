@@ -278,6 +278,7 @@ export class App {
   private soloLocalTakedowns = 0;
   private soloLocalFinishedAt: number | null = null;
   private soloLocalRespawnRevision = 0;
+  private soloRaceStartAt = 0;
   private soloLocalRespawnTrackU = START_TRACK_U;
   private soloLocalRespawnLateralOffset = 0;
   private soloEventSequence = 0;
@@ -541,6 +542,7 @@ export class App {
     this.countdownResetTransition = null;
     this.phase = "running";
     this.countdownStarted = true;
+    this.soloRaceStartAt = Date.now();
     this.statusOverlay.style.display = "none";
     this.touchControls?.setVisible(true);
     this.musicSync?.play();
@@ -2578,13 +2580,16 @@ export class App {
       ? this.botSimulator.botRacers.map((racer) => {
           const roster = this.latestRoster.find((r) => r.clientId === racer.clientId);
           const status = racer.finishedAt !== null ? "finished" as const : "dnf" as const;
+          const finishTimeMs = racer.finishedAt !== null && this.soloRaceStartAt > 0
+            ? Math.max(0, racer.finishedAt - this.soloRaceStartAt)
+            : null;
           return {
             clientId: racer.clientId,
             name: roster?.name ?? racer.clientId,
             carVariant: roster?.carVariant ?? "vector",
             placement: racer.placement,
             status,
-            finishTimeMs: racer.finishedAt,
+            finishTimeMs,
             takedowns: racer.takedowns,
             trackU: racer.trackU,
             finishedAt: racer.finishedAt,

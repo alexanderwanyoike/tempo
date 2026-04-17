@@ -3,7 +3,7 @@ import type { ItemKind, InventorySlot, PickupSpawnState } from "./network-types.
 
 export const RACE_SIM = {
   START_TRACK_U: 0.001,
-  PICKUP_WORLD_RADIUS: 1.35,
+  PICKUP_WORLD_RADIUS: 2.0,
   MISSILE_MIN_RANGE_U: 0.0,
   MISSILE_MAX_RANGE_U: 0.75,
   SHIELD_DURATION_MS: 10000,
