@@ -238,7 +238,6 @@ export class App {
   private elapsedRaceTime = 0;
   private latestReactiveBands: ReactiveBands | null = null;
   private phase: AppPhase = "staging";
-  private stagingOpenedAt = 0;
   private pendingStartAt = 0;
   private countdownDurationMs = 2500;
   private countdownResetTransition: CountdownResetTransition | null = null;
@@ -257,7 +256,6 @@ export class App {
   private lastReportedAt = 0;
   private lastFirePressed = false;
   private lastShieldPressed = false;
-  private soloCountdownTimer: number | null = null;
   private latestRoster: RoomPlayerState[] = [];
   private lastStatusMessage = "";
   private boostSurge = 0;
@@ -422,7 +420,6 @@ export class App {
     this.root.append(this.runtimeUiStyles, this.renderer.domElement, this.hud, this.nameLabelLayer, this.statusOverlay);
     if (this.debugHud) this.root.appendChild(this.debugHud);
     this.touchControls?.attach(this.root);
-    this.stagingOpenedAt = Date.now();
     this.setupScene();
     this.bindEvents();
     this.renderRoster();
@@ -439,10 +436,6 @@ export class App {
     if (this.animationFrameId !== null) {
       window.cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
-    }
-    if (this.soloCountdownTimer !== null) {
-      window.clearTimeout(this.soloCountdownTimer);
-      this.soloCountdownTimer = null;
     }
 
     window.removeEventListener("resize", this.handleResize);
@@ -463,9 +456,6 @@ export class App {
     this.latestRoster = [...players];
     this.syncNameLabels();
     const nextPhase = phase === "lobby" ? "staging" : phase;
-    if (nextPhase === "staging" && this.phase !== "staging") {
-      this.stagingOpenedAt = Date.now();
-    }
     if (this.launch.mode === "multiplayer" && nextPhase === "running") {
       this.enterRunningPhase();
     } else {
@@ -480,10 +470,6 @@ export class App {
 
   beginCountdown(startAt: number): void {
     if (this.phase === "finished") return;
-    if (this.soloCountdownTimer !== null) {
-      window.clearTimeout(this.soloCountdownTimer);
-      this.soloCountdownTimer = null;
-    }
     this.countdownDurationMs = Math.max(1, startAt - Date.now());
     this.pendingStartAt = startAt;
     this.phase = "countdown";
@@ -687,7 +673,9 @@ export class App {
       this.audioReady = true;
       this.launch.onAudioReady?.();
       if (this.launch.mode !== "multiplayer") {
-        this.scheduleSoloCountdown();
+        if (this.phase === "staging") {
+          this.beginCountdown(Date.now() + 2500);
+        }
       } else if (this.phase === "staging") {
         this.refreshMultiplayerStatusMessage();
       }
@@ -2692,23 +2680,6 @@ export class App {
       );
       this.countdownResetTransition = null;
     }
-  }
-
-  private scheduleSoloCountdown(): void {
-    if (this.launch.mode === "multiplayer") return;
-    if (this.phase !== "staging") return;
-    if (this.soloCountdownTimer !== null) {
-      window.clearTimeout(this.soloCountdownTimer);
-      this.soloCountdownTimer = null;
-    }
-
-    const minimumCountdownAt = this.stagingOpenedAt + this.config.stagingReadyDelayMs;
-    const remainingHoldMs = Math.max(0, minimumCountdownAt - Date.now());
-    this.soloCountdownTimer = window.setTimeout(() => {
-      this.soloCountdownTimer = null;
-      if (this.destroyed || this.phase !== "staging") return;
-      this.beginCountdown(Date.now() + 2500);
-    }, remainingHoldMs);
   }
 
   private readonly render = (time: number): void => {
