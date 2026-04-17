@@ -49,6 +49,7 @@ export type ReactiveSnapshot = {
   bandLow: number;
   bandMid: number;
   bandHigh: number;
+  kick: number;
 };
 
 type GeneratedPlacement = {
@@ -304,6 +305,7 @@ export class EnvironmentRuntime {
     bandLow: 0,
     bandMid: 0,
     bandHigh: 0,
+    kick: 0,
   };
   private readonly phraseColors: Color[];
   private readonly dummy = new Object3D();
@@ -415,6 +417,7 @@ export class EnvironmentRuntime {
     this.reactiveSnapshot.bandLow = bands.low;
     this.reactiveSnapshot.bandMid = bands.mid;
     this.reactiveSnapshot.bandHigh = bands.high;
+    this.reactiveSnapshot.kick = bands.kick;
 
     this.skyDome.position.copy(playerPos);
     this.updateSceneColors(section.type, musicTime, energyPulse, amplitude, stagingBlend);
@@ -1226,10 +1229,13 @@ export class EnvironmentRuntime {
     const low = 0.2 + energy * 0.55 * (0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 2));
     const mid = 0.16 + energy * 0.48 * (0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 4 + 0.6));
     const high = 0.12 + energy * 0.42 * (0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 8 + 1.2));
+    const beatCycle = (beatPhase % 1);
+    const kick = Math.max(0, 1 - beatCycle * 7) * energy;
     return {
       low: MathUtils.clamp(low, 0, 1),
       mid: MathUtils.clamp(mid, 0, 1),
       high: MathUtils.clamp(high, 0, 1),
+      kick: MathUtils.clamp(kick, 0, 1),
     };
   }
 

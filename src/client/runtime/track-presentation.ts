@@ -29,6 +29,7 @@ type RhythmicUniforms = {
   uBandLow: { value: number };
   uBandMid: { value: number };
   uBandHigh: { value: number };
+  uKick: { value: number };
   uSectionColor: { value: Vector3 };
   uPhraseColorA: { value: Vector3 };
   uPhraseColorB: { value: Vector3 };
@@ -45,6 +46,7 @@ export type RhythmicState = {
   bandLow: number;
   bandMid: number;
   bandHigh: number;
+  kick: number;
   sectionColor: Color;
   phraseColorA: Color;
   phraseColorB: Color;
@@ -107,6 +109,7 @@ uniform float uBeatPhase;
 uniform float uBandLow;
 uniform float uBandMid;
 uniform float uBandHigh;
+uniform float uKick;
 uniform vec3 uSectionColor;
 uniform vec3 uPhraseColorA;
 uniform vec3 uPhraseColorB;
@@ -120,27 +123,25 @@ uniform float uChannelGain;
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
-  // Pre-amplify bands so mid-range FFT readings register as hits.
-  float bassEnergy = pow(clamp(uBandLow * 1.7, 0.0, 1.0), 0.45);
-  float midEnergy = pow(clamp(uBandMid * 1.4, 0.0, 1.0), 0.6);
-  float rhythmEnergy = clamp(bassEnergy * 0.9 + midEnergy * 0.28, 0.0, 1.0);
-  float kickStrength = smoothstep(0.12, 0.82, rhythmEnergy);
+  // Spectral-flux kick is the main punch. Band energies add sustain colour.
+  float kickStrength = clamp(uKick, 0.0, 1.0);
+  float bassAmbient = pow(clamp(uBandLow, 0.0, 1.0), 0.7) * 0.45;
 
   vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
   vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
 
-  // Dim baseline, punches up on kicks. Small overshoot allowed for bloom bite.
-  float brightnessFactor = 0.32 + kickStrength * 0.85;
+  // Dim baseline, punches hard on kick. Overshoot slightly above base for bloom bite.
+  float brightnessFactor = 0.28 + kickStrength * 1.05 + bassAmbient * 0.18;
   vec3 pulsed = totalEmissiveRadiance * brightnessFactor;
 
-  // Tint shift gated on kick.
-  pulsed = mix(pulsed, pulsed * tempoTint * 1.25, kickStrength * 0.55);
+  // Tint shift gated on kick so silent moments stay neutral.
+  pulsed = mix(pulsed, pulsed * tempoTint * 1.3, kickStrength * 0.55);
 
-  // Narrow ribbon, brighter on kick.
+  // Ribbon highlight: travels always, brightens hard on kick.
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
   float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
-  vec3 ribbonAdd = tempoTint * ribbon * (0.1 + kickStrength * 0.5);
+  vec3 ribbonAdd = tempoTint * ribbon * (0.08 + kickStrength * 0.65);
 
   totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
@@ -181,6 +182,7 @@ export class TrackPresentationController {
       uniforms.uBandLow.value = state.bandLow;
       uniforms.uBandMid.value = state.bandMid;
       uniforms.uBandHigh.value = state.bandHigh;
+      uniforms.uKick.value = state.kick;
       colorToVec3(state.sectionColor, uniforms.uSectionColor.value);
       colorToVec3(state.phraseColorA, uniforms.uPhraseColorA.value);
       colorToVec3(state.phraseColorB, uniforms.uPhraseColorB.value);
@@ -202,6 +204,7 @@ export class TrackPresentationController {
         uBandLow: { value: 0 },
         uBandMid: { value: 0 },
         uBandHigh: { value: 0 },
+        uKick: { value: 0 },
         uSectionColor: { value: this.tmpVec.clone().set(0.12, 0.45, 1) },
         uPhraseColorA: { value: this.tmpVec.clone().set(0.4, 0.85, 1) },
         uPhraseColorB: { value: this.tmpVec.clone().set(0.95, 0.25, 0.55) },

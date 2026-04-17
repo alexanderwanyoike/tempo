@@ -2744,6 +2744,7 @@ export class App {
       bandLow: reactive.bandLow,
       bandMid: reactive.bandMid,
       bandHigh: reactive.bandHigh,
+      kick: reactive.kick,
       sectionColor: reactive.sectionTint,
       phraseColorA: reactive.phraseColorA,
       phraseColorB: reactive.phraseColorB,
