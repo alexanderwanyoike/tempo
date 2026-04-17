@@ -120,25 +120,27 @@ uniform float uChannelGain;
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
-  float bassEnergy = pow(clamp(uBandLow, 0.0, 1.0), 0.55);
-  float midEnergy = pow(clamp(uBandMid, 0.0, 1.0), 0.7);
-  float rhythmEnergy = clamp(bassEnergy * 0.9 + midEnergy * 0.3, 0.0, 1.0);
-
-  float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
-  float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
-  float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
+  float bassEnergy = pow(clamp(uBandLow, 0.0, 1.0), 0.5);
+  float midEnergy = pow(clamp(uBandMid, 0.0, 1.0), 0.65);
+  float rhythmEnergy = clamp(bassEnergy * 0.85 + midEnergy * 0.3, 0.0, 1.0);
 
   vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
   vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
 
-  vec3 dimEmissive = totalEmissiveRadiance * 0.4;
-  vec3 hotEmissive = totalEmissiveRadiance * 1.25 + tempoTint * 0.55;
-  vec3 rhythmicEmissive = mix(dimEmissive, hotEmissive, rhythmEnergy);
+  // Road breathes: dim baseline, returns to near-base on kick. Never above base.
+  float brightnessFactor = 0.35 + rhythmEnergy * 0.65;
+  vec3 pulsed = totalEmissiveRadiance * brightnessFactor;
 
-  float ribbonStrength = 0.18 + rhythmEnergy * 0.8;
-  vec3 ribbonAdd = tempoTint * ribbon * ribbonStrength;
+  // Tint shift only when energy is active (silent moments stay neutral).
+  pulsed = mix(pulsed, pulsed * tempoTint * 1.2, rhythmEnergy * 0.45);
 
-  totalEmissiveRadiance = mix(totalEmissiveRadiance, rhythmicEmissive + ribbonAdd, tempoStrength);
+  // Narrow ribbon highlight, visible but modest.
+  float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
+  float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
+  float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
+  vec3 ribbonAdd = tempoTint * ribbon * (0.12 + rhythmEnergy * 0.35);
+
+  totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
 `;
 
@@ -203,8 +205,8 @@ export class TrackPresentationController {
         uPhraseColorB: { value: this.tmpVec.clone().set(0.95, 0.25, 0.55) },
         uPhraseBlend: { value: 0 },
         uRhythmicStrength: { value: 0 },
-        uRibbonSpeed: { value: 0.042 },
-        uRibbonWidth: { value: 0.11 },
+        uRibbonSpeed: { value: 0.085 },
+        uRibbonWidth: { value: 0.028 },
         uChannelGain: { value: channelGain },
       };
       this.rhythmicUniforms.push(uniforms);
