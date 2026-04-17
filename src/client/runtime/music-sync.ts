@@ -3,11 +3,14 @@ export type ReactiveBands = {
   mid: number;
   high: number;
   kick: number;
+  energyLevel: number;
 };
 
 const KICK_FLUX_START_BIN = 1;
 const KICK_FLUX_END_BIN = 5;
 const KICK_FLUX_GAIN = 7.5;
+const SLOW_ENERGY_EMA = 0.035;
+const SLOW_ENERGY_GAIN = 1.8;
 
 // Shared AudioContext unlocked during a user gesture. iOS Safari requires
 // either creating a context OR calling resume() inside the gesture task;
@@ -68,7 +71,7 @@ export class MusicSync {
   private buffer: AudioBuffer | null = null;
   private analyser: AnalyserNode | null = null;
   private analyserData: Uint8Array<ArrayBuffer> | null = null;
-  private readonly smoothedBands: ReactiveBands = { low: 0, mid: 0, high: 0, kick: 0 };
+  private readonly smoothedBands: ReactiveBands = { low: 0, mid: 0, high: 0, kick: 0, energyLevel: 0 };
   private readonly prevKickBins = new Uint8Array(KICK_FLUX_END_BIN - KICK_FLUX_START_BIN);
   private startCtxTime = 0;
   private started = false;
@@ -107,6 +110,9 @@ export class MusicSync {
     this.smoothedBands.mid = this.smoothBand(this.smoothedBands.mid, mid);
     this.smoothedBands.high = this.smoothBand(this.smoothedBands.high, high);
     this.smoothedBands.kick = this.smoothKick(this.smoothedBands.kick, kick);
+
+    const rawEnergy = Math.min(1, (low + mid + high) / 3 * SLOW_ENERGY_GAIN);
+    this.smoothedBands.energyLevel = this.smoothedBands.energyLevel * (1 - SLOW_ENERGY_EMA) + rawEnergy * SLOW_ENERGY_EMA;
 
     return { ...this.smoothedBands };
   }
@@ -148,6 +154,7 @@ export class MusicSync {
     this.smoothedBands.mid = 0;
     this.smoothedBands.high = 0;
     this.smoothedBands.kick = 0;
+    this.smoothedBands.energyLevel = 0;
     this.prevKickBins.fill(0);
     this.buffer = null;
     this.rawData = null;

@@ -2740,15 +2740,8 @@ export class App {
     const rhythmicStrength = this.phase === "running" ? Math.max(0, 1 - loadingBlend) : 0;
     this.track.setRhythmicPulse({
       musicTime,
-      beatPhase: reactive.beatPhase,
-      bandLow: reactive.bandLow,
-      bandMid: reactive.bandMid,
-      bandHigh: reactive.bandHigh,
       kick: reactive.kick,
-      sectionColor: reactive.sectionTint,
-      phraseColorA: reactive.phraseColorA,
-      phraseColorB: reactive.phraseColorB,
-      phraseBlend: reactive.phraseBlend,
+      energyLevel: reactive.energyLevel,
       strength: rhythmicStrength,
     });
     this.updateHud();

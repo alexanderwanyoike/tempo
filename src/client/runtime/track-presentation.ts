@@ -1,4 +1,4 @@
-import { Color, Mesh, MeshStandardMaterial, Object3D, Vector3 } from "three";
+import { Color, Mesh, MeshStandardMaterial, Object3D } from "three";
 
 type MaterialSnapshot = {
   material: MeshStandardMaterial;
@@ -25,15 +25,8 @@ type MaterialTarget = {
 
 type RhythmicUniforms = {
   uMusicTime: { value: number };
-  uBeatPhase: { value: number };
-  uBandLow: { value: number };
-  uBandMid: { value: number };
-  uBandHigh: { value: number };
   uKick: { value: number };
-  uSectionColor: { value: Vector3 };
-  uPhraseColorA: { value: Vector3 };
-  uPhraseColorB: { value: Vector3 };
-  uPhraseBlend: { value: number };
+  uEnergyLevel: { value: number };
   uRhythmicStrength: { value: number };
   uRibbonSpeed: { value: number };
   uRibbonWidth: { value: number };
@@ -42,15 +35,8 @@ type RhythmicUniforms = {
 
 export type RhythmicState = {
   musicTime: number;
-  beatPhase: number;
-  bandLow: number;
-  bandMid: number;
-  bandHigh: number;
   kick: number;
-  sectionColor: Color;
-  phraseColorA: Color;
-  phraseColorB: Color;
-  phraseBlend: number;
+  energyLevel: number;
   strength: number;
 };
 
@@ -105,53 +91,56 @@ vTrackU = aTrackU;
 const RHYTHMIC_FRAGMENT_DECLARATIONS = `
 varying float vTrackU;
 uniform float uMusicTime;
-uniform float uBeatPhase;
-uniform float uBandLow;
-uniform float uBandMid;
-uniform float uBandHigh;
 uniform float uKick;
-uniform vec3 uSectionColor;
-uniform vec3 uPhraseColorA;
-uniform vec3 uPhraseColorB;
-uniform float uPhraseBlend;
+uniform float uEnergyLevel;
 uniform float uRhythmicStrength;
 uniform float uRibbonSpeed;
 uniform float uRibbonWidth;
 uniform float uChannelGain;
 `;
 
+// Colour gradient that only depends on audio energy level.
+// No section/phrase/song-structure input. Cool at low energy, hot at high energy.
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
   float kickStrength = clamp(uKick, 0.0, 1.0);
-  float bassAmbient = pow(clamp(uBandLow, 0.0, 1.0), 0.55);
-  float midAmbient = pow(clamp(uBandMid, 0.0, 1.0), 0.6);
-  float highAmbient = pow(clamp(uBandHigh, 0.0, 1.0), 0.55);
-  float sustainedEnergy = clamp(bassAmbient * 0.6 + midAmbient * 0.45 + highAmbient * 0.25, 0.0, 1.0);
+  float energy = clamp(uEnergyLevel, 0.0, 1.0);
 
-  vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
-  vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
+  // Energy -> colour ramp
+  //   0.00 calm deep blue
+  //   0.35 cyan / teal
+  //   0.65 magenta / pink
+  //   1.00 hot orange / red
+  vec3 calmColor = vec3(0.16, 0.45, 1.0);
+  vec3 cruiseColor = vec3(0.35, 0.95, 0.75);
+  vec3 chargeColor = vec3(1.0, 0.36, 0.58);
+  vec3 peakColor = vec3(1.0, 0.48, 0.18);
 
-  // Brightness: dim floor, lifted by energy, punches on kick.
-  float brightnessFactor = 0.42 + sustainedEnergy * 0.35 + kickStrength * 0.55;
+  vec3 energyColor;
+  if (energy < 0.35) {
+    energyColor = mix(calmColor, cruiseColor, energy / 0.35);
+  } else if (energy < 0.7) {
+    energyColor = mix(cruiseColor, chargeColor, (energy - 0.35) / 0.35);
+  } else {
+    energyColor = mix(chargeColor, peakColor, (energy - 0.7) / 0.3);
+  }
+
+  // Brightness is kick-only. Energy drives colour, not brightness.
+  float brightnessFactor = 0.45 + kickStrength * 0.5;
   vec3 dimmed = totalEmissiveRadiance * brightnessFactor;
 
-  // Vivid tint: pushed well above baseline so section colour dominates during music,
-  // even when baked vertex colour is already in the same family.
-  vec3 vividTint = tempoTint * (1.4 + sustainedEnergy * 1.1 + kickStrength * 0.8);
+  // Colour output at matched brightness, so swap is hue not exposure.
+  vec3 colored = energyColor * (0.42 + kickStrength * 0.4);
 
-  // Near-full replacement once energy is up.
-  float tintMix = clamp(sustainedEnergy * 0.95 + kickStrength * 0.15, 0.0, 0.97);
-  vec3 pulsed = mix(dimmed, vividTint, tintMix);
+  // Near-full replacement so section-agnostic colour is the dominant read.
+  vec3 pulsed = mix(dimmed, colored, 0.78);
 
-  // Clamp to keep bloom from hellfiring at coordinated peaks.
-  pulsed = min(pulsed, vec3(2.4));
-
-  // Ribbon: narrow travelling glow, brighter on kicks and active sections.
+  // Narrow ribbon in the same energy colour.
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
   float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
-  vec3 ribbonAdd = tempoTint * ribbon * (0.1 + sustainedEnergy * 0.3 + kickStrength * 0.5);
+  vec3 ribbonAdd = energyColor * ribbon * (0.1 + kickStrength * 0.4);
 
   totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
@@ -162,7 +151,6 @@ export class TrackPresentationController {
   private readonly wallMaterials: MaterialSnapshot[];
   private readonly centerlineMaterials: MaterialSnapshot[];
   private readonly rhythmicUniforms: RhythmicUniforms[] = [];
-  private readonly tmpVec = new Vector3();
 
   constructor(roadRoot: Object3D, wallRoots: readonly Object3D[], centerLineRoot: Object3D) {
     this.roadMaterials = collectStandardMaterials(roadRoot);
@@ -188,15 +176,8 @@ export class TrackPresentationController {
     const strength = clamp01(state.strength);
     for (const uniforms of this.rhythmicUniforms) {
       uniforms.uMusicTime.value = state.musicTime;
-      uniforms.uBeatPhase.value = state.beatPhase;
-      uniforms.uBandLow.value = state.bandLow;
-      uniforms.uBandMid.value = state.bandMid;
-      uniforms.uBandHigh.value = state.bandHigh;
       uniforms.uKick.value = state.kick;
-      colorToVec3(state.sectionColor, uniforms.uSectionColor.value);
-      colorToVec3(state.phraseColorA, uniforms.uPhraseColorA.value);
-      colorToVec3(state.phraseColorB, uniforms.uPhraseColorB.value);
-      uniforms.uPhraseBlend.value = state.phraseBlend;
+      uniforms.uEnergyLevel.value = state.energyLevel;
       uniforms.uRhythmicStrength.value = strength;
     }
   }
@@ -210,15 +191,8 @@ export class TrackPresentationController {
       const material = snapshot.material;
       const uniforms: RhythmicUniforms = {
         uMusicTime: { value: 0 },
-        uBeatPhase: { value: 0 },
-        uBandLow: { value: 0 },
-        uBandMid: { value: 0 },
-        uBandHigh: { value: 0 },
         uKick: { value: 0 },
-        uSectionColor: { value: this.tmpVec.clone().set(0.12, 0.45, 1) },
-        uPhraseColorA: { value: this.tmpVec.clone().set(0.4, 0.85, 1) },
-        uPhraseColorB: { value: this.tmpVec.clone().set(0.95, 0.25, 0.55) },
-        uPhraseBlend: { value: 0 },
+        uEnergyLevel: { value: 0 },
         uRhythmicStrength: { value: 0 },
         uRibbonSpeed: { value: 0.085 },
         uRibbonWidth: { value: 0.028 },
@@ -303,10 +277,6 @@ function injectBefore(source: string, anchor: string, insertion: string): string
 
 function injectAfter(source: string, anchor: string, insertion: string): string {
   return source.replace(anchor, `${anchor}\n${insertion}`);
-}
-
-function colorToVec3(color: Color, out: Vector3): void {
-  out.set(color.r, color.g, color.b);
 }
 
 function clamp01(value: number): number {
