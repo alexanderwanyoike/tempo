@@ -12,7 +12,7 @@ import type { SongDefinition, SongSection, SongSectionType } from "../../../shar
 import type { ChunkType } from "./chunks.js";
 import { chunkFns, type ChunkParams } from "./chunks.js";
 import { mulberry32 } from "./prng.js";
-import { TrackPresentationController } from "./track-presentation.js";
+import { TrackPresentationController, type RhythmicState } from "./track-presentation.js";
 import { pickChunkForSection, scaleChunkParams } from "./section-rules.js";
 import type { Track, TrackFeature, TrackFrame, TrackObject, TrackQuery } from "./track-builder.js";
 import {
@@ -326,6 +326,10 @@ export class TrackGenerator implements Track {
 
   setLoadingBlend(blend: number, pulse = 0): void {
     this.presentation.setLoadingBlend(blend, pulse);
+  }
+
+  setRhythmicPulse(state: RhythmicState): void {
+    this.presentation.setRhythmicPulse(state);
   }
 
   private getSectionAt(u: number): SongSection | null {

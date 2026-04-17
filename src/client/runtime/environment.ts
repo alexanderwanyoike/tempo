@@ -40,6 +40,17 @@ type SectionInfo = {
   endTime: number;
 };
 
+export type ReactiveSnapshot = {
+  sectionTint: Color;
+  phraseColorA: Color;
+  phraseColorB: Color;
+  phraseBlend: number;
+  beatPhase: number;
+  bandLow: number;
+  bandMid: number;
+  bandHigh: number;
+};
+
 type GeneratedPlacement = {
   position: Vector3;
   quaternion: Quaternion;
@@ -281,6 +292,19 @@ export class EnvironmentRuntime {
   private readonly tmpColorC = new Color();
   private readonly tmpColorD = new Color();
   private readonly tmpColorE = new Color();
+  private readonly snapshotSectionTint = new Color();
+  private readonly snapshotPhraseA = new Color();
+  private readonly snapshotPhraseB = new Color();
+  private readonly reactiveSnapshot: ReactiveSnapshot = {
+    sectionTint: this.snapshotSectionTint,
+    phraseColorA: this.snapshotPhraseA,
+    phraseColorB: this.snapshotPhraseB,
+    phraseBlend: 0,
+    beatPhase: 0,
+    bandLow: 0,
+    bandMid: 0,
+    bandHigh: 0,
+  };
   private readonly phraseColors: Color[];
   private readonly dummy = new Object3D();
   private readonly defaultDuration: number;
@@ -370,7 +394,7 @@ export class EnvironmentRuntime {
     trackU: number,
     sourceBands: ReactiveBands | null,
     loadingBlend = 0,
-  ): void {
+  ): ReactiveSnapshot {
     const section = this.getSectionAtTime(musicTime);
     const bands = sourceBands ?? this.getFallbackBands(elapsedTime, section.energy);
     const amplitude = this.getAmplitudeProfile(bands, section.energy);
@@ -380,6 +404,17 @@ export class EnvironmentRuntime {
     const energyPulse = MathUtils.clamp(section.energy * 0.45 + beatPulse * 0.25 + bands.low * 0.3, 0, 1);
     const stagingBlend = MathUtils.clamp(loadingBlend, 0, 1);
     const themedAmplitudeScale = MathUtils.lerp(1, 0.42, stagingBlend);
+    const phraseA = this.getPhraseColor(musicTime, 0);
+    const phraseB = this.getPhraseColor(musicTime, 1);
+    const phraseBlend = this.getPhraseBlend(musicTime);
+    this.snapshotSectionTint.set(SECTION_TINTS[section.type]);
+    this.snapshotPhraseA.copy(phraseA);
+    this.snapshotPhraseB.copy(phraseB);
+    this.reactiveSnapshot.phraseBlend = phraseBlend;
+    this.reactiveSnapshot.beatPhase = beatPhase;
+    this.reactiveSnapshot.bandLow = bands.low;
+    this.reactiveSnapshot.bandMid = bands.mid;
+    this.reactiveSnapshot.bandHigh = bands.high;
 
     this.skyDome.position.copy(playerPos);
     this.updateSceneColors(section.type, musicTime, energyPulse, amplitude, stagingBlend);
@@ -424,6 +459,7 @@ export class EnvironmentRuntime {
       { bob: false, spin: false, scale: false, axisBiased: true },
     );
     this.updateLoadingFiction(elapsedTime, playerPos, stagingBlend);
+    return this.reactiveSnapshot;
   }
 
   private createLitMaterial(color: Color): MeshStandardMaterial {

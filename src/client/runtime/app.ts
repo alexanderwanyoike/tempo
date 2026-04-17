@@ -2730,13 +2730,26 @@ export class App {
     this.updatePickupVisuals(time / 1000);
     this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);
-    this.environment.update(
+    const reactive = this.environment.update(
       this.sceneElapsedTime,
       musicTime,
       this.vehicleController.state.trackU,
       this.latestReactiveBands,
       loadingBlend,
     );
+    const rhythmicStrength = this.phase === "running" ? Math.max(0, 1 - loadingBlend) : 0;
+    this.track.setRhythmicPulse({
+      musicTime,
+      beatPhase: reactive.beatPhase,
+      bandLow: reactive.bandLow,
+      bandMid: reactive.bandMid,
+      bandHigh: reactive.bandHigh,
+      sectionColor: reactive.sectionTint,
+      phraseColorA: reactive.phraseColorA,
+      phraseColorB: reactive.phraseColorB,
+      phraseBlend: reactive.phraseBlend,
+      strength: rhythmicStrength,
+    });
     this.updateHud();
     this.updateNameLabels();
     this.updateDebugHud();

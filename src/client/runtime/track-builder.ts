@@ -12,7 +12,7 @@ import {
   Vector3,
 } from "three";
 import type { SongSectionType } from "../../../shared/song-schema.js";
-import { TrackPresentationController } from "./track-presentation.js";
+import { TrackPresentationController, type RhythmicState } from "./track-presentation.js";
 
 const WORLD_UP = new Vector3(0, 1, 0);
 const TRACK_WIDTH = 30;
@@ -70,6 +70,7 @@ export interface Track {
   getTrackObjects(): readonly TrackObject[];
   getTrackFeatures(): readonly TrackFeature[];
   setLoadingBlend(blend: number, pulse?: number): void;
+  setRhythmicPulse(state: RhythmicState): void;
 }
 
 /**
@@ -347,6 +348,10 @@ export class TestTrack implements Track {
     this.presentation.setLoadingBlend(blend, pulse);
   }
 
+  setRhythmicPulse(state: RhythmicState): void {
+    this.presentation.setRhythmicPulse(state);
+  }
+
   private xzDistSq(a: Vector3, b: Vector3): number {
     const dx = a.x - b.x;
     const dz = a.z - b.z;
@@ -359,13 +364,16 @@ export class TestTrack implements Track {
     const count = this.samples.length;
     const positions = new Float32Array(count * 2 * 3);
     const normals = new Float32Array(count * 2 * 3);
+    const trackUs = new Float32Array(count * 2);
     const indices: number[] = [];
+    const totalDenom = Math.max(1, count - 1);
 
     for (let i = 0; i < count; i++) {
       const c = this.samples[i];
       const r = this.rights[i];
       const n = this.ups[i];
       const vi = i * 2;
+      const trackU = i / totalDenom;
 
       // FULL 3D: offset by right vector including Y component
       positions[vi * 3]     = c.x - r.x * HALF_WIDTH;
@@ -379,6 +387,9 @@ export class TestTrack implements Track {
       normals[vi * 3] = n.x;     normals[vi * 3 + 1] = n.y;     normals[vi * 3 + 2] = n.z;
       normals[(vi+1)*3] = n.x;   normals[(vi+1)*3+1] = n.y;     normals[(vi+1)*3+2] = n.z;
 
+      trackUs[vi] = trackU;
+      trackUs[vi + 1] = trackU;
+
       if (i < count - 1) {
         indices.push(vi, vi+1, vi+2);
         indices.push(vi+1, vi+3, vi+2);
@@ -388,6 +399,7 @@ export class TestTrack implements Track {
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(positions, 3));
     geo.setAttribute("normal", new BufferAttribute(normals, 3));
+    geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
     geo.setIndex(indices);
 
     return new Mesh(geo, new MeshStandardMaterial({
@@ -401,15 +413,18 @@ export class TestTrack implements Track {
     const positions = new Float32Array(count * 2 * 3);
     const normals = new Float32Array(count * 2 * 3);
     const colors = new Float32Array(count * 2 * 3);
+    const trackUs = new Float32Array(count * 2);
     const indices: number[] = [];
     const colBase = new Color("#4e233a");
     const colStripe = new Color("#ff2a6d");
+    const totalDenom = Math.max(1, count - 1);
 
     for (let i = 0; i < count; i++) {
       const c = this.samples[i];
       const r = this.rights[i];
       const u = this.ups[i];
       const vi = i * 2;
+      const trackU = i / totalDenom;
 
       // Edge position: full 3D
       const ex = c.x + r.x * HALF_WIDTH * side;
@@ -428,6 +443,9 @@ export class TestTrack implements Track {
       colors[vi*3]=col.r; colors[vi*3+1]=col.g; colors[vi*3+2]=col.b;
       colors[(vi+1)*3]=col.r; colors[(vi+1)*3+1]=col.g; colors[(vi+1)*3+2]=col.b;
 
+      trackUs[vi] = trackU;
+      trackUs[vi + 1] = trackU;
+
       if (i < count - 1) {
         if (side === 1) { indices.push(vi,vi+1,vi+2); indices.push(vi+1,vi+3,vi+2); }
         else { indices.push(vi,vi+2,vi+1); indices.push(vi+1,vi+2,vi+3); }
@@ -438,6 +456,7 @@ export class TestTrack implements Track {
     geo.setAttribute("position", new BufferAttribute(positions, 3));
     geo.setAttribute("normal", new BufferAttribute(normals, 3));
     geo.setAttribute("color", new BufferAttribute(colors, 3));
+    geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
     geo.setIndex(indices);
 
     return new Mesh(geo, new MeshStandardMaterial({
@@ -450,8 +469,10 @@ export class TestTrack implements Track {
     const count = this.samples.length;
     const positions: number[] = [];
     const normals: number[] = [];
+    const trackUs: number[] = [];
     const indices: number[] = [];
     let vertIdx = 0;
+    const totalDenom = Math.max(1, count - 1);
 
     for (let i = 0; i < count - 1; i++) {
       if (Math.floor(i / 3) % 2 === 1) continue;
@@ -463,6 +484,8 @@ export class TestTrack implements Track {
       const rN = this.rights[i + 1];
       const hw = CENTER_DASH_WIDTH / 2;
       const lift = 0.03;
+      const trackU = i / totalDenom;
+      const trackUN = (i + 1) / totalDenom;
 
       // Full 3D offsets
       positions.push(
@@ -472,6 +495,7 @@ export class TestTrack implements Track {
         cN.x + rN.x*hw + u.x*lift, cN.y + rN.y*hw + u.y*lift, cN.z + rN.z*hw + u.z*lift,
       );
       for (let j = 0; j < 4; j++) normals.push(u.x, u.y, u.z);
+      trackUs.push(trackU, trackU, trackUN, trackUN);
       indices.push(vertIdx, vertIdx+1, vertIdx+2);
       indices.push(vertIdx+1, vertIdx+3, vertIdx+2);
       vertIdx += 4;
@@ -480,6 +504,7 @@ export class TestTrack implements Track {
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
     geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
+    geo.setAttribute("aTrackU", new BufferAttribute(new Float32Array(trackUs), 1));
     geo.setIndex(indices);
 
     return new Mesh(geo, new MeshStandardMaterial({
