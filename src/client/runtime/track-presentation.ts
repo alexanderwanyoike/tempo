@@ -120,8 +120,9 @@ uniform float uChannelGain;
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
-  float beatCurve = 0.5 + 0.5 * cos(uBeatPhase * 6.2831853);
-  float beatPunch = pow(beatCurve, 4.0);
+  float bassEnergy = pow(clamp(uBandLow, 0.0, 1.0), 0.55);
+  float midEnergy = pow(clamp(uBandMid, 0.0, 1.0), 0.7);
+  float rhythmEnergy = clamp(bassEnergy * 0.9 + midEnergy * 0.3, 0.0, 1.0);
 
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
@@ -130,13 +131,14 @@ if (tempoStrength > 0.0) {
   vec3 phraseColor = mix(uPhraseColorA, uPhraseColorB, clamp(uPhraseBlend, 0.0, 1.0));
   vec3 tempoTint = mix(uSectionColor, phraseColor, 0.5);
 
-  float pulseMag = uBandLow * 0.28 + beatPunch * 0.18;
-  vec3 pulseEmissive = totalEmissiveRadiance * (1.0 + pulseMag);
-  pulseEmissive = mix(pulseEmissive, pulseEmissive * tempoTint * 1.35, pulseMag * 0.7);
+  vec3 dimEmissive = totalEmissiveRadiance * 0.4;
+  vec3 hotEmissive = totalEmissiveRadiance * 1.25 + tempoTint * 0.55;
+  vec3 rhythmicEmissive = mix(dimEmissive, hotEmissive, rhythmEnergy);
 
-  vec3 ribbonAdd = tempoTint * ribbon * (0.35 + uBandLow * 0.4 + beatPunch * 0.3);
+  float ribbonStrength = 0.18 + rhythmEnergy * 0.8;
+  vec3 ribbonAdd = tempoTint * ribbon * ribbonStrength;
 
-  totalEmissiveRadiance = mix(totalEmissiveRadiance, pulseEmissive + ribbonAdd, tempoStrength);
+  totalEmissiveRadiance = mix(totalEmissiveRadiance, rhythmicEmissive + ribbonAdd, tempoStrength);
 }
 `;
 
