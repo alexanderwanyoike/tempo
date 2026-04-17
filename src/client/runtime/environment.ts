@@ -51,6 +51,7 @@ export type ReactiveSnapshot = {
   bandHigh: number;
   kick: number;
   energyLevel: number;
+  sectionEnergy: number;
 };
 
 type GeneratedPlacement = {
@@ -308,7 +309,9 @@ export class EnvironmentRuntime {
     bandHigh: 0,
     kick: 0,
     energyLevel: 0,
+    sectionEnergy: 0,
   };
+  private smoothedSectionEnergy = 0;
   private readonly phraseColors: Color[];
   private readonly dummy = new Object3D();
   private readonly defaultDuration: number;
@@ -421,6 +424,10 @@ export class EnvironmentRuntime {
     this.reactiveSnapshot.bandHigh = bands.high;
     this.reactiveSnapshot.kick = bands.kick;
     this.reactiveSnapshot.energyLevel = bands.energyLevel;
+    // Smooth section energy at boundaries (~0.5s transition) so the road hue
+    // fades rather than jumps between sections.
+    this.smoothedSectionEnergy = this.smoothedSectionEnergy * 0.97 + section.energy * 0.03;
+    this.reactiveSnapshot.sectionEnergy = this.smoothedSectionEnergy;
 
     this.skyDome.position.copy(playerPos);
     this.updateSceneColors(section.type, musicTime, energyPulse, amplitude, stagingBlend);

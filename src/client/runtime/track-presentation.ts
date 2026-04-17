@@ -26,9 +26,7 @@ type MaterialTarget = {
 type RhythmicUniforms = {
   uMusicTime: { value: number };
   uKick: { value: number };
-  uBandLow: { value: number };
-  uBandMid: { value: number };
-  uBandHigh: { value: number };
+  uEnergyLevel: { value: number };
   uRhythmicStrength: { value: number };
   uRibbonSpeed: { value: number };
   uRibbonWidth: { value: number };
@@ -38,9 +36,7 @@ type RhythmicUniforms = {
 export type RhythmicState = {
   musicTime: number;
   kick: number;
-  bandLow: number;
-  bandMid: number;
-  bandHigh: number;
+  energyLevel: number;
   strength: number;
 };
 
@@ -96,57 +92,50 @@ const RHYTHMIC_FRAGMENT_DECLARATIONS = `
 varying float vTrackU;
 uniform float uMusicTime;
 uniform float uKick;
-uniform float uBandLow;
-uniform float uBandMid;
-uniform float uBandHigh;
+uniform float uEnergyLevel;
 uniform float uRhythmicStrength;
 uniform float uRibbonSpeed;
 uniform float uRibbonWidth;
 uniform float uChannelGain;
 `;
 
-// Colour driven by frequency balance. Different parts of a song emphasise
-// different bands (intro hats, drop bass, breakdown mids, etc.), so ratios
-// between low/mid/high naturally shift through the track and the road hue
-// shifts with them. Palette stays in the game's blue/cyan/magenta fiction.
+// Colour driven by pre-analysed section energy (calm intros -> drops -> breakdowns).
+// Smoothed on the JS side so transitions fade across ~0.5s rather than snap at
+// section boundaries. Palette stays in the blue/cyan/magenta fiction family.
 const RHYTHMIC_FRAGMENT_BODY = `
 float tempoStrength = uRhythmicStrength * uChannelGain;
 if (tempoStrength > 0.0) {
   float kickStrength = clamp(uKick, 0.0, 1.0);
-  float low = clamp(uBandLow, 0.0, 1.0);
-  float mid = clamp(uBandMid, 0.0, 1.0);
-  float high = clamp(uBandHigh, 0.0, 1.0);
+  float energy = clamp(uEnergyLevel, 0.0, 1.0);
 
-  // Boost highs (roll off faster in mixes) and sharpen so the dominant band
-  // actually shows instead of a grey wash from three-way averaging.
-  float lowAdj = pow(low, 0.9);
-  float midAdj = pow(mid, 0.65);
-  float highAdj = pow(high, 0.4);
-  float lowW = pow(lowAdj, 3.0);
-  float midW = pow(midAdj, 3.0);
-  float highW = pow(highAdj, 3.0);
-  float bandTotal = max(0.0001, lowW + midW + highW);
-  float lowRatio = lowW / bandTotal;
-  float midRatio = midW / bandTotal;
-  float highRatio = highW / bandTotal;
+  //   0.00 deep calm blue
+  //   0.30 cruise cyan
+  //   0.60 magenta
+  //   0.90 hot pink
+  vec3 calmColor = vec3(0.14, 0.32, 0.9);
+  vec3 cruiseColor = vec3(0.25, 0.9, 1.0);
+  vec3 chargeColor = vec3(0.9, 0.3, 0.95);
+  vec3 peakColor = vec3(1.0, 0.45, 0.75);
 
-  vec3 bassColor = vec3(0.14, 0.36, 1.0);
-  vec3 midColor = vec3(0.22, 0.95, 0.92);
-  vec3 highColor = vec3(0.95, 0.32, 0.95);
-  vec3 freqColor = bassColor * lowRatio + midColor * midRatio + highColor * highRatio;
+  vec3 energyColor;
+  if (energy < 0.3) {
+    energyColor = mix(calmColor, cruiseColor, energy / 0.3);
+  } else if (energy < 0.6) {
+    energyColor = mix(cruiseColor, chargeColor, (energy - 0.3) / 0.3);
+  } else {
+    energyColor = mix(chargeColor, peakColor, clamp((energy - 0.6) / 0.3, 0.0, 1.0));
+  }
 
-  // Brightness is kick-only.
   float brightnessFactor = 0.45 + kickStrength * 0.5;
   vec3 dimmed = totalEmissiveRadiance * brightnessFactor;
 
-  // Matched-brightness colour swap so hue shifts without exposure blowout.
-  vec3 colored = freqColor * (0.42 + kickStrength * 0.4);
+  vec3 colored = energyColor * (0.42 + kickStrength * 0.4);
   vec3 pulsed = mix(dimmed, colored, 0.78);
 
   float ribbonTravel = fract(vTrackU - uMusicTime * uRibbonSpeed);
   float ribbonEdge = min(ribbonTravel, 1.0 - ribbonTravel);
   float ribbon = smoothstep(uRibbonWidth, 0.0, ribbonEdge);
-  vec3 ribbonAdd = freqColor * ribbon * (0.1 + kickStrength * 0.4);
+  vec3 ribbonAdd = energyColor * ribbon * (0.1 + kickStrength * 0.4);
 
   totalEmissiveRadiance = mix(totalEmissiveRadiance, pulsed + ribbonAdd, tempoStrength);
 }
@@ -183,9 +172,7 @@ export class TrackPresentationController {
     for (const uniforms of this.rhythmicUniforms) {
       uniforms.uMusicTime.value = state.musicTime;
       uniforms.uKick.value = state.kick;
-      uniforms.uBandLow.value = state.bandLow;
-      uniforms.uBandMid.value = state.bandMid;
-      uniforms.uBandHigh.value = state.bandHigh;
+      uniforms.uEnergyLevel.value = state.energyLevel;
       uniforms.uRhythmicStrength.value = strength;
     }
   }
@@ -200,9 +187,7 @@ export class TrackPresentationController {
       const uniforms: RhythmicUniforms = {
         uMusicTime: { value: 0 },
         uKick: { value: 0 },
-        uBandLow: { value: 0 },
-        uBandMid: { value: 0 },
-        uBandHigh: { value: 0 },
+        uEnergyLevel: { value: 0 },
         uRhythmicStrength: { value: 0 },
         uRibbonSpeed: { value: 0.085 },
         uRibbonWidth: { value: 0.028 },

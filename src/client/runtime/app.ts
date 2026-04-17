@@ -237,6 +237,7 @@ export class App {
   private sceneElapsedTime = 0;
   private elapsedRaceTime = 0;
   private latestReactiveBands: ReactiveBands | null = null;
+  private latestSectionEnergy = 0;
   private phase: AppPhase = "staging";
   private pendingStartAt = 0;
   private countdownDurationMs = 2500;
@@ -2570,6 +2571,7 @@ export class App {
     const bandLine = bands
       ? `band L${bands.low.toFixed(2)} M${bands.mid.toFixed(2)} H${bands.high.toFixed(2)} K${bands.kick.toFixed(2)}`
       : "band --";
+    const energyLine = `sectionE ${this.latestSectionEnergy.toFixed(2)}`;
     this.debugHud.textContent = [
       `phase ${this.phase}`,
       `trackU ${state.trackU.toFixed(3)}`,
@@ -2578,6 +2580,7 @@ export class App {
       `cp ${this.localCheckpointIndex + 1}/${this.latestCheckpointCount}`,
       `audio ${this.audioReady ? "ready" : "loading"}`,
       bandLine,
+      energyLine,
       `last ${this.lastStatusMessage || "--"}`,
     ].join("\n");
   }
@@ -2743,12 +2746,11 @@ export class App {
       loadingBlend,
     );
     const rhythmicStrength = this.phase === "running" ? Math.max(0, 1 - loadingBlend) : 0;
+    this.latestSectionEnergy = reactive.sectionEnergy;
     this.track.setRhythmicPulse({
       musicTime,
       kick: reactive.kick,
-      bandLow: reactive.bandLow,
-      bandMid: reactive.bandMid,
-      bandHigh: reactive.bandHigh,
+      energyLevel: reactive.sectionEnergy,
       strength: rhythmicStrength,
     });
     this.updateHud();
