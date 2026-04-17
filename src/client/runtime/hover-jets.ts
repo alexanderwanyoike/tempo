@@ -1,9 +1,9 @@
 import {
-  AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
   Color,
   Group,
+  NormalBlending,
   Points,
   ShaderMaterial,
   type Object3D,
@@ -18,14 +18,17 @@ const HOVER_EMITTERS: Array<[number, number, number]> = [
   [0.72, -0.3, -1.35],
 ];
 
-const PARTICLES_PER_EMITTER = 28;
+// Deliberately sparse: with additive blending + scene bloom the old dense
+// cloud saturated into a single white blob. Fewer, smaller particles read as
+// discrete droplets streaming down from the engines.
+const PARTICLES_PER_EMITTER = 10;
 const PARTICLE_COUNT = HOVER_EMITTERS.length * PARTICLES_PER_EMITTER;
-const PARTICLE_LIFETIME_MIN = 0.32;
-const PARTICLE_LIFETIME_MAX = 0.55;
-const BASE_DOWNWARD_SPEED = 2.4;
-const LATERAL_SPREAD = 0.38;
-const GRAVITY_Y = -4.2;
-const POINT_BASE_SIZE = 26;
+const PARTICLE_LIFETIME_MIN = 0.22;
+const PARTICLE_LIFETIME_MAX = 0.38;
+const BASE_DOWNWARD_SPEED = 3.4;
+const LATERAL_SPREAD = 0.22;
+const GRAVITY_Y = -3.5;
+const POINT_BASE_SIZE = 10;
 
 const HOVER_VERTEX = `
   attribute float aLife;
@@ -48,12 +51,11 @@ const HOVER_FRAGMENT = `
     vec2 coord = gl_PointCoord - vec2(0.5);
     float dist = length(coord) * 2.0;
     if (dist > 1.0) discard;
-    // Soft falloff: bright hot core, faint outer halo.
-    float core = pow(1.0 - dist, 2.2);
-    float halo = smoothstep(1.0, 0.35, dist) * 0.35;
-    float shape = core + halo;
-    float alpha = shape * vLife * uIntensity;
-    vec3 tint = uColor * (1.35 + core * 0.9);
+    float core = pow(1.0 - dist, 1.6);
+    float alpha = core * vLife * uIntensity;
+    // Hot centre, cooler toward the outside, so each particle reads as a
+    // droplet with a visible rim rather than a fuzzy glow.
+    vec3 tint = mix(uColor, vec3(1.0), core * 0.5);
     gl_FragColor = vec4(tint, alpha);
   }
 `;
@@ -107,7 +109,9 @@ export class HoverJets {
       fragmentShader: HOVER_FRAGMENT,
       transparent: true,
       depthWrite: false,
-      blending: AdditiveBlending,
+      // NormalBlending (not additive) so overlapping particles don't stack
+      // into a saturated white blob once bloom post-processing hits them.
+      blending: NormalBlending,
     });
 
     this.points = new Points(this.geometry, this.material);
@@ -134,9 +138,9 @@ export class HoverJets {
   update(deltaSeconds: number, speedRatio: number, boostMultiplier: number): void {
     const dt = Math.min(deltaSeconds, 1 / 20);
     const boost = Math.max(0, boostMultiplier - 1);
-    this.material.uniforms.uIntensity.value = 0.8 + speedRatio * 0.35 + boost * 1.2;
-    // On boost the jet fattens; on rest it's a tight column.
-    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE + speedRatio * 8 + boost * 14;
+    // Keep intensity modest — NormalBlending + bloom still amplifies these.
+    this.material.uniforms.uIntensity.value = 0.55 + speedRatio * 0.2 + boost * 0.5;
+    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE + speedRatio * 3 + boost * 6;
 
     for (let i = 0; i < PARTICLE_COUNT; i += 1) {
       this.ageSeconds[i] += dt;
