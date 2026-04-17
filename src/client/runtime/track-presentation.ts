@@ -107,23 +107,21 @@ if (tempoStrength > 0.0) {
   float kickStrength = clamp(uKick, 0.0, 1.0);
   float energy = clamp(uEnergyLevel, 0.0, 1.0);
 
-  // Energy -> colour ramp
-  //   0.00 calm deep blue
-  //   0.35 cyan / teal
-  //   0.65 magenta / pink
-  //   1.00 hot orange / red
-  vec3 calmColor = vec3(0.16, 0.45, 1.0);
-  vec3 cruiseColor = vec3(0.35, 0.95, 0.75);
-  vec3 chargeColor = vec3(1.0, 0.36, 0.58);
-  vec3 peakColor = vec3(1.0, 0.48, 0.18);
+  // Energy -> colour ramp, matched to the game's blue/cyan/magenta fiction palette.
+  // Typical tracks sit in 0.3 - 0.55 range so the bulk of gameplay lives between
+  // cruise cyan and charge magenta. Peaks push to hot pink.
+  vec3 calmColor = vec3(0.14, 0.32, 0.9);
+  vec3 cruiseColor = vec3(0.25, 0.9, 1.0);
+  vec3 chargeColor = vec3(0.85, 0.28, 0.95);
+  vec3 peakColor = vec3(1.0, 0.45, 0.75);
 
   vec3 energyColor;
-  if (energy < 0.35) {
-    energyColor = mix(calmColor, cruiseColor, energy / 0.35);
-  } else if (energy < 0.7) {
-    energyColor = mix(cruiseColor, chargeColor, (energy - 0.35) / 0.35);
+  if (energy < 0.3) {
+    energyColor = mix(calmColor, cruiseColor, energy / 0.3);
+  } else if (energy < 0.6) {
+    energyColor = mix(cruiseColor, chargeColor, (energy - 0.3) / 0.3);
   } else {
-    energyColor = mix(chargeColor, peakColor, (energy - 0.7) / 0.3);
+    energyColor = mix(chargeColor, peakColor, clamp((energy - 0.6) / 0.3, 0.0, 1.0));
   }
 
   // Brightness is kick-only. Energy drives colour, not brightness.

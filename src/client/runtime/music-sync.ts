@@ -10,7 +10,6 @@ const KICK_FLUX_START_BIN = 1;
 const KICK_FLUX_END_BIN = 5;
 const KICK_FLUX_GAIN = 7.5;
 const SLOW_ENERGY_EMA = 0.035;
-const SLOW_ENERGY_GAIN = 1.8;
 
 // Shared AudioContext unlocked during a user gesture. iOS Safari requires
 // either creating a context OR calling resume() inside the gesture task;
@@ -111,7 +110,7 @@ export class MusicSync {
     this.smoothedBands.high = this.smoothBand(this.smoothedBands.high, high);
     this.smoothedBands.kick = this.smoothKick(this.smoothedBands.kick, kick);
 
-    const rawEnergy = Math.min(1, (low + mid + high) / 3 * SLOW_ENERGY_GAIN);
+    const rawEnergy = Math.min(1, (low + mid + high) / 3);
     this.smoothedBands.energyLevel = this.smoothedBands.energyLevel * (1 - SLOW_ENERGY_EMA) + rawEnergy * SLOW_ENERGY_EMA;
 
     return { ...this.smoothedBands };
