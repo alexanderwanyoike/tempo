@@ -54,6 +54,8 @@ const SNAPSHOT_INTERVAL_MS = 100;
 const COUNTDOWN_MS = 4000;
 const NOMINAL_HALF_WIDTH = 11;
 const VEHICLE_HOVER_HEIGHT = 0.45;
+const PLAYER_NAME_MIN_LENGTH = 2;
+const PLAYER_NAME_MAX_LENGTH = 18;
 
 type CatalogEntry = {
   id: string;
@@ -181,6 +183,9 @@ async function handleMessage(connection: ClientConnection, raw: string): Promise
       return;
     case "room.selectCar":
       updateCarVariant(connection, message.carVariant);
+      return;
+    case "room.setPlayerName":
+      updatePlayerName(connection, message.name);
       return;
     case "room.setReady":
       setReady(connection, message.ready);
@@ -310,6 +315,20 @@ function updateCarVariant(connection: ClientConnection, carVariant: CarVariant):
   if (!player) return;
   player.carVariant = sanitizeCarVariant(carVariant);
   broadcastRoomState(room);
+}
+
+function updatePlayerName(connection: ClientConnection, requestedName: string): void {
+  const nextName = sanitizePlayerName(requestedName, connection.name);
+  if (nextName === connection.name) return;
+  connection.name = nextName;
+
+  const room = getRoomFor(connection);
+  if (!room) return;
+  const player = room.players.get(connection.clientId);
+  if (!player) return;
+  player.name = nextName;
+  broadcastRoomState(room);
+  broadcastDirectory();
 }
 
 function setReady(connection: ClientConnection, ready: boolean): void {
@@ -932,6 +951,16 @@ function sanitizeRoomName(connection: ClientConnection, songId: string, requeste
   return `${connection.name} / ${titleStem}`.slice(0, 32);
 }
 
+function sanitizePlayerName(requested: string, fallback: string): string {
+  const normalized = requested
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9 _'-]/g, "")
+    .slice(0, PLAYER_NAME_MAX_LENGTH)
+    .trim();
+  return normalized.length >= PLAYER_NAME_MIN_LENGTH ? normalized : fallback;
+}
+
 function makePlayer(connection: ClientConnection, carVariant: CarVariant): InternalPlayer {
   return {
     clientId: connection.clientId,
@@ -1041,7 +1070,11 @@ function buildPickups(track: Track, seed: number): PickupSpawnState[] {
       if (Math.abs(object.u - u) <= objectPaddingU) return true;
     }
     for (const feature of blockedFeatures) {
-      const featurePaddingU = feature.kind === "jump" ? 0.03 : 0.05;
+      // The original padding values created huge pickup deserts on feature-heavy
+      // tracks, especially in the first quarter of Firestarter. Keep pickups
+      // clear of the stunt cores, but allow them to exist near the run-in and
+      // exit so combat cadence stays readable across the whole race.
+      const featurePaddingU = feature.kind === "jump" ? 0.008 : 0.014;
       if (Math.abs(feature.u - u) <= featurePaddingU) return true;
     }
     return false;

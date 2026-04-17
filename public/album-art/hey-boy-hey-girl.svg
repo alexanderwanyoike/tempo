@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="title desc">
+  <title id="title">Hey Boy Hey Girl Album Art</title>
+  <desc id="desc">Abstract club poster style art with concentric rings and acid colors.</desc>
+  <defs>
+    <radialGradient id="halo" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#fff1a7"/>
+      <stop offset="45%" stop-color="#ff8be0"/>
+      <stop offset="100%" stop-color="#11111b"/>
+    </radialGradient>
+  </defs>
+  <rect width="720" height="720" fill="#0c0c15"/>
+  <circle cx="360" cy="312" r="252" fill="url(#halo)"/>
+  <circle cx="360" cy="312" r="196" fill="none" stroke="#10151d" stroke-width="26"/>
+  <circle cx="360" cy="312" r="144" fill="none" stroke="#f7f1e8" stroke-opacity="0.6" stroke-width="12"/>
+  <circle cx="360" cy="312" r="84" fill="#11131b"/>
+  <rect x="98" y="490" width="524" height="132" fill="#0d1117" fill-opacity="0.8"/>
+  <text x="124" y="556" fill="#f7f1e8" font-family="Arial, sans-serif" font-size="48" font-weight="700" letter-spacing="4">HEY BOY, HEY GIRL</text>
+  <text x="126" y="594" fill="#b0bac3" font-family="Arial, sans-serif" font-size="20" letter-spacing="8">THE CHEMICAL BROTHERS / BIG BEAT</text>
+</svg>

@@ -2,9 +2,11 @@ import {
   AdditiveBlending,
   CapsuleGeometry,
   Color,
+  CylinderGeometry,
   DoubleSide,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Quaternion,
   Scene,
@@ -24,7 +26,6 @@ import {
 // the missile path mid-flight.
 
 const MISSILE_FLIGHT_MS = 360;
-const IMPACT_DURATION_MS = 560;
 const BLOCK_DURATION_MS = 520;
 const SHIELD_COLOR = "#6afcff";
 const MISSILE_COLOR = "#ff5db8";
@@ -52,6 +53,16 @@ type ImpactEffect = {
   toScale: number;
 };
 
+type RingEffect = {
+  kind: "ring";
+  mesh: Mesh;
+  material: MeshBasicMaterial;
+  startTime: number;
+  duration: number;
+  fromScale: number;
+  toScale: number;
+};
+
 type ShieldEffect = {
   kind: "shield";
   mesh: Mesh;
@@ -61,7 +72,7 @@ type ShieldEffect = {
   duration: number;
 };
 
-type CombatEffect = MissileEffect | ImpactEffect | ShieldEffect;
+type CombatEffect = MissileEffect | ImpactEffect | ShieldEffect | RingEffect;
 
 export class CombatVfx {
   private readonly group = new Group();
@@ -136,11 +147,15 @@ export class CombatVfx {
   spawnImpact(vehicleId: string, now: number): void {
     const target = this.getVehicleGroup(vehicleId);
     const position = target?.position.clone() ?? this.tmpStart.clone();
-    this.pushBurst(position, now, IMPACT_DURATION_MS, MISSILE_COLOR, 0.24, 7.0, 3.4);
+    const forward = target
+      ? new Vector3(0, 0, -1).applyQuaternion(target.quaternion).normalize()
+      : new Vector3(0, 0, -1);
+    this.spawnCrashBurst(position, forward, now);
   }
 
   spawnLocalFireBlast(position: Vector3, now: number): void {
     this.pushBurst(position, now, 260, "#ffe27a", 0.4, 3.6, 2.6);
+    this.pushRing(position, now, 220, "#fff3a0", 0.75, 3.2, 0.32);
   }
 
   spawnBlock(vehicleId: string, now: number): void {
@@ -148,6 +163,20 @@ export class CombatVfx {
     const position = target?.position.clone() ?? this.tmpStart.clone();
     this.pushBurst(position, now, BLOCK_DURATION_MS, BLOCK_COLOR, 0.7, 6.8, 4.8);
     this.pushBurst(position, now, BLOCK_DURATION_MS * 0.72, "#e9ffff", 0.24, 3.4, 3.6);
+    this.pushRing(position, now, 260, BLOCK_COLOR, 0.9, 5.2, 0.44);
+  }
+
+  spawnPickupPulse(position: Vector3, forward: Vector3, color: string, now: number): void {
+    this.pushBurst(position, now, 260, color, 0.38, 3.8, 3.8);
+    this.pushBurst(position.clone().addScaledVector(forward, 1.3), now, 180, "#f6fff2", 0.18, 2.4, 5.4);
+    this.pushRing(position, now, 280, color, 0.64, 4.8, 0.38);
+  }
+
+  spawnCrashBurst(position: Vector3, forward: Vector3, now: number): void {
+    this.pushBurst(position, now, 170, "#fff1d0", 0.26, 2.2, 6.4);
+    this.pushBurst(position, now, 340, "#ff915e", 0.28, 6.6, 4.2);
+    this.pushBurst(position.clone().addScaledVector(forward, 1.1), now, 240, MISSILE_COLOR, 0.22, 3.8, 4.6);
+    this.pushRing(position, now, 320, "#ff915e", 0.72, 6.1, 0.48);
   }
 
   spawnShield(vehicleId: string, durationMs: number, now: number): void {
@@ -251,6 +280,19 @@ export class CombatVfx {
         continue;
       }
 
+      if (effect.kind === "ring") {
+        const scale = effect.fromScale + (effect.toScale - effect.fromScale) * t;
+        effect.mesh.scale.set(scale, 1, scale);
+        effect.material.opacity = (1 - t) * 0.78;
+        if (t >= 1) {
+          effect.mesh.removeFromParent();
+          effect.material.dispose();
+          effect.mesh.geometry.dispose();
+          this.effects.splice(i, 1);
+        }
+        continue;
+      }
+
       if (effect.kind === "shield") {
         // Pulse radius slightly and fade in the last 20% of the duration.
         const pulse = 1 + Math.sin(elapsed * 0.01) * 0.08;
@@ -293,6 +335,40 @@ export class CombatVfx {
     this.group.add(mesh);
     this.effects.push({
       kind: "impact",
+      mesh,
+      material,
+      startTime: now,
+      duration,
+      fromScale,
+      toScale,
+    });
+  }
+
+  private pushRing(
+    position: Vector3,
+    now: number,
+    duration: number,
+    color: string,
+    fromScale: number,
+    toScale: number,
+    yOffset: number,
+  ): void {
+    const geometry = new CylinderGeometry(1, 1, 0.1, 24, 1, true);
+    const material = new MeshBasicMaterial({
+      color: new Color(color),
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      side: DoubleSide,
+      blending: AdditiveBlending,
+    });
+    const mesh = new Mesh(geometry, material);
+    mesh.position.copy(position);
+    mesh.position.y += yOffset;
+    mesh.scale.set(fromScale, 1, fromScale);
+    this.group.add(mesh);
+    this.effects.push({
+      kind: "ring",
       mesh,
       material,
       startTime: now,

@@ -1,7 +1,22 @@
 export const fictionIds = [1, 2, 3] as const;
 export type SharedFictionId = (typeof fictionIds)[number];
 
-export const carVariants = ["vector", "ember", "nova", "ghost"] as const;
+export const carVariants = [
+  "vector",
+  "ember",
+  "nova",
+  "ghost",
+  "flare",
+  "fang",
+  "cruise",
+  "spark",
+  "titan",
+  "shade",
+  "glow",
+  "viper",
+  "anvil",
+  "strut",
+] as const;
 export type CarVariant = (typeof carVariants)[number];
 
 export const itemKinds = ["missile", "shield"] as const;
@@ -161,6 +176,10 @@ export type ClientMessage =
   | {
       type: "room.selectCar";
       carVariant: CarVariant;
+    }
+  | {
+      type: "room.setPlayerName";
+      name: string;
     }
   | {
       type: "room.setReady";
