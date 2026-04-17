@@ -1,16 +1,23 @@
 import {
+  BackSide,
+  Color,
   DataTexture,
+  Mesh,
   MeshStandardMaterial,
   MeshToonMaterial,
   NearestFilter,
   RedFormat,
+  ShaderMaterial,
+  type BufferGeometry,
   type Texture,
 } from "three";
 
-// Brightness stops for the 3-band shading ramp. Tuned for subtle cel shading —
-// the darkest band (35% brightness) still reads clearly against the neon
-// environment; mid and hot bands give the car a flattened but readable form.
-const GRADIENT_STOPS = [0.35, 0.7, 1.0] as const;
+// Two hard bands for full comic cel shading — one dark side, one lit side, no
+// in-between grey. Combined with the outline hull this gives cars a strong
+// illustrated look.
+const GRADIENT_STOPS = [0.32, 1.0] as const;
+const OUTLINE_COLOR = new Color("#050610");
+const OUTLINE_THICKNESS = 0.018;
 
 /**
  * Build a tiny 1D gradient map used by MeshToonMaterial to quantize diffuse
@@ -56,3 +63,50 @@ export function toToonMaterial(
   if (source.name) toon.name = source.name;
   return toon;
 }
+
+/**
+ * Shared inverted-hull outline material. Expands each vertex along its normal
+ * in model space and renders only back-faces, so the swollen shell peeks
+ * around the edges of the real mesh as a thin black silhouette. Cheap and
+ * self-contained; no post-processing required.
+ */
+export function createOutlineMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uOutlineColor: { value: OUTLINE_COLOR.clone() },
+      uOutlineThickness: { value: OUTLINE_THICKNESS },
+    },
+    vertexShader: `
+      uniform float uOutlineThickness;
+      void main() {
+        vec3 outlinePosition = position + normal * uOutlineThickness;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(outlinePosition, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uOutlineColor;
+      void main() {
+        gl_FragColor = vec4(uOutlineColor, 1.0);
+      }
+    `,
+    side: BackSide,
+    depthWrite: true,
+    depthTest: true,
+  });
+}
+
+/**
+ * Build an outline shell mesh for a source mesh. The shell shares the same
+ * BufferGeometry (no duplication) and uses the shared outline material.
+ */
+export function createOutlineMesh(
+  sourceGeometry: BufferGeometry,
+  outlineMaterial: ShaderMaterial,
+): Mesh {
+  const shell = new Mesh(sourceGeometry, outlineMaterial);
+  shell.renderOrder = -1;
+  shell.frustumCulled = false;
+  shell.name = "tempo-car-outline";
+  return shell;
+}
+

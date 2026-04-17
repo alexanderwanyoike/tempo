@@ -55,7 +55,12 @@ import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
 import { BotSimulator, buildBotConfigs, type BotDifficulty } from "./bot-simulator";
-import { createToonGradientMap, toToonMaterial } from "./car-toon-shader";
+import {
+  createOutlineMaterial,
+  createOutlineMesh,
+  createToonGradientMap,
+  toToonMaterial,
+} from "./car-toon-shader";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -198,6 +203,7 @@ export class App {
   private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
   private readonly carToonGradientMap = createToonGradientMap();
+  private readonly carOutlineMaterial = createOutlineMaterial();
   private readonly cameraMode: CameraMode;
   private track: Track;
   private trackObjects: readonly TrackObject[];
@@ -785,8 +791,11 @@ export class App {
     });
     const bodyMaterial = toToonMaterial(bodySource, this.carToonGradientMap);
     bodySource.dispose();
-    const body = new Mesh(new BoxGeometry(1.4, 0.5, 3.2), bodyMaterial);
+    const bodyGeometry = new BoxGeometry(1.4, 0.5, 3.2);
+    const body = new Mesh(bodyGeometry, bodyMaterial);
     body.position.y = 0.1;
+    const bodyOutline = createOutlineMesh(bodyGeometry, this.carOutlineMaterial);
+    bodyOutline.position.copy(body.position);
 
     const cockpitSource = new MeshStandardMaterial({
       color: palette.cockpit.clone(),
@@ -796,11 +805,14 @@ export class App {
     });
     const cockpitMaterial = toToonMaterial(cockpitSource, this.carToonGradientMap);
     cockpitSource.dispose();
-    const cockpit = new Mesh(new BoxGeometry(0.8, 0.35, 1.15), cockpitMaterial);
+    const cockpitGeometry = new BoxGeometry(0.8, 0.35, 1.15);
+    const cockpit = new Mesh(cockpitGeometry, cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
+    const cockpitOutline = createOutlineMesh(cockpitGeometry, this.carOutlineMaterial);
+    cockpitOutline.position.copy(cockpit.position);
 
     const fallbackGroup = new Group();
-    fallbackGroup.add(body, cockpit);
+    fallbackGroup.add(body, bodyOutline, cockpit, cockpitOutline);
 
     const feedbackGlowMaterial = new MeshBasicMaterial({
       color: App.BOOST_COLOR.clone(),
@@ -870,8 +882,12 @@ export class App {
   }
 
   private toonifyCarAsset(asset: Group): void {
+    // Collect meshes first so we can add outline siblings without perturbing
+    // the traversal iterator.
+    const convertedMeshes: Mesh[] = [];
     asset.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
+      if (obj.name === "tempo-car-outline") return;
       if (Array.isArray(obj.material)) {
         obj.material = obj.material.map((mat) =>
           mat instanceof MeshStandardMaterial && !(mat instanceof MeshToonMaterial)
@@ -883,8 +899,21 @@ export class App {
         && !(obj.material instanceof MeshToonMaterial)
       ) {
         obj.material = toToonMaterial(obj.material, this.carToonGradientMap);
+      } else {
+        return;
       }
+      convertedMeshes.push(obj);
     });
+
+    for (const mesh of convertedMeshes) {
+      const parent = mesh.parent;
+      if (!parent) continue;
+      const outline = createOutlineMesh(mesh.geometry, this.carOutlineMaterial);
+      outline.position.copy(mesh.position);
+      outline.quaternion.copy(mesh.quaternion);
+      outline.scale.copy(mesh.scale);
+      parent.add(outline);
+    }
   }
 
   private createBoostTrailMeshes(): void {
