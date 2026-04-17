@@ -15,6 +15,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  MeshToonMaterial,
   PerspectiveCamera,
   Quaternion,
   Scene,
@@ -54,6 +55,7 @@ import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
 import { BotSimulator, buildBotConfigs, type BotDifficulty } from "./bot-simulator";
+import { createToonGradientMap, toToonMaterial } from "./car-toon-shader";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -89,8 +91,8 @@ type RemoteCarVisual = {
   group: Group;
   bodyPivot: Group;
   fallbackGroup: Group;
-  fallbackBodyMaterial: MeshStandardMaterial;
-  fallbackCockpitMaterial: MeshStandardMaterial;
+  fallbackBodyMaterial: MeshToonMaterial;
+  fallbackCockpitMaterial: MeshToonMaterial;
   feedbackGlow: Mesh;
   feedbackGlowMaterial: MeshBasicMaterial;
   assetGroup: Group | null;
@@ -195,6 +197,7 @@ export class App {
   private readonly input: VehicleInput;
   private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
+  private readonly carToonGradientMap = createToonGradientMap();
   private readonly cameraMode: CameraMode;
   private track: Track;
   private trackObjects: readonly TrackObject[];
@@ -774,21 +777,25 @@ export class App {
 
   private createVehicleVisual(variant: CarVariant): RemoteCarVisual {
     const palette = paletteForVariant(variant);
-    const bodyMaterial = new MeshStandardMaterial({
+    const bodySource = new MeshStandardMaterial({
       color: palette.body.clone(),
       emissive: palette.bodyEmissive.clone(),
       metalness: 0.3,
       roughness: 0.5,
     });
+    const bodyMaterial = toToonMaterial(bodySource, this.carToonGradientMap);
+    bodySource.dispose();
     const body = new Mesh(new BoxGeometry(1.4, 0.5, 3.2), bodyMaterial);
     body.position.y = 0.1;
 
-    const cockpitMaterial = new MeshStandardMaterial({
+    const cockpitSource = new MeshStandardMaterial({
       color: palette.cockpit.clone(),
       emissive: palette.cockpitEmissive.clone(),
       metalness: 0.15,
       roughness: 0.45,
     });
+    const cockpitMaterial = toToonMaterial(cockpitSource, this.carToonGradientMap);
+    cockpitSource.dispose();
     const cockpit = new Mesh(new BoxGeometry(0.8, 0.35, 1.15), cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
 
@@ -839,6 +846,7 @@ export class App {
       const asset = await loadCarMesh(this.config, visual.variant);
       if (this.destroyed || revision !== visual.assetRevision) return;
       applyCarTransform(asset, definition.raceTransform);
+      this.toonifyCarAsset(asset);
       if (visual.assetGroup) {
         visual.bodyPivot.remove(visual.assetGroup);
       }
@@ -859,6 +867,24 @@ export class App {
     this.remoteCars.set(clientId, remote);
     this.scene.add(remote.group);
     return remote;
+  }
+
+  private toonifyCarAsset(asset: Group): void {
+    asset.traverse((obj) => {
+      if (!(obj instanceof Mesh)) return;
+      if (Array.isArray(obj.material)) {
+        obj.material = obj.material.map((mat) =>
+          mat instanceof MeshStandardMaterial && !(mat instanceof MeshToonMaterial)
+            ? toToonMaterial(mat, this.carToonGradientMap)
+            : mat,
+        );
+      } else if (
+        obj.material instanceof MeshStandardMaterial
+        && !(obj.material instanceof MeshToonMaterial)
+      ) {
+        obj.material = toToonMaterial(obj.material, this.carToonGradientMap);
+      }
+    });
   }
 
   private createBoostTrailMeshes(): void {
