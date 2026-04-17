@@ -53,6 +53,15 @@ import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
+import { BotSimulator, buildBotConfigs, type BotDifficulty } from "./bot-simulator";
+import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
+import {
+  RACE_SIM,
+  buildPickups as simBuildPickups,
+  type RaceSimEvent,
+  type RaceSimRacer,
+} from "../../../shared/race-sim";
+import { carVariants } from "../../../shared/network-types";
 
 type TrailSample = {
   position: Vector3;
@@ -135,6 +144,8 @@ export type AppLaunchOptions = {
   localPlayerName?: string | null;
   carVariant?: CarVariant;
   roster?: RoomPlayerState[];
+  botCount?: number;
+  botDifficulty?: BotDifficulty;
   onRetry?: (() => void) | null;
   onBackToMenu?: (() => void) | null;
   onBackToLobby?: (() => void) | null;
@@ -151,7 +162,7 @@ const NAME_LABEL_FULL_RANGE = 110;
 const NAME_LABEL_FADE_RANGE = 140;
 // Mirrors server SHIELD_DURATION_MS. Purely cosmetic - the server is the
 // source of truth for the actual shield window.
-const SHIELD_VISUAL_DURATION_MS = 120000;
+const SHIELD_VISUAL_DURATION_MS = 10000;
 
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
@@ -258,6 +269,19 @@ export class App {
   private lastFirePressed = false;
   private lastShieldPressed = false;
   private latestRoster: RoomPlayerState[] = [];
+  private botSimulator: BotSimulator | null = null;
+  private soloPickups: PickupSpawnState[] = [];
+  private soloCheckpointUs: readonly number[] = [];
+  private soloLocalPrevTrackU = START_TRACK_U;
+  private soloLocalPrevLateralOffset = 0;
+  private soloLocalShieldUntil = 0;
+  private soloLocalTakedowns = 0;
+  private soloLocalFinishedAt: number | null = null;
+  private soloLocalRespawnRevision = 0;
+  private soloRaceStartAt = 0;
+  private soloLocalRespawnTrackU = START_TRACK_U;
+  private soloLocalRespawnLateralOffset = 0;
+  private soloEventSequence = 0;
   private lastStatusMessage = "";
   private boostSurge = 0;
   private pickupSurge = 0;
@@ -385,6 +409,34 @@ export class App {
     this.vehicleController.forceTrackState(START_TRACK_U);
 
     this.latestRoster = [...(launch.roster ?? [])];
+
+    // Solo AI bots: build pickups, checkpoints, and a BotSimulator so solo
+    // races get opponents. Reuses the shared race rules used by the multiplayer
+    // server, so bot races match multiplayer semantics.
+    const desiredBotCount = launch.mode === "multiplayer"
+      ? 0
+      : Math.max(0, Math.min(7, Math.floor(launch.botCount ?? 0)));
+    if (desiredBotCount > 0 && song) {
+      this.soloCheckpointUs = buildCheckpointUs(song);
+      this.soloPickups = simBuildPickups(track, seed);
+      const pickedVariant = launch.carVariant ?? "vector";
+      const botPool = carVariants.filter((variant) => variant !== pickedVariant);
+      const difficulty: BotDifficulty = launch.botDifficulty ?? "medium";
+      const botConfigs = buildBotConfigs(desiredBotCount, botPool, START_TRACK_U, difficulty, seed);
+      this.botSimulator = new BotSimulator(track, this.soloPickups, this.soloCheckpointUs, botConfigs);
+      const localRoster: RoomPlayerState = {
+        clientId: launch.localPlayerId ?? "solo",
+        name: launch.localPlayerName ?? "Pilot 1",
+        carVariant: pickedVariant,
+        connected: true,
+        ready: true,
+        isHost: true,
+        isActiveRacer: true,
+        preload: { sceneReady: true, audioReady: true },
+      };
+      this.latestRoster = this.botSimulator.buildRoster(localRoster);
+    }
+
     this.runtimeUiStyles = this.createRuntimeUiStyles();
     this.debugHud = this.createDebugHud(debugHudEnabled);
     this.hud = this.createHud();
@@ -490,6 +542,7 @@ export class App {
     this.countdownResetTransition = null;
     this.phase = "running";
     this.countdownStarted = true;
+    this.soloRaceStartAt = Date.now();
     this.statusOverlay.style.display = "none";
     this.touchControls?.setVisible(true);
     this.musicSync?.play();
@@ -2304,12 +2357,178 @@ export class App {
         this.combatVfx.spawnLocalFireBlast(this.localVehicle.group.position.clone(), performance.now());
       }
       this.launch.onFire?.();
+      if (this.botSimulator) this.soloLocalFire();
     }
     if (shieldPressed && !this.lastShieldPressed) {
       this.launch.onShield?.();
+      if (this.botSimulator) this.soloLocalShield();
     }
     this.lastFirePressed = firePressed;
     this.lastShieldPressed = shieldPressed;
+  }
+
+  private buildSoloLocalRacer(): RaceSimRacer {
+    return {
+      clientId: this.launch.localPlayerId ?? "solo",
+      trackU: this.vehicleController.state.trackU,
+      lateralOffset: this.vehicleController.state.lateralOffset,
+      speed: this.vehicleController.state.speed,
+      checkpointIndex: this.localCheckpointIndex,
+      placement: this.localPlacement,
+      offensiveItem: this.localOffensiveItem,
+      defensiveItem: this.localDefensiveItem,
+      shieldUntil: this.soloLocalShieldUntil,
+      takenDownUntil: this.localTakenDownUntil,
+      respawnRevision: this.soloLocalRespawnRevision,
+      finishedAt: this.soloLocalFinishedAt,
+      takedowns: this.soloLocalTakedowns,
+      respawnAt: 0,
+      respawnTrackU: START_TRACK_U,
+      respawnLateralOffset: 0,
+    };
+  }
+
+  private soloLocalFire(): void {
+    if (!this.botSimulator) return;
+    if (this.localOffensiveItem !== "missile") return;
+    const localRacer = this.buildSoloLocalRacer();
+    const events = this.botSimulator.fireFromLocal(localRacer, Date.now());
+    // fireFromLocal mutates localRacer (clears missile). Mirror to local state.
+    this.localOffensiveItem = localRacer.offensiveItem;
+    for (const ev of events) {
+      this.applySoloSimEvent(ev);
+    }
+  }
+
+  private soloLocalShield(): void {
+    if (!this.botSimulator) return;
+    if (this.localDefensiveItem !== "shield") return;
+    const localRacer = this.buildSoloLocalRacer();
+    const ev = this.botSimulator.shieldFromLocal(localRacer, Date.now());
+    if (ev) {
+      this.localDefensiveItem = null;
+      this.soloLocalShieldUntil = localRacer.shieldUntil;
+      this.applySoloSimEvent(ev);
+    }
+  }
+
+  private applySoloSimEvent(ev: RaceSimEvent): void {
+    const now = Date.now();
+    const raceEvent = this.raceSimEventToRaceEvent(ev, now);
+    if (raceEvent) this.applyRaceEvent(raceEvent);
+    // Mirror takedown to local takedown state if local was the target.
+    if (ev.kind === "takedown" && ev.targetId === (this.launch.localPlayerId ?? "solo")) {
+      this.localTakenDownUntil = now + RACE_SIM.TAKEDOWN_DURATION_MS;
+      const state = this.vehicleController.state;
+      this.soloLocalRespawnTrackU = Math.max(
+        START_TRACK_U,
+        Math.min(0.992, state.trackU - 0.008),
+      );
+      this.soloLocalRespawnLateralOffset = Math.max(-10, Math.min(10, state.lateralOffset));
+    }
+    if (ev.kind === "blocked" && ev.targetId === (this.launch.localPlayerId ?? "solo")) {
+      this.localDefensiveItem = null;
+      this.soloLocalShieldUntil = 0;
+    }
+  }
+
+  private tickSoloWithBots(deltaSeconds: number, now: number): void {
+    if (!this.botSimulator) return;
+    const localRacer = this.buildSoloLocalRacer();
+
+    // Pickup collision for local player (server handles this in multiplayer).
+    const pickupEv = this.botSimulator.collectForLocal(
+      localRacer,
+      this.soloLocalPrevTrackU,
+      this.soloLocalPrevLateralOffset,
+    );
+    if (pickupEv) {
+      this.localOffensiveItem = localRacer.offensiveItem;
+      this.localDefensiveItem = localRacer.defensiveItem;
+      this.applySoloSimEvent(pickupEv);
+    }
+    this.soloLocalPrevTrackU = localRacer.trackU;
+    this.soloLocalPrevLateralOffset = localRacer.lateralOffset;
+
+    // Checkpoints + finish for local (normally done server-side).
+    this.localCheckpointIndex = Math.max(
+      this.localCheckpointIndex,
+      checkpointIndexForU(localRacer.trackU, this.soloCheckpointUs),
+    );
+    if (
+      localRacer.trackU >= RACE_SIM.FINISH_TRACK_U
+      && this.soloLocalFinishedAt === null
+    ) {
+      this.soloLocalFinishedAt = now;
+    }
+
+    // Bots: drive AI + physics, maybe tick shared rules. localForBots is
+    // mutated by simRecomputePlacements inside the bot simulator tick, so the
+    // placement field is up to date afterward and we read it back for the
+    // synthetic snapshot below.
+    const localForBots = this.buildSoloLocalRacer();
+    this.botSimulator.update(deltaSeconds, now, localForBots);
+    this.localPlacement = localForBots.placement;
+
+    // Drain and apply bot events to VFX / takedown state.
+    const events = this.botSimulator.drainEvents();
+    for (const ev of events) this.applySoloSimEvent(ev);
+
+    // Handle local respawn: once stun timer elapses, bump revision so
+    // applyRaceSnapshot drives vehicleController.forceTrackState() to the
+    // respawn position.
+    let snapLocalTrackU = localRacer.trackU;
+    let snapLocalLateralOffset = localRacer.lateralOffset;
+    let snapLocalSpeed = localRacer.speed;
+    if (this.localTakenDownUntil > 0 && now >= this.localTakenDownUntil) {
+      this.localTakenDownUntil = 0;
+      this.soloLocalRespawnRevision += 1;
+      snapLocalTrackU = this.soloLocalRespawnTrackU;
+      snapLocalLateralOffset = this.soloLocalRespawnLateralOffset;
+      snapLocalSpeed = 0;
+      this.soloLocalPrevTrackU = snapLocalTrackU;
+      this.soloLocalPrevLateralOffset = snapLocalLateralOffset;
+    }
+
+    // Emit a synthetic snapshot so applyRaceSnapshot drives remote car visuals,
+    // placements, pickups, and respawn reset for us.
+    const snapshotLocal: RacePlayerState = {
+      clientId: this.launch.localPlayerId ?? "solo",
+      trackU: snapLocalTrackU,
+      lateralOffset: snapLocalLateralOffset,
+      speed: snapLocalSpeed,
+      checkpointIndex: this.localCheckpointIndex,
+      placement: this.localPlacement,
+      offensiveItem: this.localOffensiveItem,
+      defensiveItem: this.localDefensiveItem,
+      shieldUntil: this.soloLocalShieldUntil,
+      takenDownUntil: this.localTakenDownUntil,
+      respawnRevision: this.soloLocalRespawnRevision,
+      finishedAt: this.soloLocalFinishedAt,
+      takedowns: this.soloLocalTakedowns,
+    };
+    const snapshotPlayers = this.botSimulator.buildRacePlayerStates(snapshotLocal);
+    this.applyRaceSnapshot(snapshotPlayers, this.soloPickups, this.soloCheckpointUs.length);
+  }
+
+  private raceSimEventToRaceEvent(ev: RaceSimEvent, at: number): RaceEvent | null {
+    const id = `solo-${++this.soloEventSequence}`;
+    switch (ev.kind) {
+      case "pickup":
+        return { id, kind: "pickup", actorId: ev.actorId, item: ev.item, slot: ev.slot, at };
+      case "fire":
+        return { id, kind: "fire", actorId: ev.actorId, targetId: ev.targetId, outcome: ev.outcome, at };
+      case "blocked":
+        return { id, kind: "blocked", actorId: ev.actorId, targetId: ev.targetId, at };
+      case "takedown":
+        return { id, kind: "takedown", actorId: ev.actorId, targetId: ev.targetId, at };
+      case "shield":
+        return { id, kind: "shield", actorId: ev.actorId, at };
+      case "respawn":
+        return { id, kind: "respawn", targetId: ev.targetId, at };
+      default:
+        return null;
+    }
   }
 
   private maybeReportRaceState(now: number): void {
@@ -2331,25 +2550,7 @@ export class App {
       this.phase = "finished";
       this.musicSync?.stop();
       this.playRaceSfx("won");
-      this.showResults({
-        roomCode: "SOLO",
-        setup: {
-          songId: "solo",
-          fictionId: this.fictionId,
-          seed: 0,
-          playerCap: 1,
-        },
-        entries: [
-          {
-            clientId: this.launch.localPlayerId ?? "solo",
-            name: this.getLocalPlayerName(),
-            placement: 1,
-            status: "finished",
-            finishTimeMs: Math.round(this.elapsedRaceTime * 1000),
-            takedowns: 0,
-          },
-        ],
-      });
+      this.showResults(this.buildSoloResults("finished"));
       return;
     }
 
@@ -2358,26 +2559,74 @@ export class App {
       this.phase = "finished";
       this.musicSync?.pause();
       this.playRaceSfx("lost");
-      this.showResults({
-        roomCode: "SOLO",
-        setup: {
-          songId: "solo",
-          fictionId: this.fictionId,
-          seed: 0,
-          playerCap: 1,
-        },
-        entries: [
-          {
-            clientId: this.launch.localPlayerId ?? "solo",
-            name: this.getLocalPlayerName(),
-            placement: 1,
-            status: "dnf",
-            finishTimeMs: null,
-            takedowns: 0,
-          },
-        ],
-      });
+      this.showResults(this.buildSoloResults("dnf"));
     }
+  }
+
+  private buildSoloResults(localStatus: "finished" | "dnf"): RaceResults {
+    const localEntry = {
+      clientId: this.launch.localPlayerId ?? "solo",
+      name: this.getLocalPlayerName(),
+      carVariant: this.launch.carVariant ?? "vector",
+      placement: 1,
+      status: localStatus,
+      finishTimeMs: localStatus === "finished" ? Math.round(this.elapsedRaceTime * 1000) : null,
+      takedowns: this.soloLocalTakedowns,
+      trackU: this.vehicleController.state.trackU,
+      finishedAt: this.soloLocalFinishedAt,
+      checkpointIndex: this.localCheckpointIndex,
+    };
+    const bots = this.botSimulator
+      ? this.botSimulator.botRacers.map((racer) => {
+          const roster = this.latestRoster.find((r) => r.clientId === racer.clientId);
+          const status = racer.finishedAt !== null ? "finished" as const : "dnf" as const;
+          const finishTimeMs = racer.finishedAt !== null && this.soloRaceStartAt > 0
+            ? Math.max(0, racer.finishedAt - this.soloRaceStartAt)
+            : null;
+          return {
+            clientId: racer.clientId,
+            name: roster?.name ?? racer.clientId,
+            carVariant: roster?.carVariant ?? "vector",
+            placement: racer.placement,
+            status,
+            finishTimeMs,
+            takedowns: racer.takedowns,
+            trackU: racer.trackU,
+            finishedAt: racer.finishedAt,
+            checkpointIndex: racer.checkpointIndex,
+          };
+        })
+      : [];
+    const combined = [localEntry, ...bots];
+    combined.sort((a, b) => {
+      // Finished first by finish time, then by checkpoint + trackU
+      if (a.finishedAt !== null || b.finishedAt !== null) {
+        if (a.finishedAt !== null && b.finishedAt !== null) return a.finishedAt - b.finishedAt;
+        return a.finishedAt !== null ? -1 : 1;
+      }
+      if (a.checkpointIndex !== b.checkpointIndex) return b.checkpointIndex - a.checkpointIndex;
+      return b.trackU - a.trackU;
+    });
+    combined.forEach((entry, index) => {
+      entry.placement = index + 1;
+    });
+    return {
+      roomCode: "SOLO",
+      setup: {
+        songId: "solo",
+        fictionId: this.fictionId,
+        seed: 0,
+        playerCap: Math.max(1, combined.length),
+      },
+      entries: combined.map((entry) => ({
+        clientId: entry.clientId,
+        name: entry.name,
+        placement: entry.placement,
+        status: entry.status,
+        finishTimeMs: entry.finishTimeMs,
+        takedowns: entry.takedowns,
+      })),
+    };
   }
 
   private playRaceSfx(state: "won" | "lost"): void {
@@ -2400,7 +2649,7 @@ export class App {
   }
 
   private renderRoster(): void {
-    if (this.launch.mode !== "multiplayer") {
+    if (this.launch.mode !== "multiplayer" && !this.botSimulator) {
       this.summaryHud.style.display = "none";
       return;
     }
@@ -2722,6 +2971,9 @@ export class App {
       this.handleActionEdges();
       this.maybeReportRaceState(now);
       if (this.launch.mode !== "multiplayer") {
+        if (this.botSimulator) {
+          this.tickSoloWithBots(deltaSeconds, now);
+        }
         this.updateSoloRaceState();
       }
     }

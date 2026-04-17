@@ -97,12 +97,24 @@ export class VehicleController {
   private temporaryBoostTimer = 0;
   private temporaryBoostMultiplier = 1;
   private temporaryTopSpeedBonus = 0;
+  private catchupThrustMultiplier = 1;
+  private catchupTopSpeedBonus = 0;
 
   get currentTopSpeed(): number {
     return this.effectiveTopSpeed;
   }
 
   constructor(readonly tuning: VehicleTuning = defaultVehicleTuning) {}
+
+  /**
+   * Sustained catch-up bonus for AI rubberbanding. Unlike applyPickupBoost
+   * this does not decay; the caller sets it per frame based on how far the
+   * racer is behind the leader. Never slows a racer down.
+   */
+  setCatchupBonus(thrustMultiplier: number, topSpeedBonus: number): void {
+    this.catchupThrustMultiplier = Math.max(1, thrustMultiplier);
+    this.catchupTopSpeedBonus = Math.max(0, topSpeedBonus);
+  }
 
   setTrack(track: Track): void {
     this.track = track;
@@ -160,12 +172,15 @@ export class VehicleController {
     const activeBoostMultiplier = Math.max(
       trackBoost,
       this.temporaryBoostTimer > 0 ? this.temporaryBoostMultiplier : 1,
+      this.catchupThrustMultiplier,
     );
     s.boostMultiplier = activeBoostMultiplier;
 
-    // Energy-based effective top speed
+    // Energy-based effective top speed. Catch-up adds a sustained top-speed
+    // bonus so AI rubberbanding can close gaps without capping out.
     this.effectiveTopSpeed = this.track.getTopSpeedAt(s.trackU)
-      + (this.temporaryBoostTimer > 0 ? this.temporaryTopSpeedBonus : 0);
+      + (this.temporaryBoostTimer > 0 ? this.temporaryTopSpeedBonus : 0)
+      + this.catchupTopSpeedBonus;
 
     if (s.airborne) {
       this.updateAirborne(dt);
