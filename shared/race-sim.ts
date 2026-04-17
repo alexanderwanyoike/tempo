@@ -149,6 +149,7 @@ export function resolveFire(
   racers: Iterable<RaceSimRacer>,
   attacker: RaceSimRacer,
   now: number,
+  preferredTarget?: RaceSimRacer | null,
 ): RaceSimEvent[] {
   if (attacker.offensiveItem !== "missile") return [];
   if (attacker.finishedAt !== null || attacker.takenDownUntil > now) return [];
@@ -156,15 +157,28 @@ export function resolveFire(
   attacker.offensiveItem = null;
 
   let target: RaceSimRacer | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const candidate of racers) {
-    if (candidate.clientId === attacker.clientId) continue;
-    if (candidate.finishedAt !== null || candidate.takenDownUntil > now) continue;
-    const uDelta = candidate.trackU - attacker.trackU;
-    if (uDelta < RACE_SIM.MISSILE_MIN_RANGE_U || uDelta > RACE_SIM.MISSILE_MAX_RANGE_U) continue;
-    if (uDelta < bestDistance) {
-      bestDistance = uDelta;
-      target = candidate;
+
+  if (preferredTarget
+    && preferredTarget.clientId !== attacker.clientId
+    && preferredTarget.finishedAt === null
+    && preferredTarget.takenDownUntil <= now) {
+    const uDelta = preferredTarget.trackU - attacker.trackU;
+    if (uDelta >= RACE_SIM.MISSILE_MIN_RANGE_U && uDelta <= RACE_SIM.MISSILE_MAX_RANGE_U) {
+      target = preferredTarget;
+    }
+  }
+
+  if (!target) {
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of racers) {
+      if (candidate.clientId === attacker.clientId) continue;
+      if (candidate.finishedAt !== null || candidate.takenDownUntil > now) continue;
+      const uDelta = candidate.trackU - attacker.trackU;
+      if (uDelta < RACE_SIM.MISSILE_MIN_RANGE_U || uDelta > RACE_SIM.MISSILE_MAX_RANGE_U) continue;
+      if (uDelta < bestDistance) {
+        bestDistance = uDelta;
+        target = candidate;
+      }
     }
   }
 

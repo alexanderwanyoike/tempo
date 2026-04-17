@@ -30,29 +30,43 @@ type DifficultyProfile = {
   shieldCooldownMs: number;
   brakeThresholdRatio: number;
   throttleDropoutChance: number;
+  // Asymmetric rubberband: only helps bots BEHIND the leader.
+  // deadZoneU: gap below which no catch-up is applied. maxGapU: gap at which
+  // catch-up is saturated. maxThrustMultiplier / maxTopSpeedBonus: the peak
+  // catch-up applied at maxGapU.
+  catchupDeadZoneU: number;
+  catchupMaxGapU: number;
+  catchupMaxThrustMultiplier: number;
+  catchupMaxTopSpeedBonus: number;
+  // Leader pressure: should this bot prioritise firing at the player / leader?
+  preferLeaderTargeting: boolean;
 };
 
-// The human player's default VehicleController runs topSpeed 90. Keeping bots
-// within a window around that floor keeps races winnable: Easy bots are
-// visibly slower so the player naturally pulls ahead, Medium bots are roughly
-// matched, Hard bots edge slightly above so the player has to race well to
-// win, but not so far above that a takedown means the race is over.
+// Stat deltas between difficulties stay modest because most of the challenge
+// comes from asymmetric catch-up rubberband (bots behind get a speed boost,
+// never a cap on leaders) and leader-targeted combat pressure. Raw topSpeed
+// lives in a narrow window around the player's base 90.
 const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
   easy: {
-    topSpeed: 74,
-    thrust: 48,
-    steeringRate: 48,
-    steeringResponse: 12,
-    lateralGrip: 2.8,
+    topSpeed: 80,
+    thrust: 50,
+    steeringRate: 52,
+    steeringResponse: 13,
+    lateralGrip: 2.9,
     laneHoldMinMs: 1700,
     laneHoldJitterMs: 900,
-    fireCooldownMs: 1200,
+    fireCooldownMs: 1400,
     shieldCooldownMs: 3200,
     brakeThresholdRatio: 1.02,
     throttleDropoutChance: 0.14,
+    catchupDeadZoneU: 1,
+    catchupMaxGapU: 1,
+    catchupMaxThrustMultiplier: 1,
+    catchupMaxTopSpeedBonus: 0,
+    preferLeaderTargeting: false,
   },
   medium: {
-    topSpeed: 86,
+    topSpeed: 88,
     thrust: 56,
     steeringRate: 60,
     steeringResponse: 15,
@@ -63,19 +77,29 @@ const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
     shieldCooldownMs: 1600,
     brakeThresholdRatio: 1.12,
     throttleDropoutChance: 0.04,
+    catchupDeadZoneU: 0.04,
+    catchupMaxGapU: 0.18,
+    catchupMaxThrustMultiplier: 1.1,
+    catchupMaxTopSpeedBonus: 8,
+    preferLeaderTargeting: true,
   },
   hard: {
-    topSpeed: 94,
-    thrust: 62,
+    topSpeed: 92,
+    thrust: 60,
     steeringRate: 66,
-    steeringResponse: 18,
-    lateralGrip: 3.5,
-    laneHoldMinMs: 850,
+    steeringResponse: 17,
+    lateralGrip: 3.4,
+    laneHoldMinMs: 900,
     laneHoldJitterMs: 450,
-    fireCooldownMs: 320,
-    shieldCooldownMs: 900,
-    brakeThresholdRatio: 1.18,
+    fireCooldownMs: 340,
+    shieldCooldownMs: 1000,
+    brakeThresholdRatio: 1.16,
     throttleDropoutChance: 0,
+    catchupDeadZoneU: 0.025,
+    catchupMaxGapU: 0.15,
+    catchupMaxThrustMultiplier: 1.2,
+    catchupMaxTopSpeedBonus: 18,
+    preferLeaderTargeting: true,
   },
 };
 
@@ -263,12 +287,21 @@ export class BotSimulator {
    * game state for the human racer.
    */
   update(deltaSeconds: number, now: number, localRacer: RaceSimRacer): void {
+    // Leader trackU feeds the catch-up rubberband. Pool includes the local
+    // player so a strong player pulls catch-up up on the bots that trail them.
+    let leaderTrackU = localRacer.finishedAt !== null ? 1 : localRacer.trackU;
+    for (const agent of this.agents) {
+      const u = agent.racer.finishedAt !== null ? 1 : agent.racer.trackU;
+      if (u > leaderTrackU) leaderTrackU = u;
+    }
+
     for (const agent of this.agents) {
       if (agent.racer.finishedAt !== null || agent.racer.takenDownUntil > now) {
         resetInput(agent.input);
       } else {
         this.driveAI(agent, localRacer, now);
       }
+      this.applyCatchup(agent, leaderTrackU);
       agent.vehicleController.update(deltaSeconds, agent.input);
       // Sync simulator racer from physics truth
       const s = agent.vehicleController.state;
@@ -397,7 +430,13 @@ export class BotSimulator {
     for (const agent of this.agents) {
       if (agent.pendingFire) {
         agent.pendingFire = false;
-        const events = simResolveFire(allRacers, agent.racer, now);
+        const preferredTarget = this.pickFireTarget(
+          allRacers,
+          agent.racer,
+          now,
+          agent.profile.preferLeaderTargeting,
+        );
+        const events = simResolveFire(allRacers, agent.racer, now, preferredTarget);
         this.pendingEvents.push(...events);
       }
       if (agent.pendingShield) {
@@ -436,10 +475,12 @@ export class BotSimulator {
     agent.input.throttle = !throttleHiccup;
     agent.input.brake = racer.speed > nextTopSpeed * profile.brakeThresholdRatio;
 
-    // Fire missile at the closest valid target ahead.
+    // Fire missile. Difficulties that prefer leader targeting pick the best
+    // placement in range before falling back to closest-ahead. That keeps
+    // combat pressure on the player when they lead.
     if (racer.offensiveItem === "missile" && now >= agent.fireCooldownUntil) {
       const allRacers = [localRacer, ...this.agents.map((a) => a.racer)];
-      if (this.hasFireTarget(allRacers, racer, now)) {
+      if (this.pickFireTarget(allRacers, racer, now, profile.preferLeaderTargeting) !== null) {
         agent.pendingFire = true;
         agent.fireCooldownUntil = now + profile.fireCooldownMs;
       }
@@ -491,19 +532,49 @@ export class BotSimulator {
     return best;
   }
 
-  private hasFireTarget(
+  private pickFireTarget(
     racers: readonly RaceSimRacer[],
     attacker: RaceSimRacer,
     now: number,
-  ): boolean {
+    preferLeader: boolean,
+  ): RaceSimRacer | null {
+    let leaderTarget: RaceSimRacer | null = null;
+    let leaderPlacement = Number.POSITIVE_INFINITY;
+    let closestTarget: RaceSimRacer | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
     for (const candidate of racers) {
       if (candidate.clientId === attacker.clientId) continue;
       if (candidate.finishedAt !== null || candidate.takenDownUntil > now) continue;
       const du = candidate.trackU - attacker.trackU;
       if (du < RACE_SIM.MISSILE_MIN_RANGE_U || du > RACE_SIM.MISSILE_MAX_RANGE_U) continue;
-      return true;
+      if (du < closestDistance) {
+        closestDistance = du;
+        closestTarget = candidate;
+      }
+      if (candidate.placement < leaderPlacement) {
+        leaderPlacement = candidate.placement;
+        leaderTarget = candidate;
+      }
     }
-    return false;
+    if (preferLeader && leaderTarget) return leaderTarget;
+    return closestTarget;
+  }
+
+  private applyCatchup(agent: BotAgent, leaderTrackU: number): void {
+    const profile = agent.profile;
+    const gap = leaderTrackU - agent.racer.trackU;
+    if (gap <= profile.catchupDeadZoneU
+      || profile.catchupMaxThrustMultiplier <= 1
+      || agent.racer.finishedAt !== null
+      || agent.racer.takenDownUntil > 0) {
+      agent.vehicleController.setCatchupBonus(1, 0);
+      return;
+    }
+    const span = Math.max(1e-5, profile.catchupMaxGapU - profile.catchupDeadZoneU);
+    const factor = Math.min(1, (gap - profile.catchupDeadZoneU) / span);
+    const thrust = 1 + (profile.catchupMaxThrustMultiplier - 1) * factor;
+    const topSpeed = profile.catchupMaxTopSpeedBonus * factor;
+    agent.vehicleController.setCatchupBonus(thrust, topSpeed);
   }
 }
 
