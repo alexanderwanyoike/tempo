@@ -2,7 +2,14 @@ export type ReactiveBands = {
   low: number;
   mid: number;
   high: number;
+  kick: number;
+  energyLevel: number;
 };
+
+const KICK_FLUX_START_BIN = 1;
+const KICK_FLUX_END_BIN = 5;
+const KICK_FLUX_GAIN = 7.5;
+const SLOW_ENERGY_EMA = 0.035;
 
 // Shared AudioContext unlocked during a user gesture. iOS Safari requires
 // either creating a context OR calling resume() inside the gesture task;
@@ -63,7 +70,8 @@ export class MusicSync {
   private buffer: AudioBuffer | null = null;
   private analyser: AnalyserNode | null = null;
   private analyserData: Uint8Array<ArrayBuffer> | null = null;
-  private readonly smoothedBands: ReactiveBands = { low: 0, mid: 0, high: 0 };
+  private readonly smoothedBands: ReactiveBands = { low: 0, mid: 0, high: 0, kick: 0, energyLevel: 0 };
+  private readonly prevKickBins = new Uint8Array(KICK_FLUX_END_BIN - KICK_FLUX_START_BIN);
   private startCtxTime = 0;
   private started = false;
   private rawData: ArrayBuffer | null = null;
@@ -95,10 +103,15 @@ export class MusicSync {
     const low = this.averageBand(0, 12);
     const mid = this.averageBand(12, 68);
     const high = this.averageBand(68, this.analyserData.length);
+    const kick = this.computeKickFlux();
 
     this.smoothedBands.low = this.smoothBand(this.smoothedBands.low, low);
     this.smoothedBands.mid = this.smoothBand(this.smoothedBands.mid, mid);
     this.smoothedBands.high = this.smoothBand(this.smoothedBands.high, high);
+    this.smoothedBands.kick = this.smoothKick(this.smoothedBands.kick, kick);
+
+    const rawEnergy = Math.min(1, (low + mid + high) / 3);
+    this.smoothedBands.energyLevel = this.smoothedBands.energyLevel * (1 - SLOW_ENERGY_EMA) + rawEnergy * SLOW_ENERGY_EMA;
 
     return { ...this.smoothedBands };
   }
@@ -139,6 +152,9 @@ export class MusicSync {
     this.smoothedBands.low = 0;
     this.smoothedBands.mid = 0;
     this.smoothedBands.high = 0;
+    this.smoothedBands.kick = 0;
+    this.smoothedBands.energyLevel = 0;
+    this.prevKickBins.fill(0);
     this.buffer = null;
     this.rawData = null;
     this.started = false;
@@ -165,7 +181,7 @@ export class MusicSync {
       this.source.buffer = this.buffer;
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
-      this.analyser.smoothingTimeConstant = 0.82;
+      this.analyser.smoothingTimeConstant = 0.25;
       this.analyserData = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
       this.source.connect(this.analyser);
       this.analyser.connect(this.ctx.destination);
@@ -215,6 +231,28 @@ export class MusicSync {
   }
 
   private smoothBand(previous: number, next: number): number {
-    return previous * 0.74 + next * 0.26;
+    if (next > previous) {
+      return previous * 0.1 + next * 0.9;
+    }
+    return previous * 0.78 + next * 0.22;
+  }
+
+  private smoothKick(previous: number, next: number): number {
+    if (next > previous) return next;
+    return previous * 0.62 + next * 0.38;
+  }
+
+  private computeKickFlux(): number {
+    if (!this.analyserData) return 0;
+    let flux = 0;
+    for (let i = KICK_FLUX_START_BIN; i < KICK_FLUX_END_BIN; i++) {
+      const current = this.analyserData[i];
+      const prev = this.prevKickBins[i - KICK_FLUX_START_BIN];
+      if (current > prev) flux += current - prev;
+      this.prevKickBins[i - KICK_FLUX_START_BIN] = current;
+    }
+    const bins = KICK_FLUX_END_BIN - KICK_FLUX_START_BIN;
+    const normalized = flux / (bins * 255);
+    return Math.min(1, normalized * KICK_FLUX_GAIN);
   }
 }

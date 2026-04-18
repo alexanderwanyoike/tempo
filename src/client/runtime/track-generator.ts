@@ -12,6 +12,7 @@ import type { SongDefinition, SongSection, SongSectionType } from "../../../shar
 import type { ChunkType } from "./chunks.js";
 import { chunkFns, type ChunkParams } from "./chunks.js";
 import { mulberry32 } from "./prng.js";
+import { TrackPresentationController, type RhythmicState } from "./track-presentation.js";
 import { pickChunkForSection, scaleChunkParams } from "./section-rules.js";
 import type { Track, TrackFeature, TrackFrame, TrackObject, TrackQuery } from "./track-builder.js";
 import {
@@ -60,6 +61,7 @@ export class TrackGenerator implements Track {
   private readonly trackObjects: TrackObject[];
   private readonly trackFeatures: TrackFeature[];
   private readonly sampleCount: number;
+  private readonly presentation: TrackPresentationController;
 
   constructor(
     readonly song: SongDefinition,
@@ -80,12 +82,18 @@ export class TrackGenerator implements Track {
     this.trackObjects = this.generateTrackObjects(seed);
 
     // Build meshes (section-aware walls)
+    const road = buildRoadMesh(this.frames, this.halfWidthSamples, song.sections, this.sectionBoundaries);
+    const leftWall = buildSectionWallMesh(this.frames, this.halfWidthSamples, -1, song.sections, this.sectionBoundaries);
+    const rightWall = buildSectionWallMesh(this.frames, this.halfWidthSamples, 1, song.sections, this.sectionBoundaries);
+    const centerLine = buildCenterLineMesh(this.frames);
+
     this.meshGroup = new Group();
-    this.meshGroup.add(buildRoadMesh(this.frames, this.halfWidthSamples, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, -1, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildSectionWallMesh(this.frames, this.halfWidthSamples, 1, song.sections, this.sectionBoundaries));
-    this.meshGroup.add(buildCenterLineMesh(this.frames));
+    this.meshGroup.add(road);
+    this.meshGroup.add(leftWall);
+    this.meshGroup.add(rightWall);
+    this.meshGroup.add(centerLine);
     this.meshGroup.add(this.buildTrackObjectMeshes());
+    this.presentation = new TrackPresentationController(road, [leftWall, rightWall], centerLine);
   }
 
   private generateControlPoints(seed: number, targetLength: number): { points: Vector3[]; features: TrackFeature[] } {
@@ -200,7 +208,11 @@ export class TrackGenerator implements Track {
   }
 
   getPointAt(u: number): Vector3 {
-    return this.centerline.getPointAt(TMath.clamp(u, 0, 0.9999));
+    const t = TMath.clamp(u, 0, 0.9999) * this.sampleCount;
+    const i = Math.floor(t);
+    const frac = t - i;
+    const j = Math.min(i + 1, this.sampleCount);
+    return this.frames.samples[i].clone().lerp(this.frames.samples[j], frac);
   }
 
   getStartPosition(): { position: Vector3; yaw: number } {
@@ -213,9 +225,9 @@ export class TrackGenerator implements Track {
 
   getRespawnAt(u: number): { position: Vector3; yaw: number } {
     const clampedU = Math.max(0, Math.min(u, 1));
-    const pos = this.centerline.getPointAt(clampedU);
+    const pos = this.getPointAt(clampedU);
     pos.y += 0.45;
-    const t = this.centerline.getTangentAt(Math.min(clampedU, 0.9999)).normalize();
+    const t = this.getFrameAt(clampedU).tangent;
     const yaw = Math.atan2(-t.x, -t.z);
     return { position: pos, yaw };
   }
@@ -316,6 +328,14 @@ export class TrackGenerator implements Track {
     return this.trackFeatures;
   }
 
+  setLoadingBlend(blend: number, pulse = 0): void {
+    this.presentation.setLoadingBlend(blend, pulse);
+  }
+
+  setRhythmicPulse(state: RhythmicState): void {
+    this.presentation.setRhythmicPulse(state);
+  }
+
   private getSectionAt(u: number): SongSection | null {
     let si = 0;
     for (let i = this.sectionBoundaries.length - 1; i >= 0; i--) {
@@ -363,8 +383,8 @@ export class TrackGenerator implements Track {
 
     for (let step = 0; step < 4; step++) {
       const uMid = (uLow + uHigh) / 2;
-      const pLow = this.centerline.getPointAt(Math.min(uLow, 0.9999));
-      const pHigh = this.centerline.getPointAt(Math.min(uHigh, 0.9999));
+      const pLow = this.getPointAt(uLow);
+      const pHigh = this.getPointAt(uHigh);
       if (this.xzDistSq(position, pLow) < this.xzDistSq(position, pHigh)) {
         uHigh = uMid;
       } else {
@@ -373,7 +393,7 @@ export class TrackGenerator implements Track {
     }
 
     const uFinal = Math.min((uLow + uHigh) / 2, 0.9999);
-    const center = this.centerline.getPointAt(uFinal);
+    const center = this.getPointAt(uFinal);
     const frame = this.getFrameAt(uFinal);
     const toPos = position.clone().sub(center);
     const lateralOffset = toPos.dot(frame.right);

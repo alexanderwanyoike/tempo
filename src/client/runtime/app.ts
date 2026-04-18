@@ -15,6 +15,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  MeshToonMaterial,
   PerspectiveCamera,
   Quaternion,
   Scene,
@@ -46,29 +47,35 @@ import {
   getCarAssetDefinition,
   isSharedCarMesh,
   loadCarMesh,
+  prefetchCarMesh,
 } from "./car-assets";
+import { HologramMaterial } from "./hologram-material";
+import { HologramPlume } from "./hologram-plume";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
 import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
-
-type TrailSample = {
-  position: Vector3;
-  quaternion: Quaternion;
-  boost: number;
-};
-
-type SpeedTracerLayer = {
-  mesh: Mesh;
-  material: MeshBasicMaterial;
-  side: 1 | -1;
-  lateralOffset: number;
-  verticalOffset: number;
-  sampleStride: number;
-  sampleOffset: number;
-};
+import { BotSimulator, buildBotConfigs, type BotDifficulty } from "./bot-simulator";
+import {
+  createOutlineMaterial,
+  createOutlineMesh,
+  createToonGradientMap,
+  toToonMaterial,
+} from "./car-toon-shader";
+import { HoverJets } from "./hover-jets";
+import { BoostRibbons } from "./boost-ribbons";
+import { BoostFxPass } from "./boost-fx-pass";
+import { SpeedLinesPass } from "./speed-lines-pass";
+import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
+import {
+  RACE_SIM,
+  buildPickups as simBuildPickups,
+  type RaceSimEvent,
+  type RaceSimRacer,
+} from "../../../shared/race-sim";
+import { carVariants } from "../../../shared/network-types";
 
 type AppPhase = "staging" | "countdown" | "running" | "finished";
 type AppMode = "solo" | "multiplayer";
@@ -80,12 +87,18 @@ type RemoteCarVisual = {
   group: Group;
   bodyPivot: Group;
   fallbackGroup: Group;
-  fallbackBodyMaterial: MeshStandardMaterial;
-  fallbackCockpitMaterial: MeshStandardMaterial;
+  fallbackBodyMaterial: HologramMaterial;
+  fallbackCockpitMaterial: HologramMaterial;
   feedbackGlow: Mesh;
   feedbackGlowMaterial: MeshBasicMaterial;
+  hoverJets: HoverJets;
   assetGroup: Group | null;
   assetRevision: number;
+  hydratePromise: Promise<void>;
+  plume: HologramPlume;
+  materializeStartedAt: number | null;
+  materializeDurationMs: number;
+  materializeDematerialize: boolean;
   targetTrackU: number;
   targetLateralOffset: number;
   currentTrackU: number;
@@ -97,6 +110,17 @@ type PickupVisual = {
   kind: PickupSpawnState["kind"];
   u: number;
   lane: number;
+};
+
+type CountdownResetTransition = {
+  startedAt: number;
+  durationMs: number;
+  fromTrackU: number;
+  fromLateralOffset: number;
+  fromSpeed: number;
+  toTrackU: number;
+  toLateralOffset: number;
+  toSpeed: number;
 };
 
 type CarPalette = {
@@ -124,6 +148,8 @@ export type AppLaunchOptions = {
   localPlayerName?: string | null;
   carVariant?: CarVariant;
   roster?: RoomPlayerState[];
+  botCount?: number;
+  botDifficulty?: BotDifficulty;
   onRetry?: (() => void) | null;
   onBackToMenu?: (() => void) | null;
   onBackToLobby?: (() => void) | null;
@@ -140,14 +166,12 @@ const NAME_LABEL_FULL_RANGE = 110;
 const NAME_LABEL_FADE_RANGE = 140;
 // Mirrors server SHIELD_DURATION_MS. Purely cosmetic - the server is the
 // source of truth for the actual shield window.
-const SHIELD_VISUAL_DURATION_MS = 120000;
+const SHIELD_VISUAL_DURATION_MS = 10000;
 
 export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
   private static readonly BOOST_COLOR = new Color("#57ff36");
   private static readonly BOOST_HOT_COLOR = new Color("#c8ff7a");
-  private static readonly TRACER_COLOR = new Color("#7dff48");
-  private static readonly TRACER_HOT_COLOR = new Color("#f9fff2");
   private static readonly SLOWDOWN_FLASH_COLOR = new Color("#ff4b4b");
   private static readonly WIN_SFX_URL = new URL("../../../assets/audio/Win Backspin.wav", import.meta.url).href;
   private static readonly LOSE_SFX_URL = new URL("../../../assets/audio/Lose Backspin.wav", import.meta.url).href;
@@ -155,17 +179,15 @@ export class App {
   private readonly renderer: WebGLRenderer;
   private readonly composer: EffectComposer;
   private readonly bloomPass: UnrealBloomPass;
+  private readonly boostFxPass: BoostFxPass;
+  private readonly speedLinesPass: SpeedLinesPass | null;
+  private speedLinesStrength = 0;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly localVehicle: RemoteCarVisual;
   private readonly combatVfx: CombatVfx;
   private readonly pickupGroup = new Group();
-  private readonly boostTrailGroup = new Group();
-  private readonly boostTrailMeshes: Mesh[] = [];
-  private readonly boostTrailMaterials: MeshBasicMaterial[] = [];
-  private readonly boostTrailHistory: TrailSample[] = [];
-  private readonly speedTracerGroup = new Group();
-  private readonly speedTracers: SpeedTracerLayer[] = [];
+  private readonly boostRibbons: BoostRibbons;
   private readonly remoteCars = new Map<string, RemoteCarVisual>();
   private readonly pickupVisuals = new Map<string, PickupVisual>();
   private readonly winSfx = new Audio(App.WIN_SFX_URL);
@@ -173,6 +195,8 @@ export class App {
   private readonly input: VehicleInput;
   private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
+  private readonly carToonGradientMap = createToonGradientMap();
+  private readonly carOutlineMaterial = createOutlineMaterial();
   private readonly cameraMode: CameraMode;
   private track: Track;
   private trackObjects: readonly TrackObject[];
@@ -215,19 +239,26 @@ export class App {
   private readonly trackObjectTriggers = new Set<string>();
   private readonly serverPlayers = new Map<string, RacePlayerState>();
   private readonly nameLabels = new Map<string, HTMLDivElement>();
-  private readonly reducedFx: boolean;
-  private readonly boostTrailSampleLimit: number;
   private readonly baseBloomStrength = 0.4;
 
   private animationFrameId: number | null = null;
   private destroyed = false;
   private visualsInitialized = false;
   private lastFrameTime = 0;
+  private sceneElapsedTime = 0;
   private elapsedRaceTime = 0;
   private latestReactiveBands: ReactiveBands | null = null;
+  private latestSectionEnergy = 0;
   private phase: AppPhase = "staging";
   private pendingStartAt = 0;
+  private countdownDurationMs = 2500;
+  private countdownResetTransition: CountdownResetTransition | null = null;
   private audioReady = false;
+  private vehicleMeshesReadyPromise: Promise<void> = Promise.resolve();
+  private vehicleMeshesReady = true;
+  private vehicleMeshTotal = 0;
+  private vehicleMeshReadyCount = 0;
+  private readonly hologramMaterials: HologramMaterial[] = [];
   private countdownStarted = false;
   private latestCheckpointCount = 1;
   private localPlacement = 1;
@@ -243,6 +274,19 @@ export class App {
   private lastFirePressed = false;
   private lastShieldPressed = false;
   private latestRoster: RoomPlayerState[] = [];
+  private botSimulator: BotSimulator | null = null;
+  private soloPickups: PickupSpawnState[] = [];
+  private soloCheckpointUs: readonly number[] = [];
+  private soloLocalPrevTrackU = START_TRACK_U;
+  private soloLocalPrevLateralOffset = 0;
+  private soloLocalShieldUntil = 0;
+  private soloLocalTakedowns = 0;
+  private soloLocalFinishedAt: number | null = null;
+  private soloLocalRespawnRevision = 0;
+  private soloRaceStartAt = 0;
+  private soloLocalRespawnTrackU = START_TRACK_U;
+  private soloLocalRespawnLateralOffset = 0;
+  private soloEventSequence = 0;
   private lastStatusMessage = "";
   private boostSurge = 0;
   private pickupSurge = 0;
@@ -316,8 +360,6 @@ export class App {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.reducedFx = window.matchMedia("(pointer: coarse)").matches;
-    this.boostTrailSampleLimit = this.reducedFx ? 30 : 42;
 
     this.scene = new Scene();
     this.scene.background = new Color("#05070c");
@@ -332,6 +374,18 @@ export class App {
       0.3,
     );
     this.composer.addPass(this.bloomPass);
+    this.boostFxPass = new BoostFxPass();
+    this.composer.addPass(this.boostFxPass);
+    // Speed-line pass adds another full-screen shader hit, so gate it
+    // behind the same coarse-pointer check we use for other reduced-fx
+    // decisions. Mobile keeps the ribbons + boost fx but not the streaks.
+    const reducedFx = window.matchMedia("(pointer: coarse)").matches;
+    if (reducedFx) {
+      this.speedLinesPass = null;
+    } else {
+      this.speedLinesPass = new SpeedLinesPass();
+      this.composer.addPass(this.speedLinesPass);
+    }
 
     this.localVehicle = this.createVehicleVisual(launch.carVariant ?? "vector");
     this.scene.add(this.localVehicle.group);
@@ -353,16 +407,17 @@ export class App {
     this.scene.add(this.environment.group);
     this.scene.add(this.track.meshGroup);
     this.scene.add(this.pickupGroup);
-    this.scene.add(this.boostTrailGroup);
-    this.scene.add(this.speedTracerGroup);
+    this.boostRibbons = new BoostRibbons(App.BOOST_COLOR, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    this.scene.add(this.boostRibbons.group);
     this.scene.add(this.camera);
     this.combatVfx = new CombatVfx(
       this.scene,
       (id) => this.getVehicleGroup(id),
       this.root,
     );
-    this.createBoostTrailMeshes();
-    this.createSpeedTracerMeshes();
     this.configureSfx();
 
     this.vehicleController.setTrack(this.track);
@@ -370,6 +425,39 @@ export class App {
     this.vehicleController.forceTrackState(START_TRACK_U);
 
     this.latestRoster = [...(launch.roster ?? [])];
+
+    // Solo AI bots: build pickups, checkpoints, and a BotSimulator so solo
+    // races get opponents. Reuses the shared race rules used by the multiplayer
+    // server, so bot races match multiplayer semantics.
+    const desiredBotCount = launch.mode === "multiplayer"
+      ? 0
+      : Math.max(0, Math.min(7, Math.floor(launch.botCount ?? 0)));
+    if (desiredBotCount > 0 && song) {
+      this.soloCheckpointUs = buildCheckpointUs(song);
+      this.soloPickups = simBuildPickups(track, seed);
+      const pickedVariant = launch.carVariant ?? "vector";
+      const botPool = carVariants.filter((variant) => variant !== pickedVariant);
+      const difficulty: BotDifficulty = launch.botDifficulty ?? "medium";
+      const botConfigs = buildBotConfigs(desiredBotCount, botPool, START_TRACK_U, difficulty, seed);
+      this.botSimulator = new BotSimulator(track, this.soloPickups, this.soloCheckpointUs, botConfigs);
+      const localRoster: RoomPlayerState = {
+        clientId: launch.localPlayerId ?? "solo",
+        name: launch.localPlayerName ?? "Pilot 1",
+        carVariant: pickedVariant,
+        connected: true,
+        ready: true,
+        isHost: true,
+        isActiveRacer: true,
+        preload: { sceneReady: true, audioReady: true },
+      };
+      this.latestRoster = this.botSimulator.buildRoster(localRoster);
+      const raceVariants = new Set<CarVariant>([pickedVariant]);
+      for (const bot of botConfigs) raceVariants.add(bot.carVariant);
+      this.preloadVehicleMeshes(raceVariants);
+    } else if (launch.mode !== "multiplayer" && launch.carVariant) {
+      this.preloadVehicleMeshes([launch.carVariant]);
+    }
+
     this.runtimeUiStyles = this.createRuntimeUiStyles();
     this.debugHud = this.createDebugHud(debugHudEnabled);
     this.hud = this.createHud();
@@ -393,11 +481,11 @@ export class App {
 
     if (launch.mode === "multiplayer") {
       this.statusOverlay.style.display = "none";
-      this.lastStatusMessage = "Warmup lane live. Audio buffering.";
+      this.lastStatusMessage = "Loading lane forming. Audio buffering.";
     } else {
       this.setOverlayMessage(
-        "Loading Track Audio",
-        "Staging the real map while the track audio buffers.",
+        "Loading Fiction Online",
+        "Spinning up the loading lane while the track audio buffers.",
       );
     }
   }
@@ -451,26 +539,23 @@ export class App {
 
     if (this.launch.mode !== "multiplayer") return;
     if (phase === "lobby") return;
-
-    const activePlayers = players.filter((player) => player.isActiveRacer);
-    if (this.phase === "staging" && activePlayers.length > 0) {
-      const readyCount = activePlayers.filter((player) => player.preload.sceneReady && player.preload.audioReady).length;
-      this.lastStatusMessage = `Warmup live. ${readyCount}/${activePlayers.length} synced.`;
+    if (this.vehicleMeshTotal === 0 && players.length > 0) {
+      const variants = new Set<CarVariant>();
+      if (this.launch.carVariant) variants.add(this.launch.carVariant);
+      for (const p of players) if (p.carVariant) variants.add(p.carVariant);
+      this.preloadVehicleMeshes(variants);
     }
+    this.refreshMultiplayerStatusMessage();
   }
 
   beginCountdown(startAt: number): void {
     if (this.phase === "finished") return;
+    this.countdownDurationMs = Math.max(1, startAt - Date.now());
     this.pendingStartAt = startAt;
     this.phase = "countdown";
     this.countdownStarted = false;
-    if (this.launch.mode === "multiplayer") {
-      this.vehicleController.forceTrackState(
-        this.countdownResetTrackU,
-        this.countdownResetLateralOffset,
-        this.countdownResetSpeed,
-      );
-    }
+    this.beginCountdownResetTransition();
+    this.startMaterializeForAllVehicles();
     this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
@@ -478,14 +563,102 @@ export class App {
     this.statusBody.style.display = "none";
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
+    this.refreshMultiplayerStatusMessage();
+  }
+
+  private positionRemoteAtStart(visual: RemoteCarVisual, clientId: string): void {
+    let startU = START_TRACK_U;
+    let startLat = 0;
+    if (this.botSimulator) {
+      const racer = this.botSimulator.botRacers.find((r) => r.clientId === clientId);
+      if (racer) {
+        startU = racer.trackU;
+        startLat = racer.lateralOffset;
+      }
+    }
+    visual.currentTrackU = startU;
+    visual.currentLateralOffset = startLat;
+    visual.targetTrackU = startU;
+    visual.targetLateralOffset = startLat;
+    const frame = this.track.getFrameAt(startU);
+    const center = this.track.getPointAt(startU);
+    visual.group.position.copy(center)
+      .addScaledVector(frame.right, startLat)
+      .addScaledVector(frame.up, 0.45);
+    this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
+    visual.group.setRotationFromMatrix(this.orientMat);
+  }
+
+  private startMaterializeForAllVehicles(): void {
+    const now = performance.now();
+    const stagger = 160;
+    this.startMaterializeEffect(this.localVehicle, now, true);
+    let i = 1;
+    for (const remote of this.remoteCars.values()) {
+      if (remote === this.localVehicle) continue;
+      remote.group.visible = true;
+      this.startMaterializeEffect(remote, now + i * stagger, false);
+      i += 1;
+    }
+  }
+
+  private startMaterializeEffect(
+    visual: RemoteCarVisual,
+    startAt: number,
+    dematerialize: boolean,
+  ): void {
+    visual.materializeStartedAt = startAt;
+    visual.materializeDematerialize = dematerialize;
+    // Dematerialize keeps the car visible at its pre-countdown position so the
+    // rising plume reads as "beaming out" before the position snap.
+    if (!dematerialize) visual.bodyPivot.visible = false;
+    visual.plume.setIntensity(0);
+  }
+
+  private updateMaterializeEffect(visual: RemoteCarVisual, nowMs: number): void {
+    const started = visual.materializeStartedAt;
+    if (started === null) return;
+    const elapsed = nowMs - started;
+    if (elapsed < 0) {
+      visual.plume.setIntensity(0);
+      visual.bodyPivot.visible = false;
+      return;
+    }
+    const rawT = Math.min(1, elapsed / visual.materializeDurationMs);
+    const riseEnd = 0.5;
+    const fadeStart = 0.7;
+    let intensity: number;
+    if (rawT < riseEnd) {
+      const r = rawT / riseEnd;
+      intensity = r * r * (3 - 2 * r);
+    } else if (rawT < fadeStart) {
+      intensity = 1;
+    } else {
+      const f = (rawT - fadeStart) / (1 - fadeStart);
+      intensity = 1 - f * f * (3 - 2 * f);
+    }
+    visual.plume.setIntensity(intensity);
+    visual.plume.setScanProgress(rawT);
+    const shouldShow = visual.materializeDematerialize
+      ? rawT < 0.4 || rawT >= 0.6
+      : rawT >= 0.6;
+    if (visual.bodyPivot.visible !== shouldShow) visual.bodyPivot.visible = shouldShow;
+    if (rawT >= 1) {
+      visual.plume.setIntensity(0);
+      visual.bodyPivot.visible = true;
+      visual.materializeStartedAt = null;
+    }
   }
 
   private enterRunningPhase(): void {
+    this.countdownResetTransition = null;
     this.phase = "running";
     this.countdownStarted = true;
+    this.soloRaceStartAt = Date.now();
     this.statusOverlay.style.display = "none";
     this.touchControls?.setVisible(true);
     this.musicSync?.play();
+    this.refreshMultiplayerStatusMessage();
   }
 
   applyRaceSnapshot(players: RacePlayerState[], pickups: PickupSpawnState[], checkpointCount: number): void {
@@ -514,11 +687,13 @@ export class App {
       const remote = this.ensureRemoteCar(player.clientId);
       remote.targetTrackU = player.trackU;
       remote.targetLateralOffset = player.lateralOffset;
+      if (!remote.group.visible) remote.group.visible = true;
     }
 
     for (const [clientId, remote] of this.remoteCars) {
       if (!nextIds.has(clientId)) {
         this.scene.remove(remote.group);
+        remote.hoverJets.dispose();
         this.remoteCars.delete(clientId);
         this.removeNameLabel(clientId);
       }
@@ -660,15 +835,18 @@ export class App {
 
   private async waitForAudioReady(): Promise<void> {
     try {
-      if (this.musicReadyPromise) {
-        await this.musicReadyPromise;
-      }
+      const gates: Promise<unknown>[] = [];
+      if (this.musicReadyPromise) gates.push(this.musicReadyPromise);
+      gates.push(this.vehicleMeshesReadyPromise);
+      await Promise.all(gates);
       this.audioReady = true;
       this.launch.onAudioReady?.();
       if (this.launch.mode !== "multiplayer") {
-        this.beginCountdown(Date.now() + 2500);
+        if (this.phase === "staging") {
+          this.beginCountdown(Date.now() + 2500);
+        }
       } else if (this.phase === "staging") {
-        this.lastStatusMessage = "Warmup lane live. Audio ready. Waiting for the room.";
+        this.refreshMultiplayerStatusMessage();
       }
     } catch (error) {
       console.error("Audio preload failed:", error);
@@ -677,6 +855,54 @@ export class App {
       this.primaryButton.style.display = "";
       this.secondaryButton.style.display = "none";
     }
+  }
+
+  private preloadVehicleMeshes(variants: Iterable<CarVariant>): void {
+    const unique = new Set<CarVariant>(variants);
+    if (unique.size === 0) return;
+    const remoteClientIds = this.latestRoster
+      .filter((p) => p.clientId && p.clientId !== this.launch.localPlayerId)
+      .map((p) => p.clientId);
+    this.vehicleMeshTotal = unique.size;
+    this.vehicleMeshReadyCount = 0;
+    this.vehicleMeshesReady = false;
+    const VARIANT_TIMEOUT_MS = 6000;
+    const perVariant: Promise<void>[] = [];
+    for (const variant of unique) {
+      const load = prefetchCarMesh(this.config, variant)
+        .then(() => {
+          this.vehicleMeshReadyCount += 1;
+          if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+        })
+        .catch((error) => {
+          console.warn(`Vehicle mesh preload failed for ${variant}:`, error);
+          this.vehicleMeshReadyCount += 1;
+          if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+        });
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
+      perVariant.push(Promise.race([load, timeout]));
+    }
+
+    const remoteHydrations: Promise<void>[] = [];
+    for (const clientId of remoteClientIds) {
+      const remote = this.ensureRemoteCar(clientId);
+      remote.group.visible = false;
+      this.positionRemoteAtStart(remote, clientId);
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
+      remoteHydrations.push(Promise.race([remote.hydratePromise, timeout]));
+    }
+    const localHydration = this.localVehicle
+      ? Promise.race([this.localVehicle.hydratePromise, new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS))])
+      : Promise.resolve();
+
+    this.vehicleMeshesReadyPromise = Promise.all([
+      ...perVariant,
+      ...remoteHydrations,
+      localHydration,
+    ]).then(() => {
+      this.vehicleMeshesReady = true;
+      if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+    });
   }
 
   private setupScene(): void {
@@ -707,30 +933,24 @@ export class App {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.boostRibbons.setViewportSize(window.innerWidth, window.innerHeight);
   };
 
   private createVehicleVisual(variant: CarVariant): RemoteCarVisual {
     const palette = paletteForVariant(variant);
-    const bodyMaterial = new MeshStandardMaterial({
-      color: palette.body.clone(),
-      emissive: palette.bodyEmissive.clone(),
-      metalness: 0.3,
-      roughness: 0.5,
-    });
-    const body = new Mesh(new BoxGeometry(1.4, 0.5, 3.2), bodyMaterial);
+    const bodyMaterial = new HologramMaterial({ color: palette.bodyEmissive.clone() });
+    const bodyGeometry = new BoxGeometry(1.4, 0.5, 3.2);
+    const body = new Mesh(bodyGeometry, bodyMaterial);
     body.position.y = 0.1;
 
-    const cockpitMaterial = new MeshStandardMaterial({
-      color: palette.cockpit.clone(),
-      emissive: palette.cockpitEmissive.clone(),
-      metalness: 0.15,
-      roughness: 0.45,
-    });
-    const cockpit = new Mesh(new BoxGeometry(0.8, 0.35, 1.15), cockpitMaterial);
+    const cockpitMaterial = new HologramMaterial({ color: palette.cockpitEmissive.clone() });
+    const cockpitGeometry = new BoxGeometry(0.8, 0.35, 1.15);
+    const cockpit = new Mesh(cockpitGeometry, cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
 
     const fallbackGroup = new Group();
     fallbackGroup.add(body, cockpit);
+    this.hologramMaterials.push(bodyMaterial, cockpitMaterial);
 
     const feedbackGlowMaterial = new MeshBasicMaterial({
       color: App.BOOST_COLOR.clone(),
@@ -745,8 +965,14 @@ export class App {
     const bodyPivot = new Group();
     bodyPivot.add(fallbackGroup, feedbackGlow);
 
+    const hoverJets = new HoverJets(palette.body);
+    hoverJets.attachTo(bodyPivot);
+
     const group = new Group();
     group.add(bodyPivot);
+
+    const plume = new HologramPlume(palette.bodyEmissive.clone());
+    group.add(plume.mesh);
 
     const visual: RemoteCarVisual = {
       id: "",
@@ -758,14 +984,20 @@ export class App {
       fallbackCockpitMaterial: cockpitMaterial,
       feedbackGlow,
       feedbackGlowMaterial,
+      hoverJets,
       assetGroup: null,
       assetRevision: 0,
+      hydratePromise: Promise.resolve(),
+      plume,
+      materializeStartedAt: null,
+      materializeDurationMs: 1400,
+      materializeDematerialize: false,
       targetTrackU: START_TRACK_U,
       targetLateralOffset: 0,
       currentTrackU: START_TRACK_U,
       currentLateralOffset: 0,
     };
-    void this.hydrateVehicleVisual(visual);
+    visual.hydratePromise = this.hydrateVehicleVisual(visual);
     return visual;
   }
 
@@ -776,12 +1008,14 @@ export class App {
       const asset = await loadCarMesh(this.config, visual.variant);
       if (this.destroyed || revision !== visual.assetRevision) return;
       applyCarTransform(asset, definition.raceTransform);
+      this.toonifyCarAsset(asset);
       if (visual.assetGroup) {
         visual.bodyPivot.remove(visual.assetGroup);
       }
       visual.assetGroup = asset;
       visual.bodyPivot.add(asset);
       visual.fallbackGroup.visible = false;
+      visual.hoverJets.bindToMesh(asset, visual.bodyPivot);
     } catch (error) {
       console.error(`Failed to load race mesh for ${visual.variant}:`, error);
     }
@@ -798,49 +1032,38 @@ export class App {
     return remote;
   }
 
-  private createBoostTrailMeshes(): void {
-    const trailGeometry = new BoxGeometry(1.2, 0.22, 2.8);
-    const trailCount = this.reducedFx ? 8 : 14;
-    for (let i = 0; i < trailCount; i++) {
-      const material = new MeshBasicMaterial({
-        color: App.BOOST_COLOR.clone(),
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: AdditiveBlending,
-      });
-      const mesh = new Mesh(trailGeometry, material);
-      mesh.visible = false;
-      this.boostTrailMaterials.push(material);
-      this.boostTrailMeshes.push(mesh);
-      this.boostTrailGroup.add(mesh);
-    }
-  }
+  private toonifyCarAsset(asset: Group): void {
+    // Collect meshes first so we can add outline siblings without perturbing
+    // the traversal iterator.
+    const convertedMeshes: Mesh[] = [];
+    asset.traverse((obj) => {
+      if (!(obj instanceof Mesh)) return;
+      if (obj.name === "tempo-car-outline") return;
+      if (Array.isArray(obj.material)) {
+        obj.material = obj.material.map((mat) =>
+          mat instanceof MeshStandardMaterial && !(mat instanceof MeshToonMaterial)
+            ? toToonMaterial(mat, this.carToonGradientMap)
+            : mat,
+        );
+      } else if (
+        obj.material instanceof MeshStandardMaterial
+        && !(obj.material instanceof MeshToonMaterial)
+      ) {
+        obj.material = toToonMaterial(obj.material, this.carToonGradientMap);
+      } else {
+        return;
+      }
+      convertedMeshes.push(obj);
+    });
 
-  private createSpeedTracerMeshes(): void {
-    const tracerGeometry = new BoxGeometry(0.13, 0.09, 1);
-    const tracerCount = this.reducedFx ? 8 : 14;
-    for (let i = 0; i < tracerCount; i++) {
-      const material = new MeshBasicMaterial({
-        color: App.TRACER_COLOR.clone(),
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: AdditiveBlending,
-      });
-      const mesh = new Mesh(tracerGeometry, material);
-      mesh.visible = false;
-      this.speedTracerGroup.add(mesh);
-      const side: 1 | -1 = i % 2 === 0 ? 1 : -1;
-      this.speedTracers.push({
-        mesh,
-        material,
-        side,
-        lateralOffset: side * (0.44 + ((i * 3) % 5) * 0.12),
-        verticalOffset: 0.1 + ((i * 5) % 4) * 0.05,
-        sampleStride: this.reducedFx ? 2 : 3,
-        sampleOffset: 1 + i,
-      });
+    for (const mesh of convertedMeshes) {
+      const parent = mesh.parent;
+      if (!parent) continue;
+      const outline = createOutlineMesh(mesh.geometry, this.carOutlineMaterial);
+      outline.position.copy(mesh.position);
+      outline.quaternion.copy(mesh.quaternion);
+      outline.scale.copy(mesh.scale);
+      parent.add(outline);
     }
   }
 
@@ -1533,6 +1756,16 @@ export class App {
           right: 12px;
           width: min(228px, calc(100vw - 24px));
           padding: 10px 12px 11px;
+          max-height: calc(100vh - 260px);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .tempo-hud-summary .tempo-hud-standings {
+          overflow-y: auto;
+          min-height: 0;
+          flex: 1;
+          padding-right: 2px;
         }
 
         .tempo-hud-place,
@@ -1925,6 +2158,10 @@ export class App {
     if (this.localTakenDownUntil > now) {
       this.applySpinoutVisual(this.localVehicle.group, body, state.up, now, this.localTakenDownUntil);
     }
+
+    const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
+    const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
+    this.localVehicle.hoverJets.update(deltaSeconds, speedRatio, state.boostMultiplier);
   }
 
   private updateRemoteCars(deltaSeconds: number): void {
@@ -1949,6 +2186,9 @@ export class App {
       if (snapshot.takenDownUntil > now) {
         this.applySpinoutVisual(remote.group, body, frame.up, now, snapshot.takenDownUntil);
       }
+
+      const speedRatio = Math.min(1, Math.max(0, snapshot.speed) / 90);
+      remote.hoverJets.update(deltaSeconds, speedRatio, 1);
     }
   }
 
@@ -1975,33 +2215,22 @@ export class App {
     }
   }
 
-  private updateBoostVisuals(): void {
+  private updateBoostVisuals(deltaSeconds: number): void {
     const boost = this.vehicleController.state.visualBoost;
     const surgeBoost = MathUtils.clamp(boost + this.boostSurge * 0.42 + this.pickupSurge * 0.22, 0, 1.35);
     const slowdownMix = Math.min(this.slowdownFlash, 1);
     const localPalette = paletteForVariant(this.launch.carVariant ?? "vector");
     const boostMix = Math.min(surgeBoost, 1);
-    const bodyColor = localPalette.body.clone()
-      .lerp(App.BOOST_COLOR, boostMix * 0.72)
-      .lerp(App.BOOST_HOT_COLOR, boostMix * 0.34)
-      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.82);
     const bodyEmissive = localPalette.bodyEmissive.clone()
       .lerp(App.BOOST_COLOR, boostMix * 0.88)
       .lerp(App.BOOST_HOT_COLOR, boostMix * 0.2)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix);
-    const cockpitColor = localPalette.cockpit.clone()
-      .lerp(new Color("#2f540e"), boostMix * 0.62)
-      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.3);
     const cockpitEmissive = localPalette.cockpitEmissive.clone()
       .lerp(App.BOOST_COLOR, boostMix * 0.96)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.65);
 
-    this.localVehicle.fallbackBodyMaterial.color.copy(bodyColor);
-    this.localVehicle.fallbackBodyMaterial.emissive.copy(bodyEmissive);
-    this.localVehicle.fallbackBodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.8 + slowdownMix * 1.2;
-    this.localVehicle.fallbackCockpitMaterial.color.copy(cockpitColor);
-    this.localVehicle.fallbackCockpitMaterial.emissive.copy(cockpitEmissive);
-    this.localVehicle.fallbackCockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.9 + slowdownMix * 0.5;
+    this.localVehicle.fallbackBodyMaterial.setColor(bodyEmissive);
+    this.localVehicle.fallbackCockpitMaterial.setColor(cockpitEmissive);
     this.localVehicle.feedbackGlowMaterial.color.copy(
       App.BOOST_COLOR.clone().lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.9),
     );
@@ -2009,97 +2238,30 @@ export class App {
     const glowScale = 1 + surgeBoost * 0.55 + slowdownMix * 0.18;
     this.localVehicle.feedbackGlow.scale.set(glowScale, 1, glowScale);
 
-    this.boostTrailHistory.unshift({
-      position: this.localVehicle.group.position.clone(),
-      quaternion: this.localVehicle.group.quaternion.clone(),
-      boost: surgeBoost,
-    });
-    if (this.boostTrailHistory.length > this.boostTrailSampleLimit) {
-      this.boostTrailHistory.length = this.boostTrailSampleLimit;
-    }
-
-    for (let i = 0; i < this.boostTrailMeshes.length; i++) {
-      const sample = this.boostTrailHistory[Math.min(this.boostTrailHistory.length - 1, 2 + i * 3)];
-      const mesh = this.boostTrailMeshes[i];
-      const material = this.boostTrailMaterials[i];
-      if (!sample || sample.boost < 0.04) {
-        mesh.visible = false;
-        continue;
-      }
-
-      mesh.visible = true;
-      mesh.position.copy(sample.position);
-      mesh.quaternion.copy(sample.quaternion);
-      const sideSign = i % 2 === 0 ? 1 : -1;
-      const spread = sample.boost * (0.25 + i * 0.012);
-      this.tempVector.set(sideSign * spread, 0.02 + i * 0.004, -0.6 - i * 0.16);
-      this.tempVector.applyQuaternion(sample.quaternion);
-      mesh.position.add(this.tempVector);
-      mesh.scale.set(
-        1 + sample.boost * (0.62 + i * 0.03),
-        1 + sample.boost * (0.18 + i * 0.018),
-        1.55 + sample.boost * (1.2 + i * 0.1),
-      );
-      material.opacity = Math.max(0, sample.boost * (0.4 - i * 0.018));
-      material.color.copy(App.BOOST_COLOR).lerp(App.BOOST_HOT_COLOR, Math.min(sample.boost * 0.72, 1));
-    }
+    const carQuaternion = this.localVehicle.group.quaternion;
+    this.tempVector.set(0, 0, -1).applyQuaternion(carQuaternion);
+    this.tempVectorB.set(0, 1, 0).applyQuaternion(carQuaternion);
+    this.boostRibbons.sample(this.localVehicle.group.position, this.tempVector, this.tempVectorB);
+    this.boostRibbons.update(deltaSeconds, Math.min(surgeBoost, 1));
+    this.boostFxPass.setStrength(Math.min(surgeBoost, 1));
+    this.updateSpeedLines(deltaSeconds);
   }
 
-  private updateSpeedTracers(): void {
-    if (this.phase !== "running") {
-      for (const tracer of this.speedTracers) {
-        tracer.mesh.visible = false;
-      }
-      return;
-    }
-
+  private updateSpeedLines(deltaSeconds: number): void {
+    if (!this.speedLinesPass) return;
     const state = this.vehicleController.state;
-    const speedRatio = Math.min(Math.abs(state.speed) / 90, 1);
-    const baseIntensity = MathUtils.smoothstep(speedRatio, 0.36, 0.96);
-    const intensity = MathUtils.clamp(
-      baseIntensity * 0.68 + state.visualBoost * 0.82 + this.pickupSurge * 0.28,
-      0,
-      1.2,
-    );
-    if (intensity < 0.08 || this.boostTrailHistory.length < 3) {
-      for (const tracer of this.speedTracers) {
-        tracer.mesh.visible = false;
-      }
-      return;
-    }
-
-    for (const tracer of this.speedTracers) {
-      const sampleIndex = Math.min(this.boostTrailHistory.length - 1, tracer.sampleOffset + tracer.sampleStride);
-      const sample = this.boostTrailHistory[sampleIndex];
-      if (!sample) {
-        tracer.mesh.visible = false;
-        continue;
-      }
-
-      tracer.mesh.visible = true;
-      tracer.mesh.quaternion.copy(sample.quaternion);
-      tracer.mesh.position.copy(sample.position);
-      this.tempVector.set(
-        tracer.lateralOffset * (1 + intensity * 0.12),
-        tracer.verticalOffset + intensity * 0.03,
-        -0.45 - tracer.sampleOffset * 0.1,
-      );
-      this.tempVector.applyQuaternion(sample.quaternion);
-      tracer.mesh.position.add(this.tempVector);
-      tracer.mesh.scale.set(
-        1 + intensity * 0.12,
-        1 + intensity * 0.16,
-        MathUtils.lerp(2.8, 6.4, intensity) * (1 + tracer.sampleOffset * 0.035),
-      );
-      tracer.material.opacity = Math.max(
-        0,
-        intensity * (0.72 - tracer.sampleOffset * 0.028) * (0.72 + sample.boost * 0.44),
-      );
-      tracer.material.color.copy(App.TRACER_COLOR).lerp(
-        App.TRACER_HOT_COLOR,
-        Math.min(0.28 + state.visualBoost * 0.48 + this.pickupSurge * 0.18, 1),
-      );
-    }
+    const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
+    const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
+    // Ramp in between 0.72 and 0.98 of top speed. Below the threshold the
+    // lines read as noise; above it they amplify the sense of commitment.
+    const target = this.phase === "running"
+      ? Math.max(0, Math.min(1, (speedRatio - 0.72) / 0.26))
+      : 0;
+    const dt = Math.min(deltaSeconds, 1 / 20);
+    const k = 1 - Math.exp(-5.5 * dt);
+    this.speedLinesStrength += (target - this.speedLinesStrength) * k;
+    this.speedLinesPass.setStrength(this.speedLinesStrength);
+    this.speedLinesPass.setTime(this.sceneElapsedTime);
   }
 
   private updateSpeedFeedback(deltaSeconds: number): void {
@@ -2151,9 +2313,9 @@ export class App {
     const lookAlpha = 1 - Math.exp(-8 * dt);
     const upAlpha = 1 - Math.exp(-5 * dt);
     if (this.cameraMode === "wild") {
-      const wildCamBack = MathUtils.lerp(9.5, 14.5, speedRatio);
-      const wildCamUp = MathUtils.lerp(5.2, 7.4, speedRatio);
-      const wildLookAhead = MathUtils.lerp(12, 18, speedRatio);
+      const wildCamBack = MathUtils.lerp(9.5, 11.8, speedRatio);
+      const wildCamUp = MathUtils.lerp(5.2, 6.4, speedRatio);
+      const wildLookAhead = MathUtils.lerp(12, 15, speedRatio);
       const wildLateralLead = state.steering * MathUtils.lerp(0.06, 0.2, speedRatio);
       const wildAlpha = 1 - Math.exp(-10 * dt);
       this.stableCameraForward.lerp(state.forward, wildAlpha).normalize();
@@ -2173,9 +2335,9 @@ export class App {
       this.resolveCameraRoadClip(this.desiredCameraPosition, state.trackU);
       this.desiredCameraUp.copy(App.WORLD_UP).lerp(state.up, 0.42).normalize();
     } else {
-      const comfortBack = MathUtils.lerp(8.2, 10.8, speedRatio);
-      const comfortUp = MathUtils.lerp(4.1, 5.6, speedRatio);
-      const comfortLookAhead = MathUtils.lerp(9, 13, speedRatio);
+      const comfortBack = MathUtils.lerp(8.2, 9.6, speedRatio);
+      const comfortUp = MathUtils.lerp(4.1, 4.9, speedRatio);
+      const comfortLookAhead = MathUtils.lerp(9, 11, speedRatio);
       const comfortLateralLead = state.steering * MathUtils.lerp(0.012, 0.04, speedRatio);
       const comfortAlpha = 1 - Math.exp(-11 * dt);
 
@@ -2232,7 +2394,7 @@ export class App {
     this.orientMat.lookAt(this.smoothedCameraPosition, this.smoothedCameraLookTarget, this.smoothedCameraUp);
     this.targetCameraQuaternion.setFromRotationMatrix(this.orientMat);
     this.camera.quaternion.copy(this.targetCameraQuaternion);
-    this.camera.fov = MathUtils.lerp(70, 95, speedRatio * speedRatio);
+    this.camera.fov = MathUtils.lerp(70, 82, speedRatio * speedRatio);
     this.camera.updateProjectionMatrix();
   }
 
@@ -2294,12 +2456,178 @@ export class App {
         this.combatVfx.spawnLocalFireBlast(this.localVehicle.group.position.clone(), performance.now());
       }
       this.launch.onFire?.();
+      if (this.botSimulator) this.soloLocalFire();
     }
     if (shieldPressed && !this.lastShieldPressed) {
       this.launch.onShield?.();
+      if (this.botSimulator) this.soloLocalShield();
     }
     this.lastFirePressed = firePressed;
     this.lastShieldPressed = shieldPressed;
+  }
+
+  private buildSoloLocalRacer(): RaceSimRacer {
+    return {
+      clientId: this.launch.localPlayerId ?? "solo",
+      trackU: this.vehicleController.state.trackU,
+      lateralOffset: this.vehicleController.state.lateralOffset,
+      speed: this.vehicleController.state.speed,
+      checkpointIndex: this.localCheckpointIndex,
+      placement: this.localPlacement,
+      offensiveItem: this.localOffensiveItem,
+      defensiveItem: this.localDefensiveItem,
+      shieldUntil: this.soloLocalShieldUntil,
+      takenDownUntil: this.localTakenDownUntil,
+      respawnRevision: this.soloLocalRespawnRevision,
+      finishedAt: this.soloLocalFinishedAt,
+      takedowns: this.soloLocalTakedowns,
+      respawnAt: 0,
+      respawnTrackU: START_TRACK_U,
+      respawnLateralOffset: 0,
+    };
+  }
+
+  private soloLocalFire(): void {
+    if (!this.botSimulator) return;
+    if (this.localOffensiveItem !== "missile") return;
+    const localRacer = this.buildSoloLocalRacer();
+    const events = this.botSimulator.fireFromLocal(localRacer, Date.now());
+    // fireFromLocal mutates localRacer (clears missile). Mirror to local state.
+    this.localOffensiveItem = localRacer.offensiveItem;
+    for (const ev of events) {
+      this.applySoloSimEvent(ev);
+    }
+  }
+
+  private soloLocalShield(): void {
+    if (!this.botSimulator) return;
+    if (this.localDefensiveItem !== "shield") return;
+    const localRacer = this.buildSoloLocalRacer();
+    const ev = this.botSimulator.shieldFromLocal(localRacer, Date.now());
+    if (ev) {
+      this.localDefensiveItem = null;
+      this.soloLocalShieldUntil = localRacer.shieldUntil;
+      this.applySoloSimEvent(ev);
+    }
+  }
+
+  private applySoloSimEvent(ev: RaceSimEvent): void {
+    const now = Date.now();
+    const raceEvent = this.raceSimEventToRaceEvent(ev, now);
+    if (raceEvent) this.applyRaceEvent(raceEvent);
+    // Mirror takedown to local takedown state if local was the target.
+    if (ev.kind === "takedown" && ev.targetId === (this.launch.localPlayerId ?? "solo")) {
+      this.localTakenDownUntil = now + RACE_SIM.TAKEDOWN_DURATION_MS;
+      const state = this.vehicleController.state;
+      this.soloLocalRespawnTrackU = Math.max(
+        START_TRACK_U,
+        Math.min(0.992, state.trackU - 0.008),
+      );
+      this.soloLocalRespawnLateralOffset = Math.max(-10, Math.min(10, state.lateralOffset));
+    }
+    if (ev.kind === "blocked" && ev.targetId === (this.launch.localPlayerId ?? "solo")) {
+      this.localDefensiveItem = null;
+      this.soloLocalShieldUntil = 0;
+    }
+  }
+
+  private tickSoloWithBots(deltaSeconds: number, now: number): void {
+    if (!this.botSimulator) return;
+    const localRacer = this.buildSoloLocalRacer();
+
+    // Pickup collision for local player (server handles this in multiplayer).
+    const pickupEv = this.botSimulator.collectForLocal(
+      localRacer,
+      this.soloLocalPrevTrackU,
+      this.soloLocalPrevLateralOffset,
+    );
+    if (pickupEv) {
+      this.localOffensiveItem = localRacer.offensiveItem;
+      this.localDefensiveItem = localRacer.defensiveItem;
+      this.applySoloSimEvent(pickupEv);
+    }
+    this.soloLocalPrevTrackU = localRacer.trackU;
+    this.soloLocalPrevLateralOffset = localRacer.lateralOffset;
+
+    // Checkpoints + finish for local (normally done server-side).
+    this.localCheckpointIndex = Math.max(
+      this.localCheckpointIndex,
+      checkpointIndexForU(localRacer.trackU, this.soloCheckpointUs),
+    );
+    if (
+      localRacer.trackU >= RACE_SIM.FINISH_TRACK_U
+      && this.soloLocalFinishedAt === null
+    ) {
+      this.soloLocalFinishedAt = now;
+    }
+
+    // Bots: drive AI + physics, maybe tick shared rules. localForBots is
+    // mutated by simRecomputePlacements inside the bot simulator tick, so the
+    // placement field is up to date afterward and we read it back for the
+    // synthetic snapshot below.
+    const localForBots = this.buildSoloLocalRacer();
+    this.botSimulator.update(deltaSeconds, now, localForBots);
+    this.localPlacement = localForBots.placement;
+
+    // Drain and apply bot events to VFX / takedown state.
+    const events = this.botSimulator.drainEvents();
+    for (const ev of events) this.applySoloSimEvent(ev);
+
+    // Handle local respawn: once stun timer elapses, bump revision so
+    // applyRaceSnapshot drives vehicleController.forceTrackState() to the
+    // respawn position.
+    let snapLocalTrackU = localRacer.trackU;
+    let snapLocalLateralOffset = localRacer.lateralOffset;
+    let snapLocalSpeed = localRacer.speed;
+    if (this.localTakenDownUntil > 0 && now >= this.localTakenDownUntil) {
+      this.localTakenDownUntil = 0;
+      this.soloLocalRespawnRevision += 1;
+      snapLocalTrackU = this.soloLocalRespawnTrackU;
+      snapLocalLateralOffset = this.soloLocalRespawnLateralOffset;
+      snapLocalSpeed = 0;
+      this.soloLocalPrevTrackU = snapLocalTrackU;
+      this.soloLocalPrevLateralOffset = snapLocalLateralOffset;
+    }
+
+    // Emit a synthetic snapshot so applyRaceSnapshot drives remote car visuals,
+    // placements, pickups, and respawn reset for us.
+    const snapshotLocal: RacePlayerState = {
+      clientId: this.launch.localPlayerId ?? "solo",
+      trackU: snapLocalTrackU,
+      lateralOffset: snapLocalLateralOffset,
+      speed: snapLocalSpeed,
+      checkpointIndex: this.localCheckpointIndex,
+      placement: this.localPlacement,
+      offensiveItem: this.localOffensiveItem,
+      defensiveItem: this.localDefensiveItem,
+      shieldUntil: this.soloLocalShieldUntil,
+      takenDownUntil: this.localTakenDownUntil,
+      respawnRevision: this.soloLocalRespawnRevision,
+      finishedAt: this.soloLocalFinishedAt,
+      takedowns: this.soloLocalTakedowns,
+    };
+    const snapshotPlayers = this.botSimulator.buildRacePlayerStates(snapshotLocal);
+    this.applyRaceSnapshot(snapshotPlayers, this.soloPickups, this.soloCheckpointUs.length);
+  }
+
+  private raceSimEventToRaceEvent(ev: RaceSimEvent, at: number): RaceEvent | null {
+    const id = `solo-${++this.soloEventSequence}`;
+    switch (ev.kind) {
+      case "pickup":
+        return { id, kind: "pickup", actorId: ev.actorId, item: ev.item, slot: ev.slot, at };
+      case "fire":
+        return { id, kind: "fire", actorId: ev.actorId, targetId: ev.targetId, outcome: ev.outcome, at };
+      case "blocked":
+        return { id, kind: "blocked", actorId: ev.actorId, targetId: ev.targetId, at };
+      case "takedown":
+        return { id, kind: "takedown", actorId: ev.actorId, targetId: ev.targetId, at };
+      case "shield":
+        return { id, kind: "shield", actorId: ev.actorId, at };
+      case "respawn":
+        return { id, kind: "respawn", targetId: ev.targetId, at };
+      default:
+        return null;
+    }
   }
 
   private maybeReportRaceState(now: number): void {
@@ -2321,25 +2649,7 @@ export class App {
       this.phase = "finished";
       this.musicSync?.stop();
       this.playRaceSfx("won");
-      this.showResults({
-        roomCode: "SOLO",
-        setup: {
-          songId: "solo",
-          fictionId: this.fictionId,
-          seed: 0,
-          playerCap: 1,
-        },
-        entries: [
-          {
-            clientId: this.launch.localPlayerId ?? "solo",
-            name: this.getLocalPlayerName(),
-            placement: 1,
-            status: "finished",
-            finishTimeMs: Math.round(this.elapsedRaceTime * 1000),
-            takedowns: 0,
-          },
-        ],
-      });
+      this.showResults(this.buildSoloResults("finished"));
       return;
     }
 
@@ -2348,26 +2658,74 @@ export class App {
       this.phase = "finished";
       this.musicSync?.pause();
       this.playRaceSfx("lost");
-      this.showResults({
-        roomCode: "SOLO",
-        setup: {
-          songId: "solo",
-          fictionId: this.fictionId,
-          seed: 0,
-          playerCap: 1,
-        },
-        entries: [
-          {
-            clientId: this.launch.localPlayerId ?? "solo",
-            name: this.getLocalPlayerName(),
-            placement: 1,
-            status: "dnf",
-            finishTimeMs: null,
-            takedowns: 0,
-          },
-        ],
-      });
+      this.showResults(this.buildSoloResults("dnf"));
     }
+  }
+
+  private buildSoloResults(localStatus: "finished" | "dnf"): RaceResults {
+    const localEntry = {
+      clientId: this.launch.localPlayerId ?? "solo",
+      name: this.getLocalPlayerName(),
+      carVariant: this.launch.carVariant ?? "vector",
+      placement: 1,
+      status: localStatus,
+      finishTimeMs: localStatus === "finished" ? Math.round(this.elapsedRaceTime * 1000) : null,
+      takedowns: this.soloLocalTakedowns,
+      trackU: this.vehicleController.state.trackU,
+      finishedAt: this.soloLocalFinishedAt,
+      checkpointIndex: this.localCheckpointIndex,
+    };
+    const bots = this.botSimulator
+      ? this.botSimulator.botRacers.map((racer) => {
+          const roster = this.latestRoster.find((r) => r.clientId === racer.clientId);
+          const status = racer.finishedAt !== null ? "finished" as const : "dnf" as const;
+          const finishTimeMs = racer.finishedAt !== null && this.soloRaceStartAt > 0
+            ? Math.max(0, racer.finishedAt - this.soloRaceStartAt)
+            : null;
+          return {
+            clientId: racer.clientId,
+            name: roster?.name ?? racer.clientId,
+            carVariant: roster?.carVariant ?? "vector",
+            placement: racer.placement,
+            status,
+            finishTimeMs,
+            takedowns: racer.takedowns,
+            trackU: racer.trackU,
+            finishedAt: racer.finishedAt,
+            checkpointIndex: racer.checkpointIndex,
+          };
+        })
+      : [];
+    const combined = [localEntry, ...bots];
+    combined.sort((a, b) => {
+      // Finished first by finish time, then by checkpoint + trackU
+      if (a.finishedAt !== null || b.finishedAt !== null) {
+        if (a.finishedAt !== null && b.finishedAt !== null) return a.finishedAt - b.finishedAt;
+        return a.finishedAt !== null ? -1 : 1;
+      }
+      if (a.checkpointIndex !== b.checkpointIndex) return b.checkpointIndex - a.checkpointIndex;
+      return b.trackU - a.trackU;
+    });
+    combined.forEach((entry, index) => {
+      entry.placement = index + 1;
+    });
+    return {
+      roomCode: "SOLO",
+      setup: {
+        songId: "solo",
+        fictionId: this.fictionId,
+        seed: 0,
+        playerCap: Math.max(1, combined.length),
+      },
+      entries: combined.map((entry) => ({
+        clientId: entry.clientId,
+        name: entry.name,
+        placement: entry.placement,
+        status: entry.status,
+        finishTimeMs: entry.finishTimeMs,
+        takedowns: entry.takedowns,
+      })),
+    };
   }
 
   private playRaceSfx(state: "won" | "lost"): void {
@@ -2390,7 +2748,7 @@ export class App {
   }
 
   private renderRoster(): void {
-    if (this.launch.mode !== "multiplayer") {
+    if (this.launch.mode !== "multiplayer" && !this.botSimulator) {
       this.summaryHud.style.display = "none";
       return;
     }
@@ -2408,7 +2766,7 @@ export class App {
       if (placementA !== placementB) return placementA - placementB;
       return a.name.localeCompare(b.name);
     });
-    const visiblePlayers = sortedPlayers.slice(0, this.isCompactHudLayout() ? 2 : 3);
+    const visiblePlayers = sortedPlayers.slice();
     const localPlayer = sortedPlayers.find((player) => player.clientId === this.launch.localPlayerId) ?? null;
     if (localPlayer && !visiblePlayers.some((player) => player.clientId === localPlayer.clientId)) {
       visiblePlayers.push(localPlayer);
@@ -2488,10 +2846,6 @@ export class App {
     target.classList.toggle("is-empty", !active);
   }
 
-  private isCompactHudLayout(): boolean {
-    return window.innerWidth <= 760 || window.innerHeight <= 620;
-  }
-
   private updateNameLabels(): void {
     if (this.launch.mode !== "multiplayer" || this.phase === "finished") {
       for (const label of this.nameLabels.values()) {
@@ -2557,6 +2911,11 @@ export class App {
   private updateDebugHud(): void {
     if (!this.debugHud) return;
     const state = this.vehicleController.state;
+    const bands = this.latestReactiveBands;
+    const bandLine = bands
+      ? `band L${bands.low.toFixed(2)} M${bands.mid.toFixed(2)} H${bands.high.toFixed(2)} K${bands.kick.toFixed(2)}`
+      : "band --";
+    const energyLine = `sectionE ${this.latestSectionEnergy.toFixed(2)}`;
     this.debugHud.textContent = [
       `phase ${this.phase}`,
       `trackU ${state.trackU.toFixed(3)}`,
@@ -2564,18 +2923,148 @@ export class App {
       `place ${this.localPlacement}`,
       `cp ${this.localCheckpointIndex + 1}/${this.latestCheckpointCount}`,
       `audio ${this.audioReady ? "ready" : "loading"}`,
+      bandLine,
+      energyLine,
       `last ${this.lastStatusMessage || "--"}`,
     ].join("\n");
+  }
+
+  private getLoadingBlend(now: number): number {
+    if (this.phase === "staging") return 1;
+    if (this.phase === "countdown") {
+      const remainingMs = Math.max(0, this.pendingStartAt - now);
+      const countdownProgress = 1 - MathUtils.clamp(
+        remainingMs / Math.max(1, this.countdownDurationMs),
+        0,
+        1,
+      );
+      const fadeProgress = MathUtils.smoothstep(countdownProgress, 0.16, 0.94);
+      return 1 - fadeProgress;
+    }
+    return 0;
+  }
+
+  private refreshMultiplayerStatusMessage(): void {
+    if (this.launch.mode !== "multiplayer") return;
+
+    const activePlayers = this.latestRoster.filter((player) => player.isActiveRacer);
+    if (this.phase === "running") {
+      if (!this.lastStatusMessage.startsWith("Finish locked")) {
+        this.lastStatusMessage = "Race live. Hold the line.";
+      }
+      this.renderRoster();
+      return;
+    }
+
+    if (this.phase === "countdown") {
+      this.lastStatusMessage = "Grid lock engaged. Loading fiction dropping away.";
+      this.renderRoster();
+      return;
+    }
+
+    const meshStatus = this.vehicleMeshTotal > 0 && !this.vehicleMeshesReady
+      ? ` Syncing fleet ${this.vehicleMeshReadyCount}/${this.vehicleMeshTotal}.`
+      : "";
+
+    if (activePlayers.length === 0) {
+      this.lastStatusMessage = this.audioReady
+        ? `Loading lane armed. Waiting for pilots.${meshStatus}`
+        : `Loading lane forming. Audio buffering.${meshStatus}`;
+      this.renderRoster();
+      return;
+    }
+
+    const readyCount = activePlayers.filter((player) => player.preload.sceneReady && player.preload.audioReady).length;
+    if (!this.audioReady) {
+      this.lastStatusMessage = `Loading lane forming. ${readyCount}/${activePlayers.length} synced.${meshStatus}`;
+    } else if (readyCount < activePlayers.length) {
+      this.lastStatusMessage = `Audio locked. Waiting for pilots ${readyCount}/${activePlayers.length}.${meshStatus}`;
+    } else {
+      this.lastStatusMessage = "All pilots synced. Grid lock imminent.";
+    }
+
+    this.renderRoster();
+  }
+
+  private beginCountdownResetTransition(): void {
+    const state = this.vehicleController.state;
+    const fromTrackU = state.trackU;
+    const fromLateralOffset = state.lateralOffset;
+    const fromSpeed = state.speed;
+    const toTrackU = this.countdownResetTrackU;
+    const toLateralOffset = this.countdownResetLateralOffset;
+    const toSpeed = this.countdownResetSpeed;
+    const needsTransition = Math.abs(fromTrackU - toTrackU) > 0.002
+      || Math.abs(fromLateralOffset - toLateralOffset) > 0.15
+      || Math.abs(fromSpeed - toSpeed) > 0.5;
+
+    if (!needsTransition) {
+      this.countdownResetTransition = null;
+      this.vehicleController.forceTrackState(toTrackU, toLateralOffset, toSpeed);
+      return;
+    }
+
+    this.countdownResetTransition = {
+      startedAt: performance.now(),
+      durationMs: 1450,
+      fromTrackU,
+      fromLateralOffset,
+      fromSpeed,
+      toTrackU,
+      toLateralOffset,
+      toSpeed,
+    };
+  }
+
+  private updateCountdownResetTransition(nowMs: number): void {
+    const transition = this.countdownResetTransition;
+    if (!transition) return;
+
+    const rawT = MathUtils.clamp((nowMs - transition.startedAt) / transition.durationMs, 0, 1);
+
+    // Position snaps at midpoint under cover of the hologram plume peak so the
+    // warp reads as an intentional teleport rather than an interpolation.
+    if (rawT < 0.5) {
+      this.vehicleController.forceTrackState(
+        transition.fromTrackU,
+        transition.fromLateralOffset,
+        transition.fromSpeed,
+      );
+    } else {
+      this.vehicleController.forceTrackState(
+        transition.toTrackU,
+        transition.toLateralOffset,
+        transition.toSpeed,
+      );
+    }
+
+    if (rawT >= 1) {
+      this.vehicleController.forceTrackState(
+        transition.toTrackU,
+        transition.toLateralOffset,
+        transition.toSpeed,
+      );
+      this.countdownResetTransition = null;
+    }
   }
 
   private readonly render = (time: number): void => {
     if (this.destroyed) return;
     const deltaSeconds = (time - this.lastFrameTime) / 1000;
     this.lastFrameTime = time;
+    this.sceneElapsedTime += deltaSeconds;
     const now = Date.now();
     this.updateSpeedFeedback(deltaSeconds);
+    for (const mat of this.hologramMaterials) mat.setTime(this.sceneElapsedTime);
+    this.localVehicle.plume.setTime(this.sceneElapsedTime);
+    this.updateMaterializeEffect(this.localVehicle, time);
+    for (const remote of this.remoteCars.values()) {
+      remote.plume.setTime(this.sceneElapsedTime);
+      this.updateMaterializeEffect(remote, time);
+    }
 
     if (this.phase === "countdown") {
+      this.updateCountdownResetTransition(time);
       const remainingMs = Math.max(0, this.pendingStartAt - now);
       const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
       this.statusTitle.textContent = seconds.toString();
@@ -2598,20 +3087,43 @@ export class App {
       this.handleActionEdges();
       this.maybeReportRaceState(now);
       if (this.launch.mode !== "multiplayer") {
+        if (this.botSimulator) {
+          this.tickSoloWithBots(deltaSeconds, now);
+        }
         this.updateSoloRaceState();
       }
     }
 
     const musicTime = this.phase === "running" ? (this.musicSync?.getCurrentTime() ?? this.elapsedRaceTime) : 0;
     this.latestReactiveBands = this.phase === "running" ? (this.musicSync?.getReactiveBands() ?? null) : null;
+    const loadingBlend = this.getLoadingBlend(now);
+    const loadingPulse = 0.5 + 0.5 * Math.sin(time / 280);
+    this.track.setLoadingBlend(loadingBlend, loadingPulse);
     this.updateCarTransform(deltaSeconds);
     this.updateRemoteCars(deltaSeconds);
-    this.updateBoostVisuals();
-    this.updateSpeedTracers();
+    this.updateBoostVisuals(deltaSeconds);
     this.updatePickupVisuals(time / 1000);
     this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);
-    this.environment.update(this.elapsedRaceTime, musicTime, this.vehicleController.state.trackU, this.latestReactiveBands);
+    const reactive = this.environment.update(
+      this.sceneElapsedTime,
+      musicTime,
+      this.vehicleController.state.trackU,
+      this.latestReactiveBands,
+      loadingBlend,
+    );
+    const rhythmicStrength = this.phase === "running" ? Math.max(0, 1 - loadingBlend) : 0;
+    this.latestSectionEnergy = reactive.sectionEnergy;
+    this.track.setRhythmicPulse({
+      musicTime,
+      kick: reactive.kick,
+      energyLevel: reactive.sectionEnergy,
+      strength: rhythmicStrength,
+      calmColor: reactive.roadCalmColor,
+      cruiseColor: reactive.roadCruiseColor,
+      chargeColor: reactive.roadChargeColor,
+      peakColor: reactive.roadPeakColor,
+    });
     this.updateHud();
     this.updateNameLabels();
     this.updateDebugHud();
@@ -2675,12 +3187,15 @@ function formatCombatSlot(item: PickupSpawnState["kind"] | null, slot: "fire" | 
 function describePlayerStatus(player: RoomPlayerState): string {
   if (player.isActiveRacer) {
     if (player.preload.sceneReady && player.preload.audioReady) {
-      return "Ready";
+      return "Grid locked";
     }
     if (player.preload.audioReady) {
-      return "Waiting for other players";
+      return "Waiting on room";
     }
-    return "Loading track";
+    if (player.preload.sceneReady) {
+      return "Syncing audio";
+    }
+    return "Loading lane";
   }
   if (player.ready) {
     return "Ready in lobby";

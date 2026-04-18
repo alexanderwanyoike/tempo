@@ -42,6 +42,8 @@ type QueryState = {
   fictionId: EnvironmentFictionId;
   debugHud: boolean;
   autostart: boolean;
+  botCount: number | null;
+  botDifficulty: BotDifficultyId | null;
 };
 
 type ShellMode = "solo" | "multiplayer";
@@ -70,6 +72,17 @@ const STEERING_PRESETS = [
 
 const PLAYER_NAME_STORAGE_KEY = "tempo.player-name";
 const STEERING_STORAGE_KEY = "tempo.steering-preset";
+const BOT_COUNT_STORAGE_KEY = "tempo.solo-bot-count";
+const BOT_COUNT_OPTIONS = [0, 1, 3, 5, 7] as const;
+const DEFAULT_BOT_COUNT = 3;
+const BOT_DIFFICULTY_STORAGE_KEY = "tempo.solo-bot-difficulty";
+const BOT_DIFFICULTY_OPTIONS = [
+  { id: "easy", label: "Easy" },
+  { id: "medium", label: "Medium" },
+  { id: "hard", label: "Hard" },
+] as const;
+type BotDifficultyId = (typeof BOT_DIFFICULTY_OPTIONS)[number]["id"];
+const DEFAULT_BOT_DIFFICULTY: BotDifficultyId = "medium";
 const PLAYER_NAME_MIN_LENGTH = 2;
 const PLAYER_NAME_MAX_LENGTH = 18;
 const DEFAULT_STEERING_PRESET = "responsive";
@@ -124,6 +137,10 @@ export class GameShell {
   private readonly fictionButtons = new Map<EnvironmentFictionId, HTMLButtonElement>();
   private readonly playerCapSelect = document.createElement("select");
   private readonly playerCapSection = document.createElement("div");
+  private readonly botCountSelect = document.createElement("select");
+  private readonly botCountSection = document.createElement("div");
+  private readonly botDifficultySelect = document.createElement("select");
+  private readonly botDifficultySection = document.createElement("div");
   private readonly carSection = document.createElement("div");
   private readonly carCarousel = document.createElement("div");
   private readonly carCarouselName = document.createElement("div");
@@ -179,6 +196,8 @@ export class GameShell {
   private selectedFictionId: EnvironmentFictionId = 1;
   private seedOverride: number | null = null;
   private selectedPlayerCap = 4;
+  private selectedBotCount = loadBotCountPreference();
+  private selectedBotDifficulty: BotDifficultyId = loadBotDifficultyPreference();
   private selectedCarVariant: CarVariant = "vector";
   private selectedPlayerName = loadPlayerNamePreference();
   private selectedSteeringPreset = loadSteeringPresetPreference();
@@ -244,6 +263,16 @@ export class GameShell {
     this.debugHud = queryState.debugHud;
     this.seedOverride = queryState.seed;
     this.selectedFictionId = queryState.fictionId;
+    if (queryState.botCount !== null) {
+      this.selectedBotCount = normalizeBotCount(queryState.botCount);
+      savePreference(BOT_COUNT_STORAGE_KEY, String(this.selectedBotCount));
+      this.botCountSelect.value = String(this.selectedBotCount);
+    }
+    if (queryState.botDifficulty !== null) {
+      this.selectedBotDifficulty = queryState.botDifficulty;
+      savePreference(BOT_DIFFICULTY_STORAGE_KEY, this.selectedBotDifficulty);
+      this.botDifficultySelect.value = this.selectedBotDifficulty;
+    }
     this.selectedSongId = this.resolveInitialSongId(queryState);
     this.browseSongId = this.selectedSongId;
 
@@ -1194,6 +1223,46 @@ export class GameShell {
     });
     this.steeringSection.append(steeringLabel, this.steeringSelect);
 
+    this.botCountSection.className = "tempo-shell-section";
+    const botCountLabel = document.createElement("div");
+    botCountLabel.className = "tempo-shell-label";
+    botCountLabel.textContent = "Opponents";
+    this.botCountSelect.className = "tempo-shell-select";
+    for (const count of BOT_COUNT_OPTIONS) {
+      const option = document.createElement("option");
+      option.value = String(count);
+      option.textContent = count === 0 ? "None" : String(count);
+      this.botCountSelect.appendChild(option);
+    }
+    this.botCountSelect.value = String(this.selectedBotCount);
+    this.botCountSelect.addEventListener("change", () => {
+      const raw = Number.parseInt(this.botCountSelect.value, 10);
+      this.selectedBotCount = normalizeBotCount(Number.isFinite(raw) ? raw : null);
+      this.botCountSelect.value = String(this.selectedBotCount);
+      savePreference(BOT_COUNT_STORAGE_KEY, String(this.selectedBotCount));
+      this.renderMode();
+    });
+    this.botCountSection.append(botCountLabel, this.botCountSelect);
+
+    this.botDifficultySection.className = "tempo-shell-section";
+    const botDifficultyLabel = document.createElement("div");
+    botDifficultyLabel.className = "tempo-shell-label";
+    botDifficultyLabel.textContent = "Difficulty";
+    this.botDifficultySelect.className = "tempo-shell-select";
+    for (const option of BOT_DIFFICULTY_OPTIONS) {
+      const el = document.createElement("option");
+      el.value = option.id;
+      el.textContent = option.label;
+      this.botDifficultySelect.appendChild(el);
+    }
+    this.botDifficultySelect.value = this.selectedBotDifficulty;
+    this.botDifficultySelect.addEventListener("change", () => {
+      this.selectedBotDifficulty = normalizeBotDifficulty(this.botDifficultySelect.value);
+      this.botDifficultySelect.value = this.selectedBotDifficulty;
+      savePreference(BOT_DIFFICULTY_STORAGE_KEY, this.selectedBotDifficulty);
+    });
+    this.botDifficultySection.append(botDifficultyLabel, this.botDifficultySelect);
+
     this.playerCapSection.className = "tempo-shell-section";
     const playerCapLabel = document.createElement("div");
     playerCapLabel.className = "tempo-shell-label";
@@ -1320,6 +1389,8 @@ export class GameShell {
       this.carSection,
       this.playerNameSection,
       this.steeringSection,
+      this.botCountSection,
+      this.botDifficultySection,
       this.roomSection,
       this.songSection,
       this.fictionSection,
@@ -1796,6 +1867,11 @@ export class GameShell {
     this.playerNameSection.classList.toggle("tempo-hidden", !showSettingsPanel);
     this.roomSection.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || !showSetupPanel);
     this.steeringSection.classList.toggle("tempo-hidden", !showSettingsPanel);
+    this.botCountSection.classList.toggle("tempo-hidden", !showSetupPanel || this.mode !== "solo");
+    this.botDifficultySection.classList.toggle(
+      "tempo-hidden",
+      !showSetupPanel || this.mode !== "solo" || this.selectedBotCount === 0,
+    );
     this.trackStats.parentElement?.classList.toggle("tempo-hidden", !showSetupPanel);
     this.configureRoomButton.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
     this.roomViewDeck.classList.toggle("tempo-hidden", this.mode !== "multiplayer" || inRoom);
@@ -2083,6 +2159,10 @@ export class GameShell {
       fictionId: clampFictionId(parseInteger(params.get("fiction")) ?? 1),
       debugHud: params.get("debugHud") === "1",
       autostart: params.get("autostart") === "1" || params.has("song"),
+      botCount: parseInteger(params.get("botCount")),
+      botDifficulty: params.has("difficulty")
+        ? normalizeBotDifficulty(params.get("difficulty"))
+        : null,
     };
   }
 
@@ -2344,6 +2424,8 @@ export class GameShell {
       localPlayerId: "solo",
       localPlayerName: this.selectedPlayerName,
       carVariant: this.selectedCarVariant,
+      botCount: this.selectedBotCount,
+      botDifficulty: this.selectedBotDifficulty,
       onRetry: () => {
         void this.launchSoloRace(true);
       },
@@ -2715,6 +2797,37 @@ function loadSteeringPresetPreference(): string {
   } catch {
     return DEFAULT_STEERING_PRESET;
   }
+}
+
+function loadBotCountPreference(): number {
+  try {
+    const raw = Number.parseInt(window.localStorage.getItem(BOT_COUNT_STORAGE_KEY) ?? "", 10);
+    return normalizeBotCount(Number.isFinite(raw) ? raw : null);
+  } catch {
+    return DEFAULT_BOT_COUNT;
+  }
+}
+
+function normalizeBotCount(value: number | null): number {
+  if (value === null || Number.isNaN(value)) return DEFAULT_BOT_COUNT;
+  const clamped = Math.max(0, Math.min(7, Math.floor(value)));
+  return BOT_COUNT_OPTIONS.includes(clamped as (typeof BOT_COUNT_OPTIONS)[number])
+    ? clamped
+    : DEFAULT_BOT_COUNT;
+}
+
+function loadBotDifficultyPreference(): BotDifficultyId {
+  try {
+    return normalizeBotDifficulty(window.localStorage.getItem(BOT_DIFFICULTY_STORAGE_KEY));
+  } catch {
+    return DEFAULT_BOT_DIFFICULTY;
+  }
+}
+
+function normalizeBotDifficulty(value: string | null): BotDifficultyId {
+  return BOT_DIFFICULTY_OPTIONS.some((option) => option.id === value)
+    ? (value as BotDifficultyId)
+    : DEFAULT_BOT_DIFFICULTY;
 }
 
 function normalizeSteeringPreset(value: string | null): string {

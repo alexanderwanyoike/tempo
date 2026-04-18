@@ -64,6 +64,14 @@ function sampleHalfWidth(halfWidths: readonly number[] | number, i: number): num
   return halfWidths[Math.min(i, halfWidths.length - 1)] ?? halfWidths[halfWidths.length - 1] ?? 0;
 }
 
+// Adaptive centerline smoothing: rounds only the spots where Catmull-Rom produces
+// a radius of curvature below the track half-width, leaving straights and gentle
+// bends untouched. Max angle per step = ds / R_min; samples exceeding that budget
+// get pulled toward the line between their neighbors until the budget is met.
+const CENTERLINE_MIN_RADIUS = 12.5;
+const CENTERLINE_RELAX_STEP = 0.5;
+const CENTERLINE_MAX_RELAX_PASSES = 200;
+
 export function computeParallelTransportFrames(
   centerline: CatmullRomCurve3,
   sampleCount: number,
@@ -73,12 +81,43 @@ export function computeParallelTransportFrames(
   const rights: Vector3[] = [];
   const ups: Vector3[] = [];
 
-  // Compute tangents
+  const arcLength = centerline.getLength();
+  const ds = arcLength / sampleCount;
+  const maxAnglePerStep = ds / CENTERLINE_MIN_RADIUS;
+  const tmpA = new Vector3();
+  const tmpB = new Vector3();
+
+  for (let pass = 0; pass < CENTERLINE_MAX_RELAX_PASSES; pass++) {
+    let touched = false;
+    for (let i = 1; i < sampleCount; i++) {
+      tmpA.subVectors(samples[i], samples[i - 1]);
+      tmpB.subVectors(samples[i + 1], samples[i]);
+      const lenA = tmpA.length();
+      const lenB = tmpB.length();
+      if (lenA < 1e-6 || lenB < 1e-6) continue;
+      const cosAngle = TMath.clamp(tmpA.dot(tmpB) / (lenA * lenB), -1, 1);
+      const angle = Math.acos(cosAngle);
+      if (angle <= maxAnglePerStep) continue;
+      const excess = angle / maxAnglePerStep - 1;
+      const weight = Math.min(CENTERLINE_RELAX_STEP, excess * CENTERLINE_RELAX_STEP);
+      const midX = (samples[i - 1].x + samples[i + 1].x) * 0.5;
+      const midY = (samples[i - 1].y + samples[i + 1].y) * 0.5;
+      const midZ = (samples[i - 1].z + samples[i + 1].z) * 0.5;
+      samples[i].set(
+        samples[i].x + (midX - samples[i].x) * weight,
+        samples[i].y + (midY - samples[i].y) * weight,
+        samples[i].z + (midZ - samples[i].z) * weight,
+      );
+      touched = true;
+    }
+    if (!touched) break;
+  }
+
+  // Tangents from central differences of relaxed samples (consistent with rendered geometry).
   for (let i = 0; i <= sampleCount; i++) {
-    const u = i / sampleCount;
-    tangents.push(
-      centerline.getTangentAt(Math.min(u, 0.9999)).normalize(),
-    );
+    const prev = samples[Math.max(0, i - 1)];
+    const next = samples[Math.min(sampleCount, i + 1)];
+    tangents.push(next.clone().sub(prev).normalize());
   }
 
   // Parallel transport: initialize first frame from world up
@@ -137,7 +176,9 @@ function buildRoadSurfaceMesh(
   const positions = new Float32Array(count * rowVertexCount * 3);
   const normals = new Float32Array(count * rowVertexCount * 3);
   const colors = new Float32Array(count * rowVertexCount * 3);
+  const trackUs = new Float32Array(count * rowVertexCount);
   const indices: number[] = [];
+  const totalDenom = Math.max(1, count - 1);
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
@@ -146,6 +187,7 @@ function buildRoadSurfaceMesh(
     const halfWidth = sampleHalfWidth(halfWidths, i);
     const palette = getRoadPalette(sections, sampleSection, i);
     const surf = new Color().copy(palette.base).lerp(palette.glow, 0.1);
+    const trackU = i / totalDenom;
 
     for (let col = 0; col <= ROAD_SURFACE_COLUMNS; col += 1) {
       const laneT = col / ROAD_SURFACE_COLUMNS;
@@ -162,6 +204,7 @@ function buildRoadSurfaceMesh(
       colors[vi * 3] = surf.r;
       colors[vi * 3 + 1] = surf.g;
       colors[vi * 3 + 2] = surf.b;
+      trackUs[vi] = trackU;
     }
 
     if (i < count - 1) {
@@ -182,6 +225,7 @@ function buildRoadSurfaceMesh(
   geo.setAttribute("position", new BufferAttribute(positions, 3));
   geo.setAttribute("normal", new BufferAttribute(normals, 3));
   geo.setAttribute("color", new BufferAttribute(colors, 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -262,8 +306,10 @@ function buildRoadLongitudinalGridLayer(
   const positions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];
+  const trackUs: number[] = [];
   const indices: number[] = [];
   let vertIdx = 0;
+  const totalDenom = Math.max(1, frames.samples.length - 1);
 
   for (let i = 0; i < frames.samples.length - 1; i++) {
     const c = frames.samples[i];
@@ -276,6 +322,8 @@ function buildRoadLongitudinalGridLayer(
     const halfWidthN = sampleHalfWidth(halfWidths, i + 1) * 0.9;
     const hw = gridWidth / 2;
     const palette = getRoadPalette(sections, sampleSection, i);
+    const trackU = i / totalDenom;
+    const trackUN = (i + 1) / totalDenom;
 
     for (const fraction of laneFractions) {
       const offset = halfWidth * fraction;
@@ -296,6 +344,7 @@ function buildRoadLongitudinalGridLayer(
       );
       for (let j = 0; j < 4; j++) normals.push(u.x, u.y, u.z);
       for (let j = 0; j < 4; j++) colors.push(palette.glow.r, palette.glow.g, palette.glow.b);
+      trackUs.push(trackU, trackU, trackUN, trackUN);
       indices.push(vertIdx, vertIdx + 1, vertIdx + 2);
       indices.push(vertIdx + 1, vertIdx + 3, vertIdx + 2);
       vertIdx += 4;
@@ -306,6 +355,7 @@ function buildRoadLongitudinalGridLayer(
   geo.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
   geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
   geo.setAttribute("color", new BufferAttribute(new Float32Array(colors), 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(new Float32Array(trackUs), 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -354,8 +404,10 @@ function buildRoadCrossGridLayer(
   const positions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];
+  const trackUs: number[] = [];
   const indices: number[] = [];
   let vertIdx = 0;
+  const totalDenom = Math.max(1, frames.samples.length - 1);
 
   for (let i = 0; i < frames.samples.length - 1; i += stride) {
     const c = frames.samples[i];
@@ -365,6 +417,7 @@ function buildRoadCrossGridLayer(
     const span = sampleHalfWidth(halfWidths, i) * 0.88;
     const halfThickness = gridWidth * 0.72;
     const palette = getRoadPalette(sections, sampleSection, i);
+    const trackU = i / totalDenom;
 
     positions.push(
       c.x - r.x * span - t.x * halfThickness + u.x * lift,
@@ -382,6 +435,7 @@ function buildRoadCrossGridLayer(
     );
     for (let j = 0; j < 4; j++) normals.push(u.x, u.y, u.z);
     for (let j = 0; j < 4; j++) colors.push(palette.glow.r, palette.glow.g, palette.glow.b);
+    trackUs.push(trackU, trackU, trackU, trackU);
     indices.push(vertIdx, vertIdx + 1, vertIdx + 2);
     indices.push(vertIdx + 1, vertIdx + 3, vertIdx + 2);
     vertIdx += 4;
@@ -391,6 +445,7 @@ function buildRoadCrossGridLayer(
   geo.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
   geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
   geo.setAttribute("color", new BufferAttribute(new Float32Array(colors), 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(new Float32Array(trackUs), 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -418,7 +473,9 @@ function buildRoadEdgeGlowMesh(
   const positions = new Float32Array(count * rowVertexCount * 3);
   const normals = new Float32Array(count * rowVertexCount * 3);
   const colors = new Float32Array(count * rowVertexCount * 3);
+  const trackUs = new Float32Array(count * rowVertexCount);
   const indices: number[] = [];
+  const totalDenom = Math.max(1, count - 1);
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
@@ -431,6 +488,7 @@ function buildRoadEdgeGlowMesh(
     const outer = outerAbs * side;
     const palette = getRoadPalette(sections, sampleSection, i);
     const edgeColor = side === 1 ? new Color().copy(palette.glow).lerp(new Color("#ff5ea2"), 0.35) : palette.edge;
+    const trackU = i / totalDenom;
 
     for (let col = 0; col <= ROAD_EDGE_COLUMNS; col += 1) {
       const laneT = col / ROAD_EDGE_COLUMNS;
@@ -445,6 +503,7 @@ function buildRoadEdgeGlowMesh(
       colors[vi * 3] = edgeColor.r;
       colors[vi * 3 + 1] = edgeColor.g;
       colors[vi * 3 + 2] = edgeColor.b;
+      trackUs[vi] = trackU;
     }
 
     if (i < count - 1) {
@@ -465,6 +524,7 @@ function buildRoadEdgeGlowMesh(
   geo.setAttribute("position", new BufferAttribute(positions, 3));
   geo.setAttribute("normal", new BufferAttribute(normals, 3));
   geo.setAttribute("color", new BufferAttribute(colors, 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -490,9 +550,11 @@ export function buildWallMesh(
   const positions = new Float32Array(count * rowVertexCount * 3);
   const normals = new Float32Array(count * rowVertexCount * 3);
   const colors = new Float32Array(count * rowVertexCount * 3);
+  const trackUs = new Float32Array(count * rowVertexCount);
   const indices: number[] = [];
   const colBase = new Color("#4e233a");
   const colStripe = new Color("#ff2a6d");
+  const totalDenom = Math.max(1, count - 1);
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
@@ -506,6 +568,7 @@ export function buildWallMesh(
     const ez = c.z + r.z * wallOffset * side;
     const nx = -r.x * side, ny = -r.y * side, nz = -r.z * side;
     const col = Math.floor(i / 8) % 2 === 0 ? colStripe : colBase;
+    const trackU = i / totalDenom;
 
     for (let row = 0; row <= WALL_SURFACE_ROWS; row += 1) {
       const heightT = row / WALL_SURFACE_ROWS;
@@ -519,6 +582,7 @@ export function buildWallMesh(
       colors[vi * 3] = col.r;
       colors[vi * 3 + 1] = col.g;
       colors[vi * 3 + 2] = col.b;
+      trackUs[vi] = trackU;
     }
 
     if (i < count - 1) {
@@ -544,6 +608,7 @@ export function buildWallMesh(
   geo.setAttribute("position", new BufferAttribute(positions, 3));
   geo.setAttribute("normal", new BufferAttribute(normals, 3));
   geo.setAttribute("color", new BufferAttribute(colors, 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -587,7 +652,9 @@ function buildSectionWallSurfaceMesh(
   const positions = new Float32Array(count * rowVertexCount * 3);
   const normals = new Float32Array(count * rowVertexCount * 3);
   const colors = new Float32Array(count * rowVertexCount * 3);
+  const trackUs = new Float32Array(count * rowVertexCount);
   const indices: number[] = [];
+  const totalDenom = Math.max(1, count - 1);
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
@@ -604,6 +671,7 @@ function buildSectionWallSurfaceMesh(
     const palette = sectionWallColors[sections[sampleSection[i]]?.type ?? "intro"];
     const base = new Color().copy(palette.base).lerp(palette.stripe, 0.28);
     const top = new Color().copy(palette.stripe).lerp(new Color("#ffffff"), 0.22);
+    const trackU = i / totalDenom;
 
     for (let row = 0; row <= WALL_SURFACE_ROWS; row += 1) {
       const heightT = row / WALL_SURFACE_ROWS;
@@ -618,6 +686,7 @@ function buildSectionWallSurfaceMesh(
       colors[vi * 3] = color.r;
       colors[vi * 3 + 1] = color.g;
       colors[vi * 3 + 2] = color.b;
+      trackUs[vi] = trackU;
     }
 
     if (i < count - 1) {
@@ -643,6 +712,7 @@ function buildSectionWallSurfaceMesh(
   geo.setAttribute("position", new BufferAttribute(positions, 3));
   geo.setAttribute("normal", new BufferAttribute(normals, 3));
   geo.setAttribute("color", new BufferAttribute(colors, 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -671,7 +741,9 @@ function buildSectionWallRailMesh(
   const positions = new Float32Array(count * rowVertexCount * 3);
   const normals = new Float32Array(count * rowVertexCount * 3);
   const colors = new Float32Array(count * rowVertexCount * 3);
+  const trackUs = new Float32Array(count * rowVertexCount);
   const indices: number[] = [];
+  const totalDenom = Math.max(1, count - 1);
 
   for (let i = 0; i < count; i++) {
     const c = frames.samples[i];
@@ -690,6 +762,7 @@ function buildSectionWallRailMesh(
     const sectionType = sections[si]?.type ?? "intro";
     const palette = sectionWallColors[sectionType];
     const col = Math.floor(i / 4) % 2 === 0 ? palette.stripe : new Color().copy(palette.stripe).lerp(new Color("#ffffff"), 0.28);
+    const trackU = i / totalDenom;
 
     for (let row = 0; row <= WALL_RAIL_ROWS; row += 1) {
       const heightT = row / WALL_RAIL_ROWS;
@@ -704,6 +777,7 @@ function buildSectionWallRailMesh(
       colors[vi * 3] = col.r;
       colors[vi * 3 + 1] = col.g;
       colors[vi * 3 + 2] = col.b;
+      trackUs[vi] = trackU;
     }
 
     if (i < count - 1) {
@@ -729,6 +803,7 @@ function buildSectionWallRailMesh(
   geo.setAttribute("position", new BufferAttribute(positions, 3));
   geo.setAttribute("normal", new BufferAttribute(normals, 3));
   geo.setAttribute("color", new BufferAttribute(colors, 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(trackUs, 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
@@ -747,8 +822,10 @@ export function buildCenterLineMesh(frames: FrameTable): Mesh {
   const count = frames.samples.length;
   const positions: number[] = [];
   const normals: number[] = [];
+  const trackUs: number[] = [];
   const indices: number[] = [];
   let vertIdx = 0;
+  const totalDenom = Math.max(1, count - 1);
 
   for (let i = 0; i < count - 1; i++) {
     if (Math.floor(i / 3) % 2 === 1) continue;
@@ -760,6 +837,8 @@ export function buildCenterLineMesh(frames: FrameTable): Mesh {
     const rN = frames.rights[i + 1];
     const hw = CENTER_DASH_WIDTH / 2;
     const lift = 0.03;
+    const trackU = i / totalDenom;
+    const trackUN = (i + 1) / totalDenom;
 
     positions.push(
       c.x - r.x*hw + u.x*lift, c.y - r.y*hw + u.y*lift, c.z - r.z*hw + u.z*lift,
@@ -768,6 +847,7 @@ export function buildCenterLineMesh(frames: FrameTable): Mesh {
       cN.x + rN.x*hw + u.x*lift, cN.y + rN.y*hw + u.y*lift, cN.z + rN.z*hw + u.z*lift,
     );
     for (let j = 0; j < 4; j++) normals.push(u.x, u.y, u.z);
+    trackUs.push(trackU, trackU, trackUN, trackUN);
     indices.push(vertIdx, vertIdx+1, vertIdx+2);
     indices.push(vertIdx+1, vertIdx+3, vertIdx+2);
     vertIdx += 4;
@@ -776,6 +856,7 @@ export function buildCenterLineMesh(frames: FrameTable): Mesh {
   const geo = new BufferGeometry();
   geo.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
   geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
+  geo.setAttribute("aTrackU", new BufferAttribute(new Float32Array(trackUs), 1));
   geo.setIndex(indices);
 
   return new Mesh(geo, new MeshStandardMaterial({
