@@ -15,6 +15,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  MeshToonMaterial,
   PerspectiveCamera,
   Quaternion,
   Scene,
@@ -54,6 +55,16 @@ import { TestTrack } from "./track-builder";
 import { TrackGenerator } from "./track-generator";
 import { VehicleController, defaultVehicleTuning, type VehicleState } from "./vehicle-controller";
 import { BotSimulator, buildBotConfigs, type BotDifficulty } from "./bot-simulator";
+import {
+  createOutlineMaterial,
+  createOutlineMesh,
+  createToonGradientMap,
+  toToonMaterial,
+} from "./car-toon-shader";
+import { HoverJets } from "./hover-jets";
+import { BoostRibbons } from "./boost-ribbons";
+import { BoostFxPass } from "./boost-fx-pass";
+import { SpeedLinesPass } from "./speed-lines-pass";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -62,22 +73,6 @@ import {
   type RaceSimRacer,
 } from "../../../shared/race-sim";
 import { carVariants } from "../../../shared/network-types";
-
-type TrailSample = {
-  position: Vector3;
-  quaternion: Quaternion;
-  boost: number;
-};
-
-type SpeedTracerLayer = {
-  mesh: Mesh;
-  material: MeshBasicMaterial;
-  side: 1 | -1;
-  lateralOffset: number;
-  verticalOffset: number;
-  sampleStride: number;
-  sampleOffset: number;
-};
 
 type AppPhase = "staging" | "countdown" | "running" | "finished";
 type AppMode = "solo" | "multiplayer";
@@ -89,10 +84,11 @@ type RemoteCarVisual = {
   group: Group;
   bodyPivot: Group;
   fallbackGroup: Group;
-  fallbackBodyMaterial: MeshStandardMaterial;
-  fallbackCockpitMaterial: MeshStandardMaterial;
+  fallbackBodyMaterial: MeshToonMaterial;
+  fallbackCockpitMaterial: MeshToonMaterial;
   feedbackGlow: Mesh;
   feedbackGlowMaterial: MeshBasicMaterial;
+  hoverJets: HoverJets;
   assetGroup: Group | null;
   assetRevision: number;
   targetTrackU: number;
@@ -168,8 +164,6 @@ export class App {
   private static readonly WORLD_UP = new Vector3(0, 1, 0);
   private static readonly BOOST_COLOR = new Color("#57ff36");
   private static readonly BOOST_HOT_COLOR = new Color("#c8ff7a");
-  private static readonly TRACER_COLOR = new Color("#7dff48");
-  private static readonly TRACER_HOT_COLOR = new Color("#f9fff2");
   private static readonly SLOWDOWN_FLASH_COLOR = new Color("#ff4b4b");
   private static readonly WIN_SFX_URL = new URL("../../../assets/audio/Win Backspin.wav", import.meta.url).href;
   private static readonly LOSE_SFX_URL = new URL("../../../assets/audio/Lose Backspin.wav", import.meta.url).href;
@@ -177,17 +171,15 @@ export class App {
   private readonly renderer: WebGLRenderer;
   private readonly composer: EffectComposer;
   private readonly bloomPass: UnrealBloomPass;
+  private readonly boostFxPass: BoostFxPass;
+  private readonly speedLinesPass: SpeedLinesPass | null;
+  private speedLinesStrength = 0;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly localVehicle: RemoteCarVisual;
   private readonly combatVfx: CombatVfx;
   private readonly pickupGroup = new Group();
-  private readonly boostTrailGroup = new Group();
-  private readonly boostTrailMeshes: Mesh[] = [];
-  private readonly boostTrailMaterials: MeshBasicMaterial[] = [];
-  private readonly boostTrailHistory: TrailSample[] = [];
-  private readonly speedTracerGroup = new Group();
-  private readonly speedTracers: SpeedTracerLayer[] = [];
+  private readonly boostRibbons: BoostRibbons;
   private readonly remoteCars = new Map<string, RemoteCarVisual>();
   private readonly pickupVisuals = new Map<string, PickupVisual>();
   private readonly winSfx = new Audio(App.WIN_SFX_URL);
@@ -195,6 +187,8 @@ export class App {
   private readonly input: VehicleInput;
   private readonly touchControls: TouchControls | null;
   private readonly vehicleController: VehicleController;
+  private readonly carToonGradientMap = createToonGradientMap();
+  private readonly carOutlineMaterial = createOutlineMaterial();
   private readonly cameraMode: CameraMode;
   private track: Track;
   private trackObjects: readonly TrackObject[];
@@ -237,8 +231,6 @@ export class App {
   private readonly trackObjectTriggers = new Set<string>();
   private readonly serverPlayers = new Map<string, RacePlayerState>();
   private readonly nameLabels = new Map<string, HTMLDivElement>();
-  private readonly reducedFx: boolean;
-  private readonly boostTrailSampleLimit: number;
   private readonly baseBloomStrength = 0.4;
 
   private animationFrameId: number | null = null;
@@ -355,8 +347,6 @@ export class App {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.reducedFx = window.matchMedia("(pointer: coarse)").matches;
-    this.boostTrailSampleLimit = this.reducedFx ? 30 : 42;
 
     this.scene = new Scene();
     this.scene.background = new Color("#05070c");
@@ -371,6 +361,18 @@ export class App {
       0.3,
     );
     this.composer.addPass(this.bloomPass);
+    this.boostFxPass = new BoostFxPass();
+    this.composer.addPass(this.boostFxPass);
+    // Speed-line pass adds another full-screen shader hit, so gate it
+    // behind the same coarse-pointer check we use for other reduced-fx
+    // decisions. Mobile keeps the ribbons + boost fx but not the streaks.
+    const reducedFx = window.matchMedia("(pointer: coarse)").matches;
+    if (reducedFx) {
+      this.speedLinesPass = null;
+    } else {
+      this.speedLinesPass = new SpeedLinesPass();
+      this.composer.addPass(this.speedLinesPass);
+    }
 
     this.localVehicle = this.createVehicleVisual(launch.carVariant ?? "vector");
     this.scene.add(this.localVehicle.group);
@@ -392,16 +394,17 @@ export class App {
     this.scene.add(this.environment.group);
     this.scene.add(this.track.meshGroup);
     this.scene.add(this.pickupGroup);
-    this.scene.add(this.boostTrailGroup);
-    this.scene.add(this.speedTracerGroup);
+    this.boostRibbons = new BoostRibbons(App.BOOST_COLOR, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    this.scene.add(this.boostRibbons.group);
     this.scene.add(this.camera);
     this.combatVfx = new CombatVfx(
       this.scene,
       (id) => this.getVehicleGroup(id),
       this.root,
     );
-    this.createBoostTrailMeshes();
-    this.createSpeedTracerMeshes();
     this.configureSfx();
 
     this.vehicleController.setTrack(this.track);
@@ -580,6 +583,7 @@ export class App {
     for (const [clientId, remote] of this.remoteCars) {
       if (!nextIds.has(clientId)) {
         this.scene.remove(remote.group);
+        remote.hoverJets.dispose();
         this.remoteCars.delete(clientId);
         this.removeNameLabel(clientId);
       }
@@ -770,30 +774,41 @@ export class App {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.boostRibbons.setViewportSize(window.innerWidth, window.innerHeight);
   };
 
   private createVehicleVisual(variant: CarVariant): RemoteCarVisual {
     const palette = paletteForVariant(variant);
-    const bodyMaterial = new MeshStandardMaterial({
+    const bodySource = new MeshStandardMaterial({
       color: palette.body.clone(),
       emissive: palette.bodyEmissive.clone(),
       metalness: 0.3,
       roughness: 0.5,
     });
-    const body = new Mesh(new BoxGeometry(1.4, 0.5, 3.2), bodyMaterial);
+    const bodyMaterial = toToonMaterial(bodySource, this.carToonGradientMap);
+    bodySource.dispose();
+    const bodyGeometry = new BoxGeometry(1.4, 0.5, 3.2);
+    const body = new Mesh(bodyGeometry, bodyMaterial);
     body.position.y = 0.1;
+    const bodyOutline = createOutlineMesh(bodyGeometry, this.carOutlineMaterial);
+    bodyOutline.position.copy(body.position);
 
-    const cockpitMaterial = new MeshStandardMaterial({
+    const cockpitSource = new MeshStandardMaterial({
       color: palette.cockpit.clone(),
       emissive: palette.cockpitEmissive.clone(),
       metalness: 0.15,
       roughness: 0.45,
     });
-    const cockpit = new Mesh(new BoxGeometry(0.8, 0.35, 1.15), cockpitMaterial);
+    const cockpitMaterial = toToonMaterial(cockpitSource, this.carToonGradientMap);
+    cockpitSource.dispose();
+    const cockpitGeometry = new BoxGeometry(0.8, 0.35, 1.15);
+    const cockpit = new Mesh(cockpitGeometry, cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
+    const cockpitOutline = createOutlineMesh(cockpitGeometry, this.carOutlineMaterial);
+    cockpitOutline.position.copy(cockpit.position);
 
     const fallbackGroup = new Group();
-    fallbackGroup.add(body, cockpit);
+    fallbackGroup.add(body, bodyOutline, cockpit, cockpitOutline);
 
     const feedbackGlowMaterial = new MeshBasicMaterial({
       color: App.BOOST_COLOR.clone(),
@@ -808,6 +823,9 @@ export class App {
     const bodyPivot = new Group();
     bodyPivot.add(fallbackGroup, feedbackGlow);
 
+    const hoverJets = new HoverJets(palette.body);
+    hoverJets.attachTo(bodyPivot);
+
     const group = new Group();
     group.add(bodyPivot);
 
@@ -821,6 +839,7 @@ export class App {
       fallbackCockpitMaterial: cockpitMaterial,
       feedbackGlow,
       feedbackGlowMaterial,
+      hoverJets,
       assetGroup: null,
       assetRevision: 0,
       targetTrackU: START_TRACK_U,
@@ -839,12 +858,14 @@ export class App {
       const asset = await loadCarMesh(this.config, visual.variant);
       if (this.destroyed || revision !== visual.assetRevision) return;
       applyCarTransform(asset, definition.raceTransform);
+      this.toonifyCarAsset(asset);
       if (visual.assetGroup) {
         visual.bodyPivot.remove(visual.assetGroup);
       }
       visual.assetGroup = asset;
       visual.bodyPivot.add(asset);
       visual.fallbackGroup.visible = false;
+      visual.hoverJets.bindToMesh(asset, visual.bodyPivot);
     } catch (error) {
       console.error(`Failed to load race mesh for ${visual.variant}:`, error);
     }
@@ -861,49 +882,38 @@ export class App {
     return remote;
   }
 
-  private createBoostTrailMeshes(): void {
-    const trailGeometry = new BoxGeometry(1.2, 0.22, 2.8);
-    const trailCount = this.reducedFx ? 8 : 14;
-    for (let i = 0; i < trailCount; i++) {
-      const material = new MeshBasicMaterial({
-        color: App.BOOST_COLOR.clone(),
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: AdditiveBlending,
-      });
-      const mesh = new Mesh(trailGeometry, material);
-      mesh.visible = false;
-      this.boostTrailMaterials.push(material);
-      this.boostTrailMeshes.push(mesh);
-      this.boostTrailGroup.add(mesh);
-    }
-  }
+  private toonifyCarAsset(asset: Group): void {
+    // Collect meshes first so we can add outline siblings without perturbing
+    // the traversal iterator.
+    const convertedMeshes: Mesh[] = [];
+    asset.traverse((obj) => {
+      if (!(obj instanceof Mesh)) return;
+      if (obj.name === "tempo-car-outline") return;
+      if (Array.isArray(obj.material)) {
+        obj.material = obj.material.map((mat) =>
+          mat instanceof MeshStandardMaterial && !(mat instanceof MeshToonMaterial)
+            ? toToonMaterial(mat, this.carToonGradientMap)
+            : mat,
+        );
+      } else if (
+        obj.material instanceof MeshStandardMaterial
+        && !(obj.material instanceof MeshToonMaterial)
+      ) {
+        obj.material = toToonMaterial(obj.material, this.carToonGradientMap);
+      } else {
+        return;
+      }
+      convertedMeshes.push(obj);
+    });
 
-  private createSpeedTracerMeshes(): void {
-    const tracerGeometry = new BoxGeometry(0.13, 0.09, 1);
-    const tracerCount = this.reducedFx ? 8 : 14;
-    for (let i = 0; i < tracerCount; i++) {
-      const material = new MeshBasicMaterial({
-        color: App.TRACER_COLOR.clone(),
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: AdditiveBlending,
-      });
-      const mesh = new Mesh(tracerGeometry, material);
-      mesh.visible = false;
-      this.speedTracerGroup.add(mesh);
-      const side: 1 | -1 = i % 2 === 0 ? 1 : -1;
-      this.speedTracers.push({
-        mesh,
-        material,
-        side,
-        lateralOffset: side * (0.44 + ((i * 3) % 5) * 0.12),
-        verticalOffset: 0.1 + ((i * 5) % 4) * 0.05,
-        sampleStride: this.reducedFx ? 2 : 3,
-        sampleOffset: 1 + i,
-      });
+    for (const mesh of convertedMeshes) {
+      const parent = mesh.parent;
+      if (!parent) continue;
+      const outline = createOutlineMesh(mesh.geometry, this.carOutlineMaterial);
+      outline.position.copy(mesh.position);
+      outline.quaternion.copy(mesh.quaternion);
+      outline.scale.copy(mesh.scale);
+      parent.add(outline);
     }
   }
 
@@ -1988,6 +1998,10 @@ export class App {
     if (this.localTakenDownUntil > now) {
       this.applySpinoutVisual(this.localVehicle.group, body, state.up, now, this.localTakenDownUntil);
     }
+
+    const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
+    const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
+    this.localVehicle.hoverJets.update(deltaSeconds, speedRatio, state.boostMultiplier);
   }
 
   private updateRemoteCars(deltaSeconds: number): void {
@@ -2012,6 +2026,9 @@ export class App {
       if (snapshot.takenDownUntil > now) {
         this.applySpinoutVisual(remote.group, body, frame.up, now, snapshot.takenDownUntil);
       }
+
+      const speedRatio = Math.min(1, Math.max(0, snapshot.speed) / 90);
+      remote.hoverJets.update(deltaSeconds, speedRatio, 1);
     }
   }
 
@@ -2038,7 +2055,7 @@ export class App {
     }
   }
 
-  private updateBoostVisuals(): void {
+  private updateBoostVisuals(deltaSeconds: number): void {
     const boost = this.vehicleController.state.visualBoost;
     const surgeBoost = MathUtils.clamp(boost + this.boostSurge * 0.42 + this.pickupSurge * 0.22, 0, 1.35);
     const slowdownMix = Math.min(this.slowdownFlash, 1);
@@ -2072,97 +2089,30 @@ export class App {
     const glowScale = 1 + surgeBoost * 0.55 + slowdownMix * 0.18;
     this.localVehicle.feedbackGlow.scale.set(glowScale, 1, glowScale);
 
-    this.boostTrailHistory.unshift({
-      position: this.localVehicle.group.position.clone(),
-      quaternion: this.localVehicle.group.quaternion.clone(),
-      boost: surgeBoost,
-    });
-    if (this.boostTrailHistory.length > this.boostTrailSampleLimit) {
-      this.boostTrailHistory.length = this.boostTrailSampleLimit;
-    }
-
-    for (let i = 0; i < this.boostTrailMeshes.length; i++) {
-      const sample = this.boostTrailHistory[Math.min(this.boostTrailHistory.length - 1, 2 + i * 3)];
-      const mesh = this.boostTrailMeshes[i];
-      const material = this.boostTrailMaterials[i];
-      if (!sample || sample.boost < 0.04) {
-        mesh.visible = false;
-        continue;
-      }
-
-      mesh.visible = true;
-      mesh.position.copy(sample.position);
-      mesh.quaternion.copy(sample.quaternion);
-      const sideSign = i % 2 === 0 ? 1 : -1;
-      const spread = sample.boost * (0.25 + i * 0.012);
-      this.tempVector.set(sideSign * spread, 0.02 + i * 0.004, -0.6 - i * 0.16);
-      this.tempVector.applyQuaternion(sample.quaternion);
-      mesh.position.add(this.tempVector);
-      mesh.scale.set(
-        1 + sample.boost * (0.62 + i * 0.03),
-        1 + sample.boost * (0.18 + i * 0.018),
-        1.55 + sample.boost * (1.2 + i * 0.1),
-      );
-      material.opacity = Math.max(0, sample.boost * (0.4 - i * 0.018));
-      material.color.copy(App.BOOST_COLOR).lerp(App.BOOST_HOT_COLOR, Math.min(sample.boost * 0.72, 1));
-    }
+    const carQuaternion = this.localVehicle.group.quaternion;
+    this.tempVector.set(0, 0, -1).applyQuaternion(carQuaternion);
+    this.tempVectorB.set(0, 1, 0).applyQuaternion(carQuaternion);
+    this.boostRibbons.sample(this.localVehicle.group.position, this.tempVector, this.tempVectorB);
+    this.boostRibbons.update(deltaSeconds, Math.min(surgeBoost, 1));
+    this.boostFxPass.setStrength(Math.min(surgeBoost, 1));
+    this.updateSpeedLines(deltaSeconds);
   }
 
-  private updateSpeedTracers(): void {
-    if (this.phase !== "running") {
-      for (const tracer of this.speedTracers) {
-        tracer.mesh.visible = false;
-      }
-      return;
-    }
-
+  private updateSpeedLines(deltaSeconds: number): void {
+    if (!this.speedLinesPass) return;
     const state = this.vehicleController.state;
-    const speedRatio = Math.min(Math.abs(state.speed) / 90, 1);
-    const baseIntensity = MathUtils.smoothstep(speedRatio, 0.36, 0.96);
-    const intensity = MathUtils.clamp(
-      baseIntensity * 0.68 + state.visualBoost * 0.82 + this.pickupSurge * 0.28,
-      0,
-      1.2,
-    );
-    if (intensity < 0.08 || this.boostTrailHistory.length < 3) {
-      for (const tracer of this.speedTracers) {
-        tracer.mesh.visible = false;
-      }
-      return;
-    }
-
-    for (const tracer of this.speedTracers) {
-      const sampleIndex = Math.min(this.boostTrailHistory.length - 1, tracer.sampleOffset + tracer.sampleStride);
-      const sample = this.boostTrailHistory[sampleIndex];
-      if (!sample) {
-        tracer.mesh.visible = false;
-        continue;
-      }
-
-      tracer.mesh.visible = true;
-      tracer.mesh.quaternion.copy(sample.quaternion);
-      tracer.mesh.position.copy(sample.position);
-      this.tempVector.set(
-        tracer.lateralOffset * (1 + intensity * 0.12),
-        tracer.verticalOffset + intensity * 0.03,
-        -0.45 - tracer.sampleOffset * 0.1,
-      );
-      this.tempVector.applyQuaternion(sample.quaternion);
-      tracer.mesh.position.add(this.tempVector);
-      tracer.mesh.scale.set(
-        1 + intensity * 0.12,
-        1 + intensity * 0.16,
-        MathUtils.lerp(2.8, 6.4, intensity) * (1 + tracer.sampleOffset * 0.035),
-      );
-      tracer.material.opacity = Math.max(
-        0,
-        intensity * (0.72 - tracer.sampleOffset * 0.028) * (0.72 + sample.boost * 0.44),
-      );
-      tracer.material.color.copy(App.TRACER_COLOR).lerp(
-        App.TRACER_HOT_COLOR,
-        Math.min(0.28 + state.visualBoost * 0.48 + this.pickupSurge * 0.18, 1),
-      );
-    }
+    const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
+    const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
+    // Ramp in between 0.72 and 0.98 of top speed. Below the threshold the
+    // lines read as noise; above it they amplify the sense of commitment.
+    const target = this.phase === "running"
+      ? Math.max(0, Math.min(1, (speedRatio - 0.72) / 0.26))
+      : 0;
+    const dt = Math.min(deltaSeconds, 1 / 20);
+    const k = 1 - Math.exp(-5.5 * dt);
+    this.speedLinesStrength += (target - this.speedLinesStrength) * k;
+    this.speedLinesPass.setStrength(this.speedLinesStrength);
+    this.speedLinesPass.setTime(this.sceneElapsedTime);
   }
 
   private updateSpeedFeedback(deltaSeconds: number): void {
@@ -2985,8 +2935,7 @@ export class App {
     this.track.setLoadingBlend(loadingBlend, loadingPulse);
     this.updateCarTransform(deltaSeconds);
     this.updateRemoteCars(deltaSeconds);
-    this.updateBoostVisuals();
-    this.updateSpeedTracers();
+    this.updateBoostVisuals(deltaSeconds);
     this.updatePickupVisuals(time / 1000);
     this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);

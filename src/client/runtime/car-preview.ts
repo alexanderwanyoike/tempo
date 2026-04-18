@@ -6,9 +6,12 @@ import {
   Group,
   Mesh,
   MeshStandardMaterial,
+  MeshToonMaterial,
   PerspectiveCamera,
   Scene,
+  ShaderMaterial,
   SphereGeometry,
+  type Texture,
   WebGLRenderer,
 } from "three";
 import type { CarVariant } from "../../../shared/network-types";
@@ -20,6 +23,14 @@ import {
   loadCarMesh,
   type CarPreviewSpec,
 } from "./car-assets";
+import {
+  createOutlineMaterial,
+  createOutlineMesh,
+  createToonGradientMap,
+  toToonMaterial,
+} from "./car-toon-shader";
+
+const OUTLINE_MESH_NAME = "tempo-car-outline";
 
 export class CarPreview {
   private readonly renderer: WebGLRenderer;
@@ -27,6 +38,8 @@ export class CarPreview {
   private readonly camera = new PerspectiveCamera(40, 1, 0.1, 100);
   private readonly root = new Group();
   private readonly resizeObserver: ResizeObserver;
+  private readonly toonGradientMap = createToonGradientMap();
+  private readonly outlineMaterial = createOutlineMaterial();
   private animationFrameId: number | null = null;
   private running = false;
   private carGroup: Group | null = null;
@@ -89,7 +102,11 @@ export class CarPreview {
     this.clearCar();
 
     const group = new Group();
-    const fallback = buildFallbackCar(definition.fallbackPreviewSpec);
+    const fallback = buildFallbackCar(
+      definition.fallbackPreviewSpec,
+      this.toonGradientMap,
+      this.outlineMaterial,
+    );
     group.add(fallback);
     this.carGroup = group;
     this.root.add(group);
@@ -99,6 +116,7 @@ export class CarPreview {
       .then((asset) => {
         if (revision !== this.loadRevision || this.carGroup !== group) return;
         applyCarTransform(asset, definition.previewTransform);
+        this.toonifyAsset(asset);
         group.add(asset);
         fallback.visible = false;
         this.render();
@@ -106,6 +124,39 @@ export class CarPreview {
       .catch((error) => {
         console.error(`Failed to load preview mesh for ${variant}:`, error);
       });
+  }
+
+  private toonifyAsset(asset: Group): void {
+    const converted: Mesh[] = [];
+    asset.traverse((obj) => {
+      if (!(obj instanceof Mesh)) return;
+      if (obj.name === OUTLINE_MESH_NAME) return;
+      if (Array.isArray(obj.material)) {
+        obj.material = obj.material.map((mat) =>
+          mat instanceof MeshStandardMaterial && !(mat instanceof MeshToonMaterial)
+            ? toToonMaterial(mat, this.toonGradientMap)
+            : mat,
+        );
+      } else if (
+        obj.material instanceof MeshStandardMaterial
+        && !(obj.material instanceof MeshToonMaterial)
+      ) {
+        obj.material = toToonMaterial(obj.material, this.toonGradientMap);
+      } else {
+        return;
+      }
+      converted.push(obj);
+    });
+
+    for (const mesh of converted) {
+      const parent = mesh.parent;
+      if (!parent) continue;
+      const outline = createOutlineMesh(mesh.geometry, this.outlineMaterial);
+      outline.position.copy(mesh.position);
+      outline.quaternion.copy(mesh.quaternion);
+      outline.scale.copy(mesh.scale);
+      parent.add(outline);
+    }
   }
 
   private resize(): void {
@@ -139,6 +190,10 @@ export class CarPreview {
     this.root.remove(this.carGroup);
     this.carGroup.traverse((object) => {
       if (!(object instanceof Mesh) || isSharedCarMesh(object)) return;
+      // Outline shells share geometry with a source mesh and the outline
+      // material is shared across the whole preview; disposing either would
+      // break subsequent previews or leak.
+      if (object.name === OUTLINE_MESH_NAME) return;
       object.geometry.dispose();
       if (Array.isArray(object.material)) {
         for (const material of object.material) material.dispose();
@@ -150,36 +205,48 @@ export class CarPreview {
   }
 }
 
-function buildFallbackCar(spec: CarPreviewSpec): Group {
+function buildFallbackCar(
+  spec: CarPreviewSpec,
+  toonGradientMap: Texture,
+  outlineMaterial: ShaderMaterial,
+): Group {
   const group = new Group();
   const accent = new Color(spec.accent);
   const trim = new Color(spec.trim);
   const canopy = new Color(spec.canopy);
 
-  const bodyMaterial = new MeshStandardMaterial({
+  const bodySource = new MeshStandardMaterial({
     color: accent,
     emissive: accent.clone().multiplyScalar(0.22),
     roughness: 0.28,
     metalness: 0.64,
   });
-  const trimMaterial = new MeshStandardMaterial({
+  const bodyMaterial = toToonMaterial(bodySource, toonGradientMap);
+  bodySource.dispose();
+  const trimSource = new MeshStandardMaterial({
     color: trim,
     emissive: trim.clone().multiplyScalar(0.14),
     roughness: 0.42,
     metalness: 0.52,
   });
-  const canopyMaterial = new MeshStandardMaterial({
+  const trimMaterial = toToonMaterial(trimSource, toonGradientMap);
+  trimSource.dispose();
+  const canopySource = new MeshStandardMaterial({
     color: canopy,
     emissive: canopy.clone().multiplyScalar(0.18),
     roughness: 0.18,
     metalness: 0.35,
   });
-  const glowMaterial = new MeshStandardMaterial({
+  const canopyMaterial = toToonMaterial(canopySource, toonGradientMap);
+  canopySource.dispose();
+  const glowSource = new MeshStandardMaterial({
     color: accent.clone().lerp(new Color("#ffffff"), 0.18),
     emissive: accent.clone().multiplyScalar(1.8),
     roughness: 0.16,
     metalness: 0.08,
   });
+  const glowMaterial = toToonMaterial(glowSource, toonGradientMap);
+  glowSource.dispose();
 
   const body = new Mesh(new BoxGeometry(3.5, 0.62, 1.55), bodyMaterial);
   const canopyMesh = new Mesh(new BoxGeometry(1.2, 0.42, 0.88), canopyMaterial);
@@ -228,6 +295,14 @@ function buildFallbackCar(spec: CarPreviewSpec): Group {
     nose.scale.set(1.12, 0.92, 0.92);
   }
 
-  group.add(body, canopyMesh, nose, wingLeft, wingRight, thrusterLeft, thrusterRight);
+  const meshes = [body, canopyMesh, nose, wingLeft, wingRight, thrusterLeft, thrusterRight];
+  group.add(...meshes);
+  for (const mesh of meshes) {
+    const outline = createOutlineMesh(mesh.geometry, outlineMaterial);
+    outline.position.copy(mesh.position);
+    outline.quaternion.copy(mesh.quaternion);
+    outline.scale.copy(mesh.scale);
+    group.add(outline);
+  }
   return group;
 }
