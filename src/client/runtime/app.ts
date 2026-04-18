@@ -47,7 +47,10 @@ import {
   getCarAssetDefinition,
   isSharedCarMesh,
   loadCarMesh,
+  prefetchCarMesh,
 } from "./car-assets";
+import { HologramMaterial } from "./hologram-material";
+import { HologramPlume } from "./hologram-plume";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
@@ -84,13 +87,18 @@ type RemoteCarVisual = {
   group: Group;
   bodyPivot: Group;
   fallbackGroup: Group;
-  fallbackBodyMaterial: MeshToonMaterial;
-  fallbackCockpitMaterial: MeshToonMaterial;
+  fallbackBodyMaterial: HologramMaterial;
+  fallbackCockpitMaterial: HologramMaterial;
   feedbackGlow: Mesh;
   feedbackGlowMaterial: MeshBasicMaterial;
   hoverJets: HoverJets;
   assetGroup: Group | null;
   assetRevision: number;
+  hydratePromise: Promise<void>;
+  plume: HologramPlume;
+  materializeStartedAt: number | null;
+  materializeDurationMs: number;
+  materializeDematerialize: boolean;
   targetTrackU: number;
   targetLateralOffset: number;
   currentTrackU: number;
@@ -246,6 +254,11 @@ export class App {
   private countdownDurationMs = 2500;
   private countdownResetTransition: CountdownResetTransition | null = null;
   private audioReady = false;
+  private vehicleMeshesReadyPromise: Promise<void> = Promise.resolve();
+  private vehicleMeshesReady = true;
+  private vehicleMeshTotal = 0;
+  private vehicleMeshReadyCount = 0;
+  private readonly hologramMaterials: HologramMaterial[] = [];
   private countdownStarted = false;
   private latestCheckpointCount = 1;
   private localPlacement = 1;
@@ -438,6 +451,11 @@ export class App {
         preload: { sceneReady: true, audioReady: true },
       };
       this.latestRoster = this.botSimulator.buildRoster(localRoster);
+      const raceVariants = new Set<CarVariant>([pickedVariant]);
+      for (const bot of botConfigs) raceVariants.add(bot.carVariant);
+      this.preloadVehicleMeshes(raceVariants);
+    } else if (launch.mode !== "multiplayer" && launch.carVariant) {
+      this.preloadVehicleMeshes([launch.carVariant]);
     }
 
     this.runtimeUiStyles = this.createRuntimeUiStyles();
@@ -521,6 +539,12 @@ export class App {
 
     if (this.launch.mode !== "multiplayer") return;
     if (phase === "lobby") return;
+    if (this.vehicleMeshTotal === 0 && players.length > 0) {
+      const variants = new Set<CarVariant>();
+      if (this.launch.carVariant) variants.add(this.launch.carVariant);
+      for (const p of players) if (p.carVariant) variants.add(p.carVariant);
+      this.preloadVehicleMeshes(variants);
+    }
     this.refreshMultiplayerStatusMessage();
   }
 
@@ -531,6 +555,7 @@ export class App {
     this.phase = "countdown";
     this.countdownStarted = false;
     this.beginCountdownResetTransition();
+    this.startMaterializeForAllVehicles();
     this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
@@ -539,6 +564,90 @@ export class App {
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
     this.refreshMultiplayerStatusMessage();
+  }
+
+  private positionRemoteAtStart(visual: RemoteCarVisual, clientId: string): void {
+    let startU = START_TRACK_U;
+    let startLat = 0;
+    if (this.botSimulator) {
+      const racer = this.botSimulator.botRacers.find((r) => r.clientId === clientId);
+      if (racer) {
+        startU = racer.trackU;
+        startLat = racer.lateralOffset;
+      }
+    }
+    visual.currentTrackU = startU;
+    visual.currentLateralOffset = startLat;
+    visual.targetTrackU = startU;
+    visual.targetLateralOffset = startLat;
+    const frame = this.track.getFrameAt(startU);
+    const center = this.track.getPointAt(startU);
+    visual.group.position.copy(center)
+      .addScaledVector(frame.right, startLat)
+      .addScaledVector(frame.up, 0.45);
+    this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
+    visual.group.setRotationFromMatrix(this.orientMat);
+  }
+
+  private startMaterializeForAllVehicles(): void {
+    const now = performance.now();
+    const stagger = 160;
+    this.startMaterializeEffect(this.localVehicle, now, true);
+    let i = 1;
+    for (const remote of this.remoteCars.values()) {
+      if (remote === this.localVehicle) continue;
+      remote.group.visible = true;
+      this.startMaterializeEffect(remote, now + i * stagger, false);
+      i += 1;
+    }
+  }
+
+  private startMaterializeEffect(
+    visual: RemoteCarVisual,
+    startAt: number,
+    dematerialize: boolean,
+  ): void {
+    visual.materializeStartedAt = startAt;
+    visual.materializeDematerialize = dematerialize;
+    // Dematerialize keeps the car visible at its pre-countdown position so the
+    // rising plume reads as "beaming out" before the position snap.
+    if (!dematerialize) visual.bodyPivot.visible = false;
+    visual.plume.setIntensity(0);
+  }
+
+  private updateMaterializeEffect(visual: RemoteCarVisual, nowMs: number): void {
+    const started = visual.materializeStartedAt;
+    if (started === null) return;
+    const elapsed = nowMs - started;
+    if (elapsed < 0) {
+      visual.plume.setIntensity(0);
+      visual.bodyPivot.visible = false;
+      return;
+    }
+    const rawT = Math.min(1, elapsed / visual.materializeDurationMs);
+    const riseEnd = 0.5;
+    const fadeStart = 0.7;
+    let intensity: number;
+    if (rawT < riseEnd) {
+      const r = rawT / riseEnd;
+      intensity = r * r * (3 - 2 * r);
+    } else if (rawT < fadeStart) {
+      intensity = 1;
+    } else {
+      const f = (rawT - fadeStart) / (1 - fadeStart);
+      intensity = 1 - f * f * (3 - 2 * f);
+    }
+    visual.plume.setIntensity(intensity);
+    visual.plume.setScanProgress(rawT);
+    const shouldShow = visual.materializeDematerialize
+      ? rawT < 0.4 || rawT >= 0.6
+      : rawT >= 0.6;
+    if (visual.bodyPivot.visible !== shouldShow) visual.bodyPivot.visible = shouldShow;
+    if (rawT >= 1) {
+      visual.plume.setIntensity(0);
+      visual.bodyPivot.visible = true;
+      visual.materializeStartedAt = null;
+    }
   }
 
   private enterRunningPhase(): void {
@@ -578,6 +687,7 @@ export class App {
       const remote = this.ensureRemoteCar(player.clientId);
       remote.targetTrackU = player.trackU;
       remote.targetLateralOffset = player.lateralOffset;
+      if (!remote.group.visible) remote.group.visible = true;
     }
 
     for (const [clientId, remote] of this.remoteCars) {
@@ -725,9 +835,10 @@ export class App {
 
   private async waitForAudioReady(): Promise<void> {
     try {
-      if (this.musicReadyPromise) {
-        await this.musicReadyPromise;
-      }
+      const gates: Promise<unknown>[] = [];
+      if (this.musicReadyPromise) gates.push(this.musicReadyPromise);
+      gates.push(this.vehicleMeshesReadyPromise);
+      await Promise.all(gates);
       this.audioReady = true;
       this.launch.onAudioReady?.();
       if (this.launch.mode !== "multiplayer") {
@@ -744,6 +855,54 @@ export class App {
       this.primaryButton.style.display = "";
       this.secondaryButton.style.display = "none";
     }
+  }
+
+  private preloadVehicleMeshes(variants: Iterable<CarVariant>): void {
+    const unique = new Set<CarVariant>(variants);
+    if (unique.size === 0) return;
+    const remoteClientIds = this.latestRoster
+      .filter((p) => p.clientId && p.clientId !== this.launch.localPlayerId)
+      .map((p) => p.clientId);
+    this.vehicleMeshTotal = unique.size;
+    this.vehicleMeshReadyCount = 0;
+    this.vehicleMeshesReady = false;
+    const VARIANT_TIMEOUT_MS = 6000;
+    const perVariant: Promise<void>[] = [];
+    for (const variant of unique) {
+      const load = prefetchCarMesh(this.config, variant)
+        .then(() => {
+          this.vehicleMeshReadyCount += 1;
+          if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+        })
+        .catch((error) => {
+          console.warn(`Vehicle mesh preload failed for ${variant}:`, error);
+          this.vehicleMeshReadyCount += 1;
+          if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+        });
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
+      perVariant.push(Promise.race([load, timeout]));
+    }
+
+    const remoteHydrations: Promise<void>[] = [];
+    for (const clientId of remoteClientIds) {
+      const remote = this.ensureRemoteCar(clientId);
+      remote.group.visible = false;
+      this.positionRemoteAtStart(remote, clientId);
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
+      remoteHydrations.push(Promise.race([remote.hydratePromise, timeout]));
+    }
+    const localHydration = this.localVehicle
+      ? Promise.race([this.localVehicle.hydratePromise, new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS))])
+      : Promise.resolve();
+
+    this.vehicleMeshesReadyPromise = Promise.all([
+      ...perVariant,
+      ...remoteHydrations,
+      localHydration,
+    ]).then(() => {
+      this.vehicleMeshesReady = true;
+      if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+    });
   }
 
   private setupScene(): void {
@@ -779,36 +938,19 @@ export class App {
 
   private createVehicleVisual(variant: CarVariant): RemoteCarVisual {
     const palette = paletteForVariant(variant);
-    const bodySource = new MeshStandardMaterial({
-      color: palette.body.clone(),
-      emissive: palette.bodyEmissive.clone(),
-      metalness: 0.3,
-      roughness: 0.5,
-    });
-    const bodyMaterial = toToonMaterial(bodySource, this.carToonGradientMap);
-    bodySource.dispose();
+    const bodyMaterial = new HologramMaterial({ color: palette.bodyEmissive.clone() });
     const bodyGeometry = new BoxGeometry(1.4, 0.5, 3.2);
     const body = new Mesh(bodyGeometry, bodyMaterial);
     body.position.y = 0.1;
-    const bodyOutline = createOutlineMesh(bodyGeometry, this.carOutlineMaterial);
-    bodyOutline.position.copy(body.position);
 
-    const cockpitSource = new MeshStandardMaterial({
-      color: palette.cockpit.clone(),
-      emissive: palette.cockpitEmissive.clone(),
-      metalness: 0.15,
-      roughness: 0.45,
-    });
-    const cockpitMaterial = toToonMaterial(cockpitSource, this.carToonGradientMap);
-    cockpitSource.dispose();
+    const cockpitMaterial = new HologramMaterial({ color: palette.cockpitEmissive.clone() });
     const cockpitGeometry = new BoxGeometry(0.8, 0.35, 1.15);
     const cockpit = new Mesh(cockpitGeometry, cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
-    const cockpitOutline = createOutlineMesh(cockpitGeometry, this.carOutlineMaterial);
-    cockpitOutline.position.copy(cockpit.position);
 
     const fallbackGroup = new Group();
-    fallbackGroup.add(body, bodyOutline, cockpit, cockpitOutline);
+    fallbackGroup.add(body, cockpit);
+    this.hologramMaterials.push(bodyMaterial, cockpitMaterial);
 
     const feedbackGlowMaterial = new MeshBasicMaterial({
       color: App.BOOST_COLOR.clone(),
@@ -829,6 +971,9 @@ export class App {
     const group = new Group();
     group.add(bodyPivot);
 
+    const plume = new HologramPlume(palette.bodyEmissive.clone());
+    group.add(plume.mesh);
+
     const visual: RemoteCarVisual = {
       id: "",
       variant,
@@ -842,12 +987,17 @@ export class App {
       hoverJets,
       assetGroup: null,
       assetRevision: 0,
+      hydratePromise: Promise.resolve(),
+      plume,
+      materializeStartedAt: null,
+      materializeDurationMs: 1400,
+      materializeDematerialize: false,
       targetTrackU: START_TRACK_U,
       targetLateralOffset: 0,
       currentTrackU: START_TRACK_U,
       currentLateralOffset: 0,
     };
-    void this.hydrateVehicleVisual(visual);
+    visual.hydratePromise = this.hydrateVehicleVisual(visual);
     return visual;
   }
 
@@ -1606,6 +1756,16 @@ export class App {
           right: 12px;
           width: min(228px, calc(100vw - 24px));
           padding: 10px 12px 11px;
+          max-height: calc(100vh - 260px);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .tempo-hud-summary .tempo-hud-standings {
+          overflow-y: auto;
+          min-height: 0;
+          flex: 1;
+          padding-right: 2px;
         }
 
         .tempo-hud-place,
@@ -2061,27 +2221,16 @@ export class App {
     const slowdownMix = Math.min(this.slowdownFlash, 1);
     const localPalette = paletteForVariant(this.launch.carVariant ?? "vector");
     const boostMix = Math.min(surgeBoost, 1);
-    const bodyColor = localPalette.body.clone()
-      .lerp(App.BOOST_COLOR, boostMix * 0.72)
-      .lerp(App.BOOST_HOT_COLOR, boostMix * 0.34)
-      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.82);
     const bodyEmissive = localPalette.bodyEmissive.clone()
       .lerp(App.BOOST_COLOR, boostMix * 0.88)
       .lerp(App.BOOST_HOT_COLOR, boostMix * 0.2)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix);
-    const cockpitColor = localPalette.cockpit.clone()
-      .lerp(new Color("#2f540e"), boostMix * 0.62)
-      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.3);
     const cockpitEmissive = localPalette.cockpitEmissive.clone()
       .lerp(App.BOOST_COLOR, boostMix * 0.96)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.65);
 
-    this.localVehicle.fallbackBodyMaterial.color.copy(bodyColor);
-    this.localVehicle.fallbackBodyMaterial.emissive.copy(bodyEmissive);
-    this.localVehicle.fallbackBodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.8 + slowdownMix * 1.2;
-    this.localVehicle.fallbackCockpitMaterial.color.copy(cockpitColor);
-    this.localVehicle.fallbackCockpitMaterial.emissive.copy(cockpitEmissive);
-    this.localVehicle.fallbackCockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.9 + slowdownMix * 0.5;
+    this.localVehicle.fallbackBodyMaterial.setColor(bodyEmissive);
+    this.localVehicle.fallbackCockpitMaterial.setColor(cockpitEmissive);
     this.localVehicle.feedbackGlowMaterial.color.copy(
       App.BOOST_COLOR.clone().lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.9),
     );
@@ -2617,7 +2766,7 @@ export class App {
       if (placementA !== placementB) return placementA - placementB;
       return a.name.localeCompare(b.name);
     });
-    const visiblePlayers = sortedPlayers.slice(0, this.isCompactHudLayout() ? 2 : 3);
+    const visiblePlayers = sortedPlayers.slice();
     const localPlayer = sortedPlayers.find((player) => player.clientId === this.launch.localPlayerId) ?? null;
     if (localPlayer && !visiblePlayers.some((player) => player.clientId === localPlayer.clientId)) {
       visiblePlayers.push(localPlayer);
@@ -2695,10 +2844,6 @@ export class App {
     target.textContent = active ? value : "Empty";
     target.classList.toggle("is-active", active);
     target.classList.toggle("is-empty", !active);
-  }
-
-  private isCompactHudLayout(): boolean {
-    return window.innerWidth <= 760 || window.innerHeight <= 620;
   }
 
   private updateNameLabels(): void {
@@ -2817,19 +2962,23 @@ export class App {
       return;
     }
 
+    const meshStatus = this.vehicleMeshTotal > 0 && !this.vehicleMeshesReady
+      ? ` Syncing fleet ${this.vehicleMeshReadyCount}/${this.vehicleMeshTotal}.`
+      : "";
+
     if (activePlayers.length === 0) {
       this.lastStatusMessage = this.audioReady
-        ? "Loading lane armed. Waiting for pilots."
-        : "Loading lane forming. Audio buffering.";
+        ? `Loading lane armed. Waiting for pilots.${meshStatus}`
+        : `Loading lane forming. Audio buffering.${meshStatus}`;
       this.renderRoster();
       return;
     }
 
     const readyCount = activePlayers.filter((player) => player.preload.sceneReady && player.preload.audioReady).length;
     if (!this.audioReady) {
-      this.lastStatusMessage = `Loading lane forming. ${readyCount}/${activePlayers.length} synced.`;
+      this.lastStatusMessage = `Loading lane forming. ${readyCount}/${activePlayers.length} synced.${meshStatus}`;
     } else if (readyCount < activePlayers.length) {
-      this.lastStatusMessage = `Audio locked. Waiting for pilots ${readyCount}/${activePlayers.length}.`;
+      this.lastStatusMessage = `Audio locked. Waiting for pilots ${readyCount}/${activePlayers.length}.${meshStatus}`;
     } else {
       this.lastStatusMessage = "All pilots synced. Grid lock imminent.";
     }
@@ -2872,12 +3021,22 @@ export class App {
     if (!transition) return;
 
     const rawT = MathUtils.clamp((nowMs - transition.startedAt) / transition.durationMs, 0, 1);
-    const easedT = rawT * rawT * (3 - 2 * rawT);
-    this.vehicleController.forceTrackState(
-      MathUtils.lerp(transition.fromTrackU, transition.toTrackU, easedT),
-      MathUtils.lerp(transition.fromLateralOffset, transition.toLateralOffset, easedT),
-      MathUtils.lerp(transition.fromSpeed, transition.toSpeed, easedT),
-    );
+
+    // Position snaps at midpoint under cover of the hologram plume peak so the
+    // warp reads as an intentional teleport rather than an interpolation.
+    if (rawT < 0.5) {
+      this.vehicleController.forceTrackState(
+        transition.fromTrackU,
+        transition.fromLateralOffset,
+        transition.fromSpeed,
+      );
+    } else {
+      this.vehicleController.forceTrackState(
+        transition.toTrackU,
+        transition.toLateralOffset,
+        transition.toSpeed,
+      );
+    }
 
     if (rawT >= 1) {
       this.vehicleController.forceTrackState(
@@ -2896,6 +3055,13 @@ export class App {
     this.sceneElapsedTime += deltaSeconds;
     const now = Date.now();
     this.updateSpeedFeedback(deltaSeconds);
+    for (const mat of this.hologramMaterials) mat.setTime(this.sceneElapsedTime);
+    this.localVehicle.plume.setTime(this.sceneElapsedTime);
+    this.updateMaterializeEffect(this.localVehicle, time);
+    for (const remote of this.remoteCars.values()) {
+      remote.plume.setTime(this.sceneElapsedTime);
+      this.updateMaterializeEffect(remote, time);
+    }
 
     if (this.phase === "countdown") {
       this.updateCountdownResetTransition(time);

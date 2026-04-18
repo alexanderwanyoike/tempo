@@ -72,9 +72,9 @@ export class BoostFxPass extends ShaderPass {
         uniforms: {
           tDiffuse: new Uniform(null),
           uStrength: new Uniform(0),
-          uAberrationScale: new Uniform(0.024),
-          uZoomScale: new Uniform(0.08),
-          uZoomSamples: new Uniform(8),
+          uAberrationScale: new Uniform(0.052),
+          uZoomScale: new Uniform(0.18),
+          uZoomSamples: new Uniform(10),
         },
         vertexShader: VERTEX,
         fragmentShader: FRAGMENT,
