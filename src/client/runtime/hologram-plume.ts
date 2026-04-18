@@ -54,8 +54,8 @@ export class HologramPlume {
   private readonly material: ShaderMaterial;
 
   constructor(color: Color | string) {
-    const geometry = new CylinderGeometry(1.25, 1.25, 2.8, 28, 1, true);
-    geometry.translate(0, 1.4, 0);
+    const geometry = new CylinderGeometry(3.2, 3.2, 4.2, 36, 1, true);
+    geometry.translate(0, 1.9, 0);
 
     this.material = new ShaderMaterial({
       uniforms: {
