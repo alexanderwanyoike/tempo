@@ -29,6 +29,7 @@ import {
   createToonGradientMap,
   toToonMaterial,
 } from "./car-toon-shader";
+import { HologramMaterial } from "./hologram-material";
 
 const OUTLINE_MESH_NAME = "tempo-car-outline";
 
@@ -44,6 +45,7 @@ export class CarPreview {
   private running = false;
   private carGroup: Group | null = null;
   private loadRevision = 0;
+  private readonly hologramMaterials: HologramMaterial[] = [];
 
   constructor(
     private readonly host: HTMLElement,
@@ -107,6 +109,11 @@ export class CarPreview {
       this.toonGradientMap,
       this.outlineMaterial,
     );
+    fallback.traverse((obj) => {
+      if (obj instanceof Mesh && obj.material instanceof HologramMaterial) {
+        this.hologramMaterials.push(obj.material);
+      }
+    });
     group.add(fallback);
     this.carGroup = group;
     this.root.add(group);
@@ -177,6 +184,8 @@ export class CarPreview {
       this.carGroup.rotation.y = time * 0.0006;
       this.carGroup.rotation.z = Math.sin(time * 0.0013) * 0.03;
     }
+    const timeSec = time / 1000;
+    for (const mat of this.hologramMaterials) mat.setTime(timeSec);
     this.render();
     this.animationFrameId = window.requestAnimationFrame(this.animate);
   };
@@ -202,51 +211,26 @@ export class CarPreview {
       }
     });
     this.carGroup = null;
+    this.hologramMaterials.length = 0;
   }
 }
 
 function buildFallbackCar(
   spec: CarPreviewSpec,
-  toonGradientMap: Texture,
-  outlineMaterial: ShaderMaterial,
+  _toonGradientMap: Texture,
+  _outlineMaterial: ShaderMaterial,
 ): Group {
   const group = new Group();
   const accent = new Color(spec.accent);
   const trim = new Color(spec.trim);
   const canopy = new Color(spec.canopy);
 
-  const bodySource = new MeshStandardMaterial({
-    color: accent,
-    emissive: accent.clone().multiplyScalar(0.22),
-    roughness: 0.28,
-    metalness: 0.64,
+  const bodyMaterial = new HologramMaterial({ color: accent });
+  const trimMaterial = new HologramMaterial({ color: trim });
+  const canopyMaterial = new HologramMaterial({ color: canopy });
+  const glowMaterial = new HologramMaterial({
+    color: accent.clone().lerp(new Color("#ffffff"), 0.25),
   });
-  const bodyMaterial = toToonMaterial(bodySource, toonGradientMap);
-  bodySource.dispose();
-  const trimSource = new MeshStandardMaterial({
-    color: trim,
-    emissive: trim.clone().multiplyScalar(0.14),
-    roughness: 0.42,
-    metalness: 0.52,
-  });
-  const trimMaterial = toToonMaterial(trimSource, toonGradientMap);
-  trimSource.dispose();
-  const canopySource = new MeshStandardMaterial({
-    color: canopy,
-    emissive: canopy.clone().multiplyScalar(0.18),
-    roughness: 0.18,
-    metalness: 0.35,
-  });
-  const canopyMaterial = toToonMaterial(canopySource, toonGradientMap);
-  canopySource.dispose();
-  const glowSource = new MeshStandardMaterial({
-    color: accent.clone().lerp(new Color("#ffffff"), 0.18),
-    emissive: accent.clone().multiplyScalar(1.8),
-    roughness: 0.16,
-    metalness: 0.08,
-  });
-  const glowMaterial = toToonMaterial(glowSource, toonGradientMap);
-  glowSource.dispose();
 
   const body = new Mesh(new BoxGeometry(3.5, 0.62, 1.55), bodyMaterial);
   const canopyMesh = new Mesh(new BoxGeometry(1.2, 0.42, 0.88), canopyMaterial);
@@ -297,12 +281,5 @@ function buildFallbackCar(
 
   const meshes = [body, canopyMesh, nose, wingLeft, wingRight, thrusterLeft, thrusterRight];
   group.add(...meshes);
-  for (const mesh of meshes) {
-    const outline = createOutlineMesh(mesh.geometry, outlineMaterial);
-    outline.position.copy(mesh.position);
-    outline.quaternion.copy(mesh.quaternion);
-    outline.scale.copy(mesh.scale);
-    group.add(outline);
-  }
   return group;
 }

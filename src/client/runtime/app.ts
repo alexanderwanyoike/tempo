@@ -49,6 +49,7 @@ import {
   loadCarMesh,
   prefetchCarMesh,
 } from "./car-assets";
+import { HologramMaterial } from "./hologram-material";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
@@ -85,8 +86,8 @@ type RemoteCarVisual = {
   group: Group;
   bodyPivot: Group;
   fallbackGroup: Group;
-  fallbackBodyMaterial: MeshToonMaterial;
-  fallbackCockpitMaterial: MeshToonMaterial;
+  fallbackBodyMaterial: HologramMaterial;
+  fallbackCockpitMaterial: HologramMaterial;
   feedbackGlow: Mesh;
   feedbackGlowMaterial: MeshBasicMaterial;
   hoverJets: HoverJets;
@@ -252,6 +253,7 @@ export class App {
   private vehicleMeshesReady = true;
   private vehicleMeshTotal = 0;
   private vehicleMeshReadyCount = 0;
+  private readonly hologramMaterials: HologramMaterial[] = [];
   private countdownStarted = false;
   private latestCheckpointCount = 1;
   private localPlacement = 1;
@@ -845,36 +847,19 @@ export class App {
 
   private createVehicleVisual(variant: CarVariant): RemoteCarVisual {
     const palette = paletteForVariant(variant);
-    const bodySource = new MeshStandardMaterial({
-      color: palette.body.clone(),
-      emissive: palette.bodyEmissive.clone(),
-      metalness: 0.3,
-      roughness: 0.5,
-    });
-    const bodyMaterial = toToonMaterial(bodySource, this.carToonGradientMap);
-    bodySource.dispose();
+    const bodyMaterial = new HologramMaterial({ color: palette.bodyEmissive.clone() });
     const bodyGeometry = new BoxGeometry(1.4, 0.5, 3.2);
     const body = new Mesh(bodyGeometry, bodyMaterial);
     body.position.y = 0.1;
-    const bodyOutline = createOutlineMesh(bodyGeometry, this.carOutlineMaterial);
-    bodyOutline.position.copy(body.position);
 
-    const cockpitSource = new MeshStandardMaterial({
-      color: palette.cockpit.clone(),
-      emissive: palette.cockpitEmissive.clone(),
-      metalness: 0.15,
-      roughness: 0.45,
-    });
-    const cockpitMaterial = toToonMaterial(cockpitSource, this.carToonGradientMap);
-    cockpitSource.dispose();
+    const cockpitMaterial = new HologramMaterial({ color: palette.cockpitEmissive.clone() });
     const cockpitGeometry = new BoxGeometry(0.8, 0.35, 1.15);
     const cockpit = new Mesh(cockpitGeometry, cockpitMaterial);
     cockpit.position.set(0, 0.35, 0.1);
-    const cockpitOutline = createOutlineMesh(cockpitGeometry, this.carOutlineMaterial);
-    cockpitOutline.position.copy(cockpit.position);
 
     const fallbackGroup = new Group();
-    fallbackGroup.add(body, bodyOutline, cockpit, cockpitOutline);
+    fallbackGroup.add(body, cockpit);
+    this.hologramMaterials.push(bodyMaterial, cockpitMaterial);
 
     const feedbackGlowMaterial = new MeshBasicMaterial({
       color: App.BOOST_COLOR.clone(),
@@ -2128,27 +2113,16 @@ export class App {
     const slowdownMix = Math.min(this.slowdownFlash, 1);
     const localPalette = paletteForVariant(this.launch.carVariant ?? "vector");
     const boostMix = Math.min(surgeBoost, 1);
-    const bodyColor = localPalette.body.clone()
-      .lerp(App.BOOST_COLOR, boostMix * 0.72)
-      .lerp(App.BOOST_HOT_COLOR, boostMix * 0.34)
-      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.82);
     const bodyEmissive = localPalette.bodyEmissive.clone()
       .lerp(App.BOOST_COLOR, boostMix * 0.88)
       .lerp(App.BOOST_HOT_COLOR, boostMix * 0.2)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix);
-    const cockpitColor = localPalette.cockpit.clone()
-      .lerp(new Color("#2f540e"), boostMix * 0.62)
-      .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.3);
     const cockpitEmissive = localPalette.cockpitEmissive.clone()
       .lerp(App.BOOST_COLOR, boostMix * 0.96)
       .lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.65);
 
-    this.localVehicle.fallbackBodyMaterial.color.copy(bodyColor);
-    this.localVehicle.fallbackBodyMaterial.emissive.copy(bodyEmissive);
-    this.localVehicle.fallbackBodyMaterial.emissiveIntensity = 0.8 + surgeBoost * 2.8 + slowdownMix * 1.2;
-    this.localVehicle.fallbackCockpitMaterial.color.copy(cockpitColor);
-    this.localVehicle.fallbackCockpitMaterial.emissive.copy(cockpitEmissive);
-    this.localVehicle.fallbackCockpitMaterial.emissiveIntensity = 0.45 + surgeBoost * 1.9 + slowdownMix * 0.5;
+    this.localVehicle.fallbackBodyMaterial.setColor(bodyEmissive);
+    this.localVehicle.fallbackCockpitMaterial.setColor(cockpitEmissive);
     this.localVehicle.feedbackGlowMaterial.color.copy(
       App.BOOST_COLOR.clone().lerp(App.SLOWDOWN_FLASH_COLOR, slowdownMix * 0.9),
     );
@@ -2943,14 +2917,34 @@ export class App {
     if (!transition) return;
 
     const rawT = MathUtils.clamp((nowMs - transition.startedAt) / transition.durationMs, 0, 1);
-    const easedT = rawT * rawT * (3 - 2 * rawT);
-    this.vehicleController.forceTrackState(
-      MathUtils.lerp(transition.fromTrackU, transition.toTrackU, easedT),
-      MathUtils.lerp(transition.fromLateralOffset, transition.toLateralOffset, easedT),
-      MathUtils.lerp(transition.fromSpeed, transition.toSpeed, easedT),
-    );
+
+    // Hologram teleport: dematerialize at source, snap invisibly at midpoint,
+    // rematerialize at target. Mask the position jump with a hologram peak.
+    let hologramAlpha = 0;
+    let realVisible = true;
+    if (rawT > 0.12 && rawT < 0.88) {
+      const windowT = (rawT - 0.12) / 0.76;
+      hologramAlpha = Math.sin(windowT * Math.PI);
+      realVisible = false;
+    }
+    this.setVehicleTransitionVisual(this.localVehicle, hologramAlpha, realVisible);
+
+    if (rawT < 0.5) {
+      this.vehicleController.forceTrackState(
+        transition.fromTrackU,
+        transition.fromLateralOffset,
+        transition.fromSpeed,
+      );
+    } else {
+      this.vehicleController.forceTrackState(
+        transition.toTrackU,
+        transition.toLateralOffset,
+        transition.toSpeed,
+      );
+    }
 
     if (rawT >= 1) {
+      this.setVehicleTransitionVisual(this.localVehicle, 0, true);
       this.vehicleController.forceTrackState(
         transition.toTrackU,
         transition.toLateralOffset,
@@ -2960,6 +2954,20 @@ export class App {
     }
   }
 
+  private setVehicleTransitionVisual(
+    visual: RemoteCarVisual,
+    hologramAlpha: number,
+    realVisible: boolean,
+  ): void {
+    const showHologram = hologramAlpha > 0.01;
+    visual.fallbackGroup.visible = showHologram;
+    visual.fallbackBodyMaterial.setAlpha(hologramAlpha);
+    visual.fallbackCockpitMaterial.setAlpha(hologramAlpha);
+    visual.fallbackBodyMaterial.setDissolve(1 - hologramAlpha);
+    visual.fallbackCockpitMaterial.setDissolve(1 - hologramAlpha);
+    if (visual.assetGroup) visual.assetGroup.visible = realVisible;
+  }
+
   private readonly render = (time: number): void => {
     if (this.destroyed) return;
     const deltaSeconds = (time - this.lastFrameTime) / 1000;
@@ -2967,6 +2975,7 @@ export class App {
     this.sceneElapsedTime += deltaSeconds;
     const now = Date.now();
     this.updateSpeedFeedback(deltaSeconds);
+    for (const mat of this.hologramMaterials) mat.setTime(this.sceneElapsedTime);
 
     if (this.phase === "countdown") {
       this.updateCountdownResetTransition(time);
