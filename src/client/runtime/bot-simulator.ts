@@ -48,17 +48,17 @@ type DifficultyProfile = {
 // lives in a narrow window around the player's base 90.
 const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
   easy: {
-    topSpeed: 80,
-    thrust: 50,
-    steeringRate: 52,
+    topSpeed: 78,
+    thrust: 48,
+    steeringRate: 54,
     steeringResponse: 13,
-    lateralGrip: 2.9,
-    laneHoldMinMs: 1700,
+    lateralGrip: 2.6,
+    laneHoldMinMs: 1800,
     laneHoldJitterMs: 900,
-    fireCooldownMs: 1400,
+    fireCooldownMs: 1500,
     shieldCooldownMs: 3200,
-    brakeThresholdRatio: 1.02,
-    throttleDropoutChance: 0.14,
+    brakeThresholdRatio: 3.5,
+    throttleDropoutChance: 0.20,
     catchupDeadZoneU: 1,
     catchupMaxGapU: 1,
     catchupMaxThrustMultiplier: 1,
@@ -67,44 +67,43 @@ const DIFFICULTY_PROFILES: Record<BotDifficulty, DifficultyProfile> = {
   },
   medium: {
     topSpeed: 88,
-    thrust: 56,
-    steeringRate: 60,
+    thrust: 54,
+    steeringRate: 62,
     steeringResponse: 15,
     lateralGrip: 3.2,
-    laneHoldMinMs: 1100,
+    laneHoldMinMs: 1200,
     laneHoldJitterMs: 600,
-    fireCooldownMs: 520,
-    shieldCooldownMs: 1600,
-    brakeThresholdRatio: 1.12,
-    throttleDropoutChance: 0.04,
-    catchupDeadZoneU: 0.04,
-    catchupMaxGapU: 0.18,
-    catchupMaxThrustMultiplier: 1.1,
-    catchupMaxTopSpeedBonus: 8,
-    preferLeaderTargeting: true,
+    fireCooldownMs: 700,
+    shieldCooldownMs: 1800,
+    brakeThresholdRatio: 3.5,
+    throttleDropoutChance: 0.05,
+    catchupDeadZoneU: 0.02,
+    catchupMaxGapU: 0.12,
+    catchupMaxThrustMultiplier: 1.15,
+    catchupMaxTopSpeedBonus: 12,
+    preferLeaderTargeting: false,
   },
   hard: {
-    topSpeed: 92,
-    thrust: 60,
+    topSpeed: 90,
+    thrust: 58,
     steeringRate: 66,
     steeringResponse: 17,
-    lateralGrip: 3.4,
-    laneHoldMinMs: 900,
-    laneHoldJitterMs: 450,
-    fireCooldownMs: 340,
-    shieldCooldownMs: 1000,
-    brakeThresholdRatio: 1.16,
+    lateralGrip: 3.6,
+    laneHoldMinMs: 800,
+    laneHoldJitterMs: 360,
+    fireCooldownMs: 280,
+    shieldCooldownMs: 900,
+    brakeThresholdRatio: 3.5,
     throttleDropoutChance: 0,
-    catchupDeadZoneU: 0.025,
-    catchupMaxGapU: 0.15,
-    catchupMaxThrustMultiplier: 1.2,
-    catchupMaxTopSpeedBonus: 18,
+    catchupDeadZoneU: 0.005,
+    catchupMaxGapU: 0.07,
+    catchupMaxThrustMultiplier: 1.3,
+    catchupMaxTopSpeedBonus: 24,
     preferLeaderTargeting: true,
   },
 };
 
 const TICK_INTERVAL_MS = 100;
-const LANE_FRACTION = 0.55;
 
 // Callsigns feel more alive than "Pilot N". Consumed via a seeded shuffle so
 // the grid stays consistent for a given race seed.
@@ -140,7 +139,7 @@ type BotAgent = {
   pendingShield: boolean;
 };
 
-function tuningForDifficulty(profile: DifficultyProfile): VehicleTuning {
+function tuningForDifficulty(profile: DifficultyProfile, _difficulty: BotDifficulty): VehicleTuning {
   return {
     ...defaultVehicleTuning,
     topSpeed: profile.topSpeed,
@@ -217,7 +216,7 @@ export class BotSimulator {
     this.checkpointUs = checkpointUs;
     this.agents = configs.map((cfg) => {
       const profile = DIFFICULTY_PROFILES[cfg.difficulty];
-      const vc = new VehicleController(tuningForDifficulty(profile));
+      const vc = new VehicleController(tuningForDifficulty(profile, cfg.difficulty));
       vc.setTrack(track);
       vc.setTrackQuery((pos, hintU) => track.queryNearest(pos, hintU));
       vc.forceTrackState(cfg.startTrackU, cfg.startLateralOffset, 0);
@@ -302,9 +301,19 @@ export class BotSimulator {
         this.driveAI(agent, localRacer, now);
       }
       this.applyCatchup(agent, leaderTrackU);
+      const speedBefore = agent.vehicleController.state.speed;
       agent.vehicleController.update(deltaSeconds, agent.input);
-      // Sync simulator racer from physics truth
       const s = agent.vehicleController.state;
+      // Fall-off rescue: vehicle-controller resets speed to 0 when a bot flies
+      // off the track. Without this kick they have to rebuild speed from zero
+      // while the leader pulls further away. Restore a healthy launch speed so
+      // catchup can actually do its job.
+      if (speedBefore > 30 && s.speed < 4
+        && agent.racer.takenDownUntil <= now
+        && agent.racer.finishedAt === null) {
+        s.speed = Math.max(60, speedBefore * 0.55);
+      }
+      // Sync simulator racer from physics truth
       agent.racer.trackU = Math.min(0.9995, Math.max(RACE_SIM.START_TRACK_U, s.trackU));
       agent.racer.lateralOffset = Math.max(-14, Math.min(14, s.lateralOffset));
       agent.racer.speed = Math.max(0, Math.min(140, s.speed));
@@ -460,15 +469,20 @@ export class BotSimulator {
     }
 
     const halfWidth = this.track.getHalfWidthAt(racer.trackU);
-    // Each bot holds its own home lateral lane (set from startLateralOffset in
-    // buildBotConfigs), shifted by a small obstacle-avoidance delta. This keeps
-    // the grid spread after launch instead of everyone converging on center.
+    // Bots drive around their own home lane but can commit fully to a pickup or
+    // obstacle-avoidance line when chooseLane says so. laneChoice -1/0/+1 maps
+    // to [home-delta, home, home+delta] with a wider delta than a simple nudge
+    // so the bot actually reaches off-home pickups.
     const homeOffset = agent.config.startLateralOffset;
-    const homeClamped = Math.max(-halfWidth * 0.85, Math.min(halfWidth * 0.85, homeOffset));
-    const avoidanceDelta = agent.laneChoice * 2.0;
+    const LANE_EXPLORE_DELTA = 3.2;
+    // Keep bots comfortably inside the wall-proximity penalty radius. The
+    // vehicle-controller zaps speed once edgeRatio crosses 0.78, so cap the
+    // steered target at 0.7 * (halfWidth - 1) to leave a safety margin.
+    const safeLateral = Math.max(0, halfWidth - 1) * 0.7;
+    const laneShift = agent.laneChoice * LANE_EXPLORE_DELTA;
     const targetLateral = Math.max(
-      -halfWidth * 0.92,
-      Math.min(halfWidth * 0.92, homeClamped + avoidanceDelta),
+      -safeLateral,
+      Math.min(safeLateral, homeOffset + laneShift),
     );
     const latError = targetLateral - racer.lateralOffset;
     const steerDeadband = 0.18;
@@ -505,32 +519,36 @@ export class BotSimulator {
   private chooseLane(agent: BotAgent): -1 | 0 | 1 {
     const racer = agent.racer;
     const trackLength = this.track.totalLength || 1;
-    const pickupLookAheadU = 40 / trackLength;
-    const obstacleLookAheadU = 24 / trackLength;
-    const halfWidth = this.track.getHalfWidthAt(racer.trackU);
+    const pickupLookAheadU = 60 / trackLength;
+    const obstacleLookAheadU = 30 / trackLength;
+    const LANE_EXPLORE_DELTA = 4.5;
+    const home = agent.config.startLateralOffset;
 
     const candidates: Array<-1 | 0 | 1> = [-1, 0, 1];
     let best: -1 | 0 | 1 = agent.laneChoice;
     let bestScore = -Infinity;
 
     for (const lane of candidates) {
-      const laneLateral = lane * halfWidth * LANE_FRACTION;
+      const laneLateral = home + lane * LANE_EXPLORE_DELTA;
       let score = 0;
       if (lane === agent.laneChoice) score += 1; // hysteresis
+      if (lane === 0) score += 0.5; // prefer sticking to home when neutral
 
       for (const pickup of this.pickups) {
         if (pickup.collectedBy) continue;
         const du = pickup.u - racer.trackU;
         if (du <= 0 || du > pickupLookAheadU) continue;
         const pickupLat = pickup.lane * RACE_SIM.NOMINAL_HALF_WIDTH;
-        if (Math.abs(pickupLat - laneLateral) < 4) score += 2;
+        const dist = Math.abs(pickupLat - laneLateral);
+        if (dist < 3.5) score += 3;
+        else if (dist < 5.5) score += 1.5;
       }
 
       for (const obj of this.track.getTrackObjects()) {
         if (obj.kind !== "obstacle") continue;
         const du = obj.u - racer.trackU;
         if (du <= 0 || du > obstacleLookAheadU) continue;
-        if (Math.abs(obj.lateralOffset - laneLateral) < 2.2) score -= 6;
+        if (Math.abs(obj.lateralOffset - laneLateral) < 2.4) score -= 8;
       }
 
       if (score > bestScore) {
@@ -600,7 +618,9 @@ export function buildBotConfigs(
   const configs: BotConfig[] = [];
   // Grid of 4 lanes per row, rows staggered backward so cars don't overlap.
   // Local player takes pole at lane 0; bots fill the flanking lanes and rows behind.
-  const LANE_OFFSETS = [-9, -3.5, 3.5, 9];
+  // Edges kept inside the wall-proximity speed-penalty zone (edgeRatio < 0.7) so
+  // outer-lane bots don't bleed speed simply by holding their home lane.
+  const LANE_OFFSETS = [-6.5, -2.5, 2.5, 6.5];
   const ROW_U_OFFSET = 0.00028;
   const rng = mulberry32(seed ^ 0xb07c0de);
   const callsignPool = [...BOT_CALLSIGNS];
