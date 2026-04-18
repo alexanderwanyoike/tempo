@@ -9,6 +9,7 @@ import {
   NormalBlending,
   Object3D,
   Points,
+  Quaternion,
   ShaderMaterial,
   Vector3,
 } from "three";
@@ -29,6 +30,12 @@ const FALLBACK_NORMALS: Array<[number, number, number]> = [
   [0, -1, 0],
 ];
 
+// Prefix identifying manually-placed empty markers in Blender-authored GLBs.
+// Each empty's position + local +Y direction (which is Blender's local +Z,
+// i.e. the Single Arrow display direction, after the GLTF axis conversion)
+// is used as an emitter origin + emit direction.
+const EMITTER_NAME_PREFIX = "hover_emitter";
+
 const PARTICLE_COUNT = 140;
 const PARTICLE_LIFETIME_MIN = 0.24;
 const PARTICLE_LIFETIME_MAX = 0.42;
@@ -38,6 +45,22 @@ const GRAVITY_Y = -2.2;
 const POINT_BASE_SIZE = 7;
 const BOTTOM_NORMAL_Y_THRESHOLD = -0.3;
 const BACK_NORMAL_Z_THRESHOLD = 0.5;
+const EMITTER_SPAWN_RADIUS = 0.06;
+
+// Throttle + boost response curve. Particles spawned while the car is at
+// speed or mid-boost get extended lifetimes and higher launch velocity so
+// the combined effect is a long, streaked trail.
+const SPEED_LIFETIME_SCALE = 1.1; // +110% lifetime at full speedRatio=1
+const SPEED_EMIT_SPEED_SCALE = 1.0; // doubles launch velocity at full speed
+const BOOST_LIFETIME_SCALE = 2.8; // up to +280% lifetime on extreme boost
+const BOOST_EMIT_SPEED_SCALE = 2.5; // 3.5x launch speed on extreme boost
+const BOOST_GRAVITY_DAMP = 0.85; // gravity drops to ~15% during full boost
+const BOOST_JITTER_DAMP = 0.5; // narrower spread during boost for streaks
+
+type ExplicitEmitter = {
+  position: Vector3;
+  direction: Vector3;
+};
 
 const HOVER_VERTEX = `
   attribute float aLife;
@@ -55,6 +78,7 @@ const HOVER_VERTEX = `
 const HOVER_FRAGMENT = `
   uniform vec3 uColor;
   uniform float uIntensity;
+  uniform float uHeat;
   varying float vLife;
   void main() {
     vec2 coord = gl_PointCoord - vec2(0.5);
@@ -62,8 +86,8 @@ const HOVER_FRAGMENT = `
     if (dist > 1.0) discard;
     float core = pow(1.0 - dist, 1.8);
     float alpha = core * vLife * uIntensity;
-    float whiteMix = pow(core, 4.0) * 0.6;
-    vec3 tint = mix(uColor, vec3(1.0), whiteMix);
+    float whiteMix = pow(core, 4.0) * 0.6 + uHeat * 0.4;
+    vec3 tint = mix(uColor, vec3(1.0), clamp(whiteMix, 0.0, 1.0));
     gl_FragColor = vec4(tint, alpha);
   }
 `;
@@ -139,6 +163,37 @@ class SurfaceSampler {
       this.triangleNormals[nIndex + 2],
     );
   }
+}
+
+/**
+ * Walks the loaded car graph looking for `hover_emitter_*` empties (nodes with
+ * no mesh). Returns each one's position + emit direction in the bodyPivot's
+ * local space. Emit direction is the empty's local +Y axis in three.js space,
+ * which corresponds to Blender's local +Z (Single Arrow display direction)
+ * after the Y-up axis conversion performed on GLTF export.
+ */
+function collectExplicitEmitters(root: Object3D, bodyPivot: Object3D): ExplicitEmitter[] {
+  root.updateMatrixWorld(true);
+  bodyPivot.updateMatrixWorld(true);
+  const pivotInverse = new Matrix4().copy(bodyPivot.matrixWorld).invert();
+  const worldPos = new Vector3();
+  const worldQuat = new Quaternion();
+  const worldScale = new Vector3();
+  const emitters: ExplicitEmitter[] = [];
+
+  root.traverse((obj) => {
+    if (!obj.name.startsWith(EMITTER_NAME_PREFIX)) return;
+    if (obj instanceof Mesh) return;
+
+    obj.matrixWorld.decompose(worldPos, worldQuat, worldScale);
+    const positionLocal = worldPos.clone().applyMatrix4(pivotInverse);
+    const directionLocal = new Vector3(0, 1, 0).applyQuaternion(worldQuat);
+    const rotateOnly = new Matrix4().extractRotation(pivotInverse);
+    directionLocal.applyMatrix4(rotateOnly).normalize();
+    emitters.push({ position: positionLocal, direction: directionLocal });
+  });
+
+  return emitters;
 }
 
 function buildSurfaceSampler(root: Object3D, bodyPivot: Object3D): SurfaceSampler {
@@ -220,8 +275,11 @@ export class HoverJets {
   private readonly ageSeconds: Float32Array;
   private readonly lifetimeSeconds: Float32Array;
   private sampler: SurfaceSampler | null = null;
+  private explicitEmitters: ExplicitEmitter[] | null = null;
   private readonly samplePosition = new Vector3();
   private readonly sampleNormal = new Vector3();
+  private currentSpeedRatio = 0;
+  private currentBoostFactor = 0;
 
   constructor(color: Color) {
     this.positions = new Float32Array(PARTICLE_COUNT * 3);
@@ -247,6 +305,7 @@ export class HoverJets {
         uColor: { value: color.clone() },
         uIntensity: { value: 1 },
         uPointSize: { value: POINT_BASE_SIZE },
+        uHeat: { value: 0 },
       },
       vertexShader: HOVER_VERTEX,
       fragmentShader: HOVER_FRAGMENT,
@@ -269,20 +328,39 @@ export class HoverJets {
   }
 
   /**
-   * After the car mesh is loaded + transformed, call this to build a surface
-   * sampler. Particles will then emit from the car's down- and rear-facing
-   * surface triangles instead of the hardcoded fallback points.
+   * After the car mesh is loaded + transformed, call this to pick up emitter
+   * anchors. Preference order:
+   *   1. Manually-placed `hover_emitter_*` empties from the GLB (position +
+   *      local +Y direction, which is the Blender Single Arrow direction).
+   *   2. Surface sampler over the car's down/rear-facing geometry.
+   * If neither yields anything, the hardcoded fallback emitters continue.
    */
   bindToMesh(meshRoot: Object3D, bodyPivot: Object3D): void {
+    const explicit = collectExplicitEmitters(meshRoot, bodyPivot);
+    if (explicit.length > 0) {
+      this.explicitEmitters = explicit;
+      this.sampler = null;
+      return;
+    }
     const sampler = buildSurfaceSampler(meshRoot, bodyPivot);
     if (sampler.valid) this.sampler = sampler;
   }
 
   update(deltaSeconds: number, speedRatio: number, boostMultiplier: number): void {
     const dt = Math.min(deltaSeconds, 1 / 20);
-    const boost = Math.max(0, boostMultiplier - 1);
-    this.material.uniforms.uIntensity.value = 0.78 + speedRatio * 0.22 + boost * 0.5;
-    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE + speedRatio * 2 + boost * 3;
+    const clampedSpeed = Math.min(1, Math.max(0, speedRatio));
+    const boostFactor = Math.min(1, Math.max(0, boostMultiplier - 1));
+    this.currentSpeedRatio = clampedSpeed;
+    this.currentBoostFactor = boostFactor;
+
+    this.material.uniforms.uIntensity.value = 0.78 + clampedSpeed * 0.32 + boostFactor * 0.9;
+    this.material.uniforms.uPointSize.value = POINT_BASE_SIZE
+      + clampedSpeed * 3
+      + boostFactor * 6;
+    this.material.uniforms.uHeat.value = boostFactor;
+
+    const gravityScale = 1 - boostFactor * BOOST_GRAVITY_DAMP;
+    const gravityPerFrame = GRAVITY_Y * gravityScale * dt;
 
     for (let i = 0; i < PARTICLE_COUNT; i += 1) {
       this.ageSeconds[i] += dt;
@@ -291,7 +369,7 @@ export class HoverJets {
         continue;
       }
       const ix = i * 3;
-      this.velocities[ix + 1] += GRAVITY_Y * dt;
+      this.velocities[ix + 1] += gravityPerFrame;
       this.positions[ix] += this.velocities[ix] * dt;
       this.positions[ix + 1] += this.velocities[ix + 1] * dt;
       this.positions[ix + 2] += this.velocities[ix + 2] * dt;
@@ -312,7 +390,18 @@ export class HoverJets {
   }
 
   private respawn(index: number): void {
-    if (this.sampler && this.sampler.valid) {
+    if (this.explicitEmitters && this.explicitEmitters.length > 0) {
+      const emitter = this.explicitEmitters[index % this.explicitEmitters.length];
+      const jitterX = (Math.random() - 0.5) * EMITTER_SPAWN_RADIUS;
+      const jitterY = (Math.random() - 0.5) * EMITTER_SPAWN_RADIUS;
+      const jitterZ = (Math.random() - 0.5) * EMITTER_SPAWN_RADIUS;
+      this.samplePosition.set(
+        emitter.position.x + jitterX,
+        emitter.position.y + jitterY,
+        emitter.position.z + jitterZ,
+      );
+      this.sampleNormal.copy(emitter.direction);
+    } else if (this.sampler && this.sampler.valid) {
       this.sampler.sample(this.samplePosition, this.sampleNormal);
     } else {
       const fallbackIndex = index % FALLBACK_EMITTERS.length;
@@ -328,14 +417,24 @@ export class HoverJets {
     this.positions[ix + 2] = this.samplePosition.z;
 
     // Emit along the surface normal so particles shoot OUT of the car: bottom
-    // surfaces push down, rear surfaces push rearward. Add a little random
-    // spread so the jet has width.
-    const speed = EMIT_SPEED + Math.random() * 0.8;
-    this.velocities[ix] = this.sampleNormal.x * speed + (Math.random() - 0.5) * LATERAL_JITTER;
-    this.velocities[ix + 1] = this.sampleNormal.y * speed + (Math.random() - 0.5) * 0.25;
-    this.velocities[ix + 2] = this.sampleNormal.z * speed + (Math.random() - 0.5) * LATERAL_JITTER;
+    // surfaces push down, rear surfaces push rearward. Lifetime + launch speed
+    // scale with current throttle and boost so the trail stretches when the
+    // driver is accelerating and becomes extreme when a boost pad fires.
+    const speedBoost = 1
+      + this.currentSpeedRatio * SPEED_EMIT_SPEED_SCALE
+      + this.currentBoostFactor * BOOST_EMIT_SPEED_SCALE;
+    const lifetimeBoost = 1
+      + this.currentSpeedRatio * SPEED_LIFETIME_SCALE
+      + this.currentBoostFactor * BOOST_LIFETIME_SCALE;
+    const jitterScale = 1 - this.currentBoostFactor * BOOST_JITTER_DAMP;
 
-    this.lifetimeSeconds[index] = randRange(PARTICLE_LIFETIME_MIN, PARTICLE_LIFETIME_MAX);
+    const launch = (EMIT_SPEED + Math.random() * 0.8) * speedBoost;
+    const lateral = LATERAL_JITTER * jitterScale;
+    this.velocities[ix] = this.sampleNormal.x * launch + (Math.random() - 0.5) * lateral;
+    this.velocities[ix + 1] = this.sampleNormal.y * launch + (Math.random() - 0.5) * 0.25 * jitterScale;
+    this.velocities[ix + 2] = this.sampleNormal.z * launch + (Math.random() - 0.5) * lateral;
+
+    this.lifetimeSeconds[index] = randRange(PARTICLE_LIFETIME_MIN, PARTICLE_LIFETIME_MAX) * lifetimeBoost;
     this.ageSeconds[index] = 0;
     this.lives[index] = 1;
   }
