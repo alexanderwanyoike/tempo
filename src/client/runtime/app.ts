@@ -47,6 +47,7 @@ import {
   getCarAssetDefinition,
   isSharedCarMesh,
   loadCarMesh,
+  prefetchCarMesh,
 } from "./car-assets";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
@@ -91,6 +92,7 @@ type RemoteCarVisual = {
   hoverJets: HoverJets;
   assetGroup: Group | null;
   assetRevision: number;
+  hydratePromise: Promise<void>;
   targetTrackU: number;
   targetLateralOffset: number;
   currentTrackU: number;
@@ -246,6 +248,10 @@ export class App {
   private countdownDurationMs = 2500;
   private countdownResetTransition: CountdownResetTransition | null = null;
   private audioReady = false;
+  private vehicleMeshesReadyPromise: Promise<void> = Promise.resolve();
+  private vehicleMeshesReady = true;
+  private vehicleMeshTotal = 0;
+  private vehicleMeshReadyCount = 0;
   private countdownStarted = false;
   private latestCheckpointCount = 1;
   private localPlacement = 1;
@@ -438,6 +444,11 @@ export class App {
         preload: { sceneReady: true, audioReady: true },
       };
       this.latestRoster = this.botSimulator.buildRoster(localRoster);
+      const raceVariants = new Set<CarVariant>([pickedVariant]);
+      for (const bot of botConfigs) raceVariants.add(bot.carVariant);
+      this.preloadVehicleMeshes(raceVariants);
+    } else if (launch.mode !== "multiplayer" && launch.carVariant) {
+      this.preloadVehicleMeshes([launch.carVariant]);
     }
 
     this.runtimeUiStyles = this.createRuntimeUiStyles();
@@ -521,6 +532,12 @@ export class App {
 
     if (this.launch.mode !== "multiplayer") return;
     if (phase === "lobby") return;
+    if (this.vehicleMeshTotal === 0 && players.length > 0) {
+      const variants = new Set<CarVariant>();
+      if (this.launch.carVariant) variants.add(this.launch.carVariant);
+      for (const p of players) if (p.carVariant) variants.add(p.carVariant);
+      this.preloadVehicleMeshes(variants);
+    }
     this.refreshMultiplayerStatusMessage();
   }
 
@@ -578,6 +595,7 @@ export class App {
       const remote = this.ensureRemoteCar(player.clientId);
       remote.targetTrackU = player.trackU;
       remote.targetLateralOffset = player.lateralOffset;
+      if (!remote.group.visible) remote.group.visible = true;
     }
 
     for (const [clientId, remote] of this.remoteCars) {
@@ -725,9 +743,10 @@ export class App {
 
   private async waitForAudioReady(): Promise<void> {
     try {
-      if (this.musicReadyPromise) {
-        await this.musicReadyPromise;
-      }
+      const gates: Promise<unknown>[] = [];
+      if (this.musicReadyPromise) gates.push(this.musicReadyPromise);
+      gates.push(this.vehicleMeshesReadyPromise);
+      await Promise.all(gates);
       this.audioReady = true;
       this.launch.onAudioReady?.();
       if (this.launch.mode !== "multiplayer") {
@@ -744,6 +763,53 @@ export class App {
       this.primaryButton.style.display = "";
       this.secondaryButton.style.display = "none";
     }
+  }
+
+  private preloadVehicleMeshes(variants: Iterable<CarVariant>): void {
+    const unique = new Set<CarVariant>(variants);
+    if (unique.size === 0) return;
+    const remoteClientIds = this.latestRoster
+      .filter((p) => p.clientId && p.clientId !== this.launch.localPlayerId)
+      .map((p) => p.clientId);
+    this.vehicleMeshTotal = unique.size;
+    this.vehicleMeshReadyCount = 0;
+    this.vehicleMeshesReady = false;
+    const VARIANT_TIMEOUT_MS = 6000;
+    const perVariant: Promise<void>[] = [];
+    for (const variant of unique) {
+      const load = prefetchCarMesh(this.config, variant)
+        .then(() => {
+          this.vehicleMeshReadyCount += 1;
+          if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+        })
+        .catch((error) => {
+          console.warn(`Vehicle mesh preload failed for ${variant}:`, error);
+          this.vehicleMeshReadyCount += 1;
+          if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+        });
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
+      perVariant.push(Promise.race([load, timeout]));
+    }
+
+    const remoteHydrations: Promise<void>[] = [];
+    for (const clientId of remoteClientIds) {
+      const remote = this.ensureRemoteCar(clientId);
+      remote.group.visible = false;
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
+      remoteHydrations.push(Promise.race([remote.hydratePromise, timeout]));
+    }
+    const localHydration = this.localVehicle
+      ? Promise.race([this.localVehicle.hydratePromise, new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS))])
+      : Promise.resolve();
+
+    this.vehicleMeshesReadyPromise = Promise.all([
+      ...perVariant,
+      ...remoteHydrations,
+      localHydration,
+    ]).then(() => {
+      this.vehicleMeshesReady = true;
+      if (this.phase === "staging") this.refreshMultiplayerStatusMessage();
+    });
   }
 
   private setupScene(): void {
@@ -842,12 +908,13 @@ export class App {
       hoverJets,
       assetGroup: null,
       assetRevision: 0,
+      hydratePromise: Promise.resolve(),
       targetTrackU: START_TRACK_U,
       targetLateralOffset: 0,
       currentTrackU: START_TRACK_U,
       currentLateralOffset: 0,
     };
-    void this.hydrateVehicleVisual(visual);
+    visual.hydratePromise = this.hydrateVehicleVisual(visual);
     return visual;
   }
 
@@ -2817,19 +2884,23 @@ export class App {
       return;
     }
 
+    const meshStatus = this.vehicleMeshTotal > 0 && !this.vehicleMeshesReady
+      ? ` Syncing fleet ${this.vehicleMeshReadyCount}/${this.vehicleMeshTotal}.`
+      : "";
+
     if (activePlayers.length === 0) {
       this.lastStatusMessage = this.audioReady
-        ? "Loading lane armed. Waiting for pilots."
-        : "Loading lane forming. Audio buffering.";
+        ? `Loading lane armed. Waiting for pilots.${meshStatus}`
+        : `Loading lane forming. Audio buffering.${meshStatus}`;
       this.renderRoster();
       return;
     }
 
     const readyCount = activePlayers.filter((player) => player.preload.sceneReady && player.preload.audioReady).length;
     if (!this.audioReady) {
-      this.lastStatusMessage = `Loading lane forming. ${readyCount}/${activePlayers.length} synced.`;
+      this.lastStatusMessage = `Loading lane forming. ${readyCount}/${activePlayers.length} synced.${meshStatus}`;
     } else if (readyCount < activePlayers.length) {
-      this.lastStatusMessage = `Audio locked. Waiting for pilots ${readyCount}/${activePlayers.length}.`;
+      this.lastStatusMessage = `Audio locked. Waiting for pilots ${readyCount}/${activePlayers.length}.${meshStatus}`;
     } else {
       this.lastStatusMessage = "All pilots synced. Grid lock imminent.";
     }

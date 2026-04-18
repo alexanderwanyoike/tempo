@@ -378,9 +378,10 @@ export function getCarAssetDefinition(variant: CarVariant): CarAssetDefinition {
   return carAssetByVariant.get(variant) ?? carAssetDefinitions[0];
 }
 
-export function prefetchCarMesh(config: ClientConfig, variant: CarVariant): void {
-  void ensureCarTemplate(config, variant).catch((error) => {
+export function prefetchCarMesh(config: ClientConfig, variant: CarVariant): Promise<Group> {
+  return ensureCarTemplate(config, variant).catch((error) => {
     console.error(`Failed to prefetch car mesh for ${variant}:`, error);
+    throw error;
   });
 }
 
