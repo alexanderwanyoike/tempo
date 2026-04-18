@@ -1756,6 +1756,16 @@ export class App {
           right: 12px;
           width: min(228px, calc(100vw - 24px));
           padding: 10px 12px 11px;
+          max-height: calc(100vh - 260px);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .tempo-hud-summary .tempo-hud-standings {
+          overflow-y: auto;
+          min-height: 0;
+          flex: 1;
+          padding-right: 2px;
         }
 
         .tempo-hud-place,
@@ -2756,7 +2766,7 @@ export class App {
       if (placementA !== placementB) return placementA - placementB;
       return a.name.localeCompare(b.name);
     });
-    const visiblePlayers = sortedPlayers.slice(0, this.isCompactHudLayout() ? 2 : 3);
+    const visiblePlayers = sortedPlayers.slice();
     const localPlayer = sortedPlayers.find((player) => player.clientId === this.launch.localPlayerId) ?? null;
     if (localPlayer && !visiblePlayers.some((player) => player.clientId === localPlayer.clientId)) {
       visiblePlayers.push(localPlayer);
@@ -2834,10 +2844,6 @@ export class App {
     target.textContent = active ? value : "Empty";
     target.classList.toggle("is-active", active);
     target.classList.toggle("is-empty", !active);
-  }
-
-  private isCompactHudLayout(): boolean {
-    return window.innerWidth <= 760 || window.innerHeight <= 620;
   }
 
   private updateNameLabels(): void {
