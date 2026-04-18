@@ -460,7 +460,16 @@ export class BotSimulator {
     }
 
     const halfWidth = this.track.getHalfWidthAt(racer.trackU);
-    const targetLateral = agent.laneChoice * halfWidth * LANE_FRACTION;
+    // Each bot holds its own home lateral lane (set from startLateralOffset in
+    // buildBotConfigs), shifted by a small obstacle-avoidance delta. This keeps
+    // the grid spread after launch instead of everyone converging on center.
+    const homeOffset = agent.config.startLateralOffset;
+    const homeClamped = Math.max(-halfWidth * 0.85, Math.min(halfWidth * 0.85, homeOffset));
+    const avoidanceDelta = agent.laneChoice * 2.0;
+    const targetLateral = Math.max(
+      -halfWidth * 0.92,
+      Math.min(halfWidth * 0.92, homeClamped + avoidanceDelta),
+    );
     const latError = targetLateral - racer.lateralOffset;
     const steerDeadband = 0.18;
     agent.input.steerLeft = latError < -steerDeadband;
@@ -589,7 +598,10 @@ export function buildBotConfigs(
   seed: number,
 ): BotConfig[] {
   const configs: BotConfig[] = [];
-  const laneScale = 3.2;
+  // Grid of 4 lanes per row, rows staggered backward so cars don't overlap.
+  // Local player takes pole at lane 0; bots fill the flanking lanes and rows behind.
+  const LANE_OFFSETS = [-9, -3.5, 3.5, 9];
+  const ROW_U_OFFSET = 0.00028;
   const rng = mulberry32(seed ^ 0xb07c0de);
   const callsignPool = [...BOT_CALLSIGNS];
   for (let i = callsignPool.length - 1; i > 0; i -= 1) {
@@ -598,13 +610,15 @@ export function buildBotConfigs(
   }
   for (let i = 0; i < count; i += 1) {
     const variant = variants[i % variants.length] ?? "vector";
-    const lane = (i % 2 === 0 ? 1 : -1) * Math.ceil((i + 1) / 2);
+    const row = Math.floor(i / LANE_OFFSETS.length);
+    const lateralOffset = LANE_OFFSETS[i % LANE_OFFSETS.length];
+    const rowTrackU = Math.max(0.0002, startTrackU - row * ROW_U_OFFSET);
     configs.push({
       clientId: `bot-${i + 1}`,
       name: callsignPool[i % callsignPool.length] ?? `Pilot ${i + 2}`,
       carVariant: variant,
-      startTrackU,
-      startLateralOffset: Math.max(-10, Math.min(10, lane * laneScale)),
+      startTrackU: rowTrackU,
+      startLateralOffset: lateralOffset,
       difficulty,
     });
   }
