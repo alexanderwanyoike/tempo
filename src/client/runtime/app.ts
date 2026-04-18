@@ -64,6 +64,7 @@ import {
 import { HoverJets } from "./hover-jets";
 import { BoostRibbons } from "./boost-ribbons";
 import { BoostFxPass } from "./boost-fx-pass";
+import { SpeedLinesPass } from "./speed-lines-pass";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -171,6 +172,8 @@ export class App {
   private readonly composer: EffectComposer;
   private readonly bloomPass: UnrealBloomPass;
   private readonly boostFxPass: BoostFxPass;
+  private readonly speedLinesPass: SpeedLinesPass | null;
+  private speedLinesStrength = 0;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly localVehicle: RemoteCarVisual;
@@ -360,6 +363,16 @@ export class App {
     this.composer.addPass(this.bloomPass);
     this.boostFxPass = new BoostFxPass();
     this.composer.addPass(this.boostFxPass);
+    // Speed-line pass adds another full-screen shader hit, so gate it
+    // behind the same coarse-pointer check we use for other reduced-fx
+    // decisions. Mobile keeps the ribbons + boost fx but not the streaks.
+    const reducedFx = window.matchMedia("(pointer: coarse)").matches;
+    if (reducedFx) {
+      this.speedLinesPass = null;
+    } else {
+      this.speedLinesPass = new SpeedLinesPass();
+      this.composer.addPass(this.speedLinesPass);
+    }
 
     this.localVehicle = this.createVehicleVisual(launch.carVariant ?? "vector");
     this.scene.add(this.localVehicle.group);
@@ -2082,6 +2095,24 @@ export class App {
     this.boostRibbons.sample(this.localVehicle.group.position, this.tempVector, this.tempVectorB);
     this.boostRibbons.update(deltaSeconds, Math.min(surgeBoost, 1));
     this.boostFxPass.setStrength(Math.min(surgeBoost, 1));
+    this.updateSpeedLines(deltaSeconds);
+  }
+
+  private updateSpeedLines(deltaSeconds: number): void {
+    if (!this.speedLinesPass) return;
+    const state = this.vehicleController.state;
+    const topSpeed = Math.max(1, this.vehicleController.currentTopSpeed);
+    const speedRatio = Math.min(1, Math.abs(state.speed) / topSpeed);
+    // Ramp in between 0.72 and 0.98 of top speed. Below the threshold the
+    // lines read as noise; above it they amplify the sense of commitment.
+    const target = this.phase === "running"
+      ? Math.max(0, Math.min(1, (speedRatio - 0.72) / 0.26))
+      : 0;
+    const dt = Math.min(deltaSeconds, 1 / 20);
+    const k = 1 - Math.exp(-5.5 * dt);
+    this.speedLinesStrength += (target - this.speedLinesStrength) * k;
+    this.speedLinesPass.setStrength(this.speedLinesStrength);
+    this.speedLinesPass.setTime(this.sceneElapsedTime);
   }
 
   private updateSpeedFeedback(deltaSeconds: number): void {
