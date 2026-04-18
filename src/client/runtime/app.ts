@@ -590,23 +590,33 @@ export class App {
 
   private startMaterializeForAllVehicles(): void {
     const now = performance.now();
+    const stagger = 160;
     this.startMaterializeEffect(this.localVehicle, now);
+    let i = 1;
     for (const remote of this.remoteCars.values()) {
+      if (remote === this.localVehicle) continue;
       remote.group.visible = true;
-      this.startMaterializeEffect(remote, now);
+      this.startMaterializeEffect(remote, now + i * stagger);
+      i += 1;
     }
   }
 
-  private startMaterializeEffect(visual: RemoteCarVisual, now: number): void {
-    visual.materializeStartedAt = now;
+  private startMaterializeEffect(visual: RemoteCarVisual, startAt: number): void {
+    visual.materializeStartedAt = startAt;
     visual.bodyPivot.visible = false;
-    visual.plume.setIntensity(0.001);
+    visual.plume.setIntensity(0);
   }
 
   private updateMaterializeEffect(visual: RemoteCarVisual, nowMs: number): void {
     const started = visual.materializeStartedAt;
     if (started === null) return;
-    const rawT = Math.min(1, Math.max(0, (nowMs - started) / visual.materializeDurationMs));
+    const elapsed = nowMs - started;
+    if (elapsed < 0) {
+      visual.plume.setIntensity(0);
+      visual.bodyPivot.visible = false;
+      return;
+    }
+    const rawT = Math.min(1, elapsed / visual.materializeDurationMs);
     const intensity = Math.sin(rawT * Math.PI);
     visual.plume.setIntensity(intensity);
     const realVisible = rawT >= 0.55;
