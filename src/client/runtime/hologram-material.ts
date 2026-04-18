@@ -1,4 +1,11 @@
-import { AdditiveBlending, Color, DoubleSide, ShaderMaterial } from "three";
+import {
+  AdditiveBlending,
+  Color,
+  DoubleSide,
+  NormalBlending,
+  type Blending,
+  ShaderMaterial,
+} from "three";
 
 const VERTEX_SHADER = `
 varying vec3 vWorldNormal;
@@ -53,7 +60,12 @@ void main() {
 `;
 
 export class HologramMaterial extends ShaderMaterial {
-  constructor(options: { color?: Color | string; alpha?: number; dissolve?: number } = {}) {
+  constructor(options: {
+    color?: Color | string;
+    alpha?: number;
+    dissolve?: number;
+    blending?: Blending;
+  } = {}) {
     super({
       uniforms: {
         uTime: { value: 0 },
@@ -65,10 +77,13 @@ export class HologramMaterial extends ShaderMaterial {
       fragmentShader: FRAGMENT_SHADER,
       transparent: true,
       depthWrite: false,
-      blending: AdditiveBlending,
+      blending: options.blending ?? AdditiveBlending,
       side: DoubleSide,
     });
   }
+
+  static readonly ADDITIVE = AdditiveBlending;
+  static readonly NORMAL = NormalBlending;
 
   setTime(t: number): void {
     this.uniforms.uTime.value = t;

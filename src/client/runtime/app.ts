@@ -50,6 +50,7 @@ import {
   prefetchCarMesh,
 } from "./car-assets";
 import { HologramMaterial } from "./hologram-material";
+import { HologramPlume } from "./hologram-plume";
 import { TouchControls } from "./touch-controls";
 import { loadSongDefinition } from "./song-loader";
 import type { Track, TrackObject } from "./track-builder";
@@ -94,6 +95,9 @@ type RemoteCarVisual = {
   assetGroup: Group | null;
   assetRevision: number;
   hydratePromise: Promise<void>;
+  plume: HologramPlume;
+  materializeStartedAt: number | null;
+  materializeDurationMs: number;
   targetTrackU: number;
   targetLateralOffset: number;
   currentTrackU: number;
@@ -550,6 +554,7 @@ export class App {
     this.phase = "countdown";
     this.countdownStarted = false;
     this.beginCountdownResetTransition();
+    this.startMaterializeForAllVehicles();
     this.touchControls?.setVisible(false);
     this.statusOverlay.dataset.overlayState = "countdown";
     this.statusOverlay.style.display = "flex";
@@ -558,6 +563,59 @@ export class App {
     this.primaryButton.style.display = "none";
     this.secondaryButton.style.display = "none";
     this.refreshMultiplayerStatusMessage();
+  }
+
+  private positionRemoteAtStart(visual: RemoteCarVisual, clientId: string): void {
+    let startU = START_TRACK_U;
+    let startLat = 0;
+    if (this.botSimulator) {
+      const racer = this.botSimulator.botRacers.find((r) => r.clientId === clientId);
+      if (racer) {
+        startU = racer.trackU;
+        startLat = racer.lateralOffset;
+      }
+    }
+    visual.currentTrackU = startU;
+    visual.currentLateralOffset = startLat;
+    visual.targetTrackU = startU;
+    visual.targetLateralOffset = startLat;
+    const frame = this.track.getFrameAt(startU);
+    const center = this.track.getPointAt(startU);
+    visual.group.position.copy(center)
+      .addScaledVector(frame.right, startLat)
+      .addScaledVector(frame.up, 0.45);
+    this.orientMat.makeBasis(frame.right, frame.up, frame.tangent.clone().negate());
+    visual.group.setRotationFromMatrix(this.orientMat);
+  }
+
+  private startMaterializeForAllVehicles(): void {
+    const now = performance.now();
+    this.startMaterializeEffect(this.localVehicle, now);
+    for (const remote of this.remoteCars.values()) {
+      remote.group.visible = true;
+      this.startMaterializeEffect(remote, now);
+    }
+  }
+
+  private startMaterializeEffect(visual: RemoteCarVisual, now: number): void {
+    visual.materializeStartedAt = now;
+    visual.bodyPivot.visible = false;
+    visual.plume.setIntensity(0.001);
+  }
+
+  private updateMaterializeEffect(visual: RemoteCarVisual, nowMs: number): void {
+    const started = visual.materializeStartedAt;
+    if (started === null) return;
+    const rawT = Math.min(1, Math.max(0, (nowMs - started) / visual.materializeDurationMs));
+    const intensity = Math.sin(rawT * Math.PI);
+    visual.plume.setIntensity(intensity);
+    const realVisible = rawT >= 0.55;
+    if (visual.bodyPivot.visible !== realVisible) visual.bodyPivot.visible = realVisible;
+    if (rawT >= 1) {
+      visual.plume.setIntensity(0);
+      visual.bodyPivot.visible = true;
+      visual.materializeStartedAt = null;
+    }
   }
 
   private enterRunningPhase(): void {
@@ -797,6 +855,7 @@ export class App {
     for (const clientId of remoteClientIds) {
       const remote = this.ensureRemoteCar(clientId);
       remote.group.visible = false;
+      this.positionRemoteAtStart(remote, clientId);
       const timeout = new Promise<void>((resolve) => setTimeout(resolve, VARIANT_TIMEOUT_MS));
       remoteHydrations.push(Promise.race([remote.hydratePromise, timeout]));
     }
@@ -880,6 +939,9 @@ export class App {
     const group = new Group();
     group.add(bodyPivot);
 
+    const plume = new HologramPlume(palette.bodyEmissive.clone());
+    group.add(plume.mesh);
+
     const visual: RemoteCarVisual = {
       id: "",
       variant,
@@ -894,6 +956,9 @@ export class App {
       assetGroup: null,
       assetRevision: 0,
       hydratePromise: Promise.resolve(),
+      plume,
+      materializeStartedAt: null,
+      materializeDurationMs: 1400,
       targetTrackU: START_TRACK_U,
       targetLateralOffset: 0,
       currentTrackU: START_TRACK_U,
@@ -2918,17 +2983,8 @@ export class App {
 
     const rawT = MathUtils.clamp((nowMs - transition.startedAt) / transition.durationMs, 0, 1);
 
-    // Hologram teleport: dematerialize at source, snap invisibly at midpoint,
-    // rematerialize at target. Mask the position jump with a hologram peak.
-    let hologramAlpha = 0;
-    let realVisible = true;
-    if (rawT > 0.12 && rawT < 0.88) {
-      const windowT = (rawT - 0.12) / 0.76;
-      hologramAlpha = Math.sin(windowT * Math.PI);
-      realVisible = false;
-    }
-    this.setVehicleTransitionVisual(this.localVehicle, hologramAlpha, realVisible);
-
+    // Position snaps at midpoint under cover of the hologram plume peak so the
+    // warp reads as an intentional teleport rather than an interpolation.
     if (rawT < 0.5) {
       this.vehicleController.forceTrackState(
         transition.fromTrackU,
@@ -2944,7 +3000,6 @@ export class App {
     }
 
     if (rawT >= 1) {
-      this.setVehicleTransitionVisual(this.localVehicle, 0, true);
       this.vehicleController.forceTrackState(
         transition.toTrackU,
         transition.toLateralOffset,
@@ -2952,20 +3007,6 @@ export class App {
       );
       this.countdownResetTransition = null;
     }
-  }
-
-  private setVehicleTransitionVisual(
-    visual: RemoteCarVisual,
-    hologramAlpha: number,
-    realVisible: boolean,
-  ): void {
-    const showHologram = hologramAlpha > 0.01;
-    visual.fallbackGroup.visible = showHologram;
-    visual.fallbackBodyMaterial.setAlpha(hologramAlpha);
-    visual.fallbackCockpitMaterial.setAlpha(hologramAlpha);
-    visual.fallbackBodyMaterial.setDissolve(1 - hologramAlpha);
-    visual.fallbackCockpitMaterial.setDissolve(1 - hologramAlpha);
-    if (visual.assetGroup) visual.assetGroup.visible = realVisible;
   }
 
   private readonly render = (time: number): void => {
@@ -2976,6 +3017,12 @@ export class App {
     const now = Date.now();
     this.updateSpeedFeedback(deltaSeconds);
     for (const mat of this.hologramMaterials) mat.setTime(this.sceneElapsedTime);
+    this.localVehicle.plume.setTime(this.sceneElapsedTime);
+    this.updateMaterializeEffect(this.localVehicle, time);
+    for (const remote of this.remoteCars.values()) {
+      remote.plume.setTime(this.sceneElapsedTime);
+      this.updateMaterializeEffect(remote, time);
+    }
 
     if (this.phase === "countdown") {
       this.updateCountdownResetTransition(time);

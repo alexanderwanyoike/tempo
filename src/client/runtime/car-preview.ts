@@ -30,6 +30,7 @@ import {
   toToonMaterial,
 } from "./car-toon-shader";
 import { HologramMaterial } from "./hologram-material";
+import { NormalBlending } from "three";
 
 const OUTLINE_MESH_NAME = "tempo-car-outline";
 
@@ -225,11 +226,12 @@ function buildFallbackCar(
   const trim = new Color(spec.trim);
   const canopy = new Color(spec.canopy);
 
-  const bodyMaterial = new HologramMaterial({ color: accent });
-  const trimMaterial = new HologramMaterial({ color: trim });
-  const canopyMaterial = new HologramMaterial({ color: canopy });
+  const bodyMaterial = new HologramMaterial({ color: accent, blending: NormalBlending });
+  const trimMaterial = new HologramMaterial({ color: trim, blending: NormalBlending });
+  const canopyMaterial = new HologramMaterial({ color: canopy, blending: NormalBlending });
   const glowMaterial = new HologramMaterial({
     color: accent.clone().lerp(new Color("#ffffff"), 0.25),
+    blending: NormalBlending,
   });
 
   const body = new Mesh(new BoxGeometry(3.5, 0.62, 1.55), bodyMaterial);
