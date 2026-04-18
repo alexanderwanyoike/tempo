@@ -98,6 +98,7 @@ type RemoteCarVisual = {
   plume: HologramPlume;
   materializeStartedAt: number | null;
   materializeDurationMs: number;
+  materializeDematerialize: boolean;
   targetTrackU: number;
   targetLateralOffset: number;
   currentTrackU: number;
@@ -591,19 +592,26 @@ export class App {
   private startMaterializeForAllVehicles(): void {
     const now = performance.now();
     const stagger = 160;
-    this.startMaterializeEffect(this.localVehicle, now);
+    this.startMaterializeEffect(this.localVehicle, now, true);
     let i = 1;
     for (const remote of this.remoteCars.values()) {
       if (remote === this.localVehicle) continue;
       remote.group.visible = true;
-      this.startMaterializeEffect(remote, now + i * stagger);
+      this.startMaterializeEffect(remote, now + i * stagger, false);
       i += 1;
     }
   }
 
-  private startMaterializeEffect(visual: RemoteCarVisual, startAt: number): void {
+  private startMaterializeEffect(
+    visual: RemoteCarVisual,
+    startAt: number,
+    dematerialize: boolean,
+  ): void {
     visual.materializeStartedAt = startAt;
-    visual.bodyPivot.visible = false;
+    visual.materializeDematerialize = dematerialize;
+    // Dematerialize keeps the car visible at its pre-countdown position so the
+    // rising plume reads as "beaming out" before the position snap.
+    if (!dematerialize) visual.bodyPivot.visible = false;
     visual.plume.setIntensity(0);
   }
 
@@ -631,8 +639,10 @@ export class App {
     }
     visual.plume.setIntensity(intensity);
     visual.plume.setScanProgress(rawT);
-    const realVisible = rawT >= 0.6;
-    if (visual.bodyPivot.visible !== realVisible) visual.bodyPivot.visible = realVisible;
+    const shouldShow = visual.materializeDematerialize
+      ? rawT < 0.4 || rawT >= 0.6
+      : rawT >= 0.6;
+    if (visual.bodyPivot.visible !== shouldShow) visual.bodyPivot.visible = shouldShow;
     if (rawT >= 1) {
       visual.plume.setIntensity(0);
       visual.bodyPivot.visible = true;
@@ -981,6 +991,7 @@ export class App {
       plume,
       materializeStartedAt: null,
       materializeDurationMs: 1400,
+      materializeDematerialize: false,
       targetTrackU: START_TRACK_U,
       targetLateralOffset: 0,
       currentTrackU: START_TRACK_U,
