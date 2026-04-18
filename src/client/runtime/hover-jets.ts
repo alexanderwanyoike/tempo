@@ -36,13 +36,13 @@ const FALLBACK_NORMALS: Array<[number, number, number]> = [
 // is used as an emitter origin + emit direction.
 const EMITTER_NAME_PREFIX = "hover_emitter";
 
-const PARTICLE_COUNT = 140;
-const PARTICLE_LIFETIME_MIN = 0.24;
-const PARTICLE_LIFETIME_MAX = 0.42;
-const EMIT_SPEED = 3.2;
+const PARTICLE_COUNT = 220;
+const PARTICLE_LIFETIME_MIN = 0.3;
+const PARTICLE_LIFETIME_MAX = 0.54;
+const EMIT_SPEED = 4.2;
 const LATERAL_JITTER = 0.55;
 const GRAVITY_Y = -2.2;
-const POINT_BASE_SIZE = 7;
+const POINT_BASE_SIZE = 10;
 const BOTTOM_NORMAL_Y_THRESHOLD = -0.3;
 const BACK_NORMAL_Z_THRESHOLD = 0.5;
 const EMITTER_SPAWN_RADIUS = 0.06;
@@ -50,11 +50,11 @@ const EMITTER_SPAWN_RADIUS = 0.06;
 // Throttle + boost response curve. Particles spawned while the car is at
 // speed or mid-boost get extended lifetimes and higher launch velocity so
 // the combined effect is a long, streaked trail.
-const SPEED_LIFETIME_SCALE = 1.1; // +110% lifetime at full speedRatio=1
-const SPEED_EMIT_SPEED_SCALE = 1.0; // doubles launch velocity at full speed
-const BOOST_LIFETIME_SCALE = 2.8; // up to +280% lifetime on extreme boost
-const BOOST_EMIT_SPEED_SCALE = 2.5; // 3.5x launch speed on extreme boost
-const BOOST_GRAVITY_DAMP = 0.85; // gravity drops to ~15% during full boost
+const SPEED_LIFETIME_SCALE = 1.4; // +140% lifetime at full speedRatio=1
+const SPEED_EMIT_SPEED_SCALE = 1.3; // 2.3x launch velocity at full speed
+const BOOST_LIFETIME_SCALE = 3.6; // up to +360% lifetime on extreme boost
+const BOOST_EMIT_SPEED_SCALE = 3.4; // 4.4x launch speed on extreme boost
+const BOOST_GRAVITY_DAMP = 0.9; // gravity drops to ~10% during full boost
 const BOOST_JITTER_DAMP = 0.5; // narrower spread during boost for streaks
 
 type ExplicitEmitter = {
@@ -353,10 +353,10 @@ export class HoverJets {
     this.currentSpeedRatio = clampedSpeed;
     this.currentBoostFactor = boostFactor;
 
-    this.material.uniforms.uIntensity.value = 0.78 + clampedSpeed * 0.32 + boostFactor * 0.9;
+    this.material.uniforms.uIntensity.value = 0.9 + clampedSpeed * 0.5 + boostFactor * 1.1;
     this.material.uniforms.uPointSize.value = POINT_BASE_SIZE
-      + clampedSpeed * 3
-      + boostFactor * 6;
+      + clampedSpeed * 4
+      + boostFactor * 8;
     this.material.uniforms.uHeat.value = boostFactor;
 
     const gravityScale = 1 - boostFactor * BOOST_GRAVITY_DAMP;
