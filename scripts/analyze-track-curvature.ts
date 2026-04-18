@@ -9,6 +9,8 @@ type Args = {
   safety: number;
   top: number;
   assertMaxSeverity: number | null;
+  rollMinRadius: number;
+  assertMaxRollSeverity: number | null;
 };
 
 type FoldRegion = {
@@ -21,6 +23,15 @@ type FoldRegion = {
   sampleCount: number;
 };
 
+type RollRegion = {
+  startU: number;
+  endU: number;
+  centerU: number;
+  minRollRadius: number;
+  severity: number;
+  sampleCount: number;
+};
+
 const DEFAULTS: Args = {
   songId: "the-prodigy-firestarter",
   seed: null,
@@ -28,6 +39,8 @@ const DEFAULTS: Args = {
   safety: 1.0,
   top: 20,
   assertMaxSeverity: null,
+  rollMinRadius: 8,
+  assertMaxRollSeverity: null,
 };
 
 function parseArgs(argv: string[]): Args {
@@ -52,6 +65,12 @@ function parseArgs(argv: string[]): Args {
       i += 1;
     } else if (arg === "--assert-max-severity" && next) {
       args.assertMaxSeverity = Number.parseFloat(next);
+      i += 1;
+    } else if (arg === "--roll-min-radius" && next) {
+      args.rollMinRadius = Math.max(0.5, Number.parseFloat(next) || DEFAULTS.rollMinRadius);
+      i += 1;
+    } else if (arg === "--assert-max-roll-severity" && next) {
+      args.assertMaxRollSeverity = Number.parseFloat(next);
       i += 1;
     }
   }
@@ -95,11 +114,13 @@ function main(): void {
   const ds = totalLength / N;
 
   const tangents: { x: number; y: number; z: number }[] = new Array(N + 1);
+  const rights: { x: number; y: number; z: number }[] = new Array(N + 1);
   const halfWidths: number[] = new Array(N + 1);
   for (let i = 0; i <= N; i += 1) {
     const u = Math.min(i / N, 0.9999);
     const frame = track.getFrameAt(u);
     tangents[i] = { x: frame.tangent.x, y: frame.tangent.y, z: frame.tangent.z };
+    rights[i] = { x: frame.right.x, y: frame.right.y, z: frame.right.z };
     halfWidths[i] = track.getHalfWidthAt(u);
   }
 
@@ -224,6 +245,138 @@ function main(): void {
     }
     console.log(
       `PASS: worst severity ${fmt(worstSeverity, 2)} stayed at or below ${fmt(args.assertMaxSeverity, 2)}`,
+    );
+  }
+
+  const rollRadii: number[] = new Array(N + 1);
+  const rollFlags: boolean[] = new Array(N + 1);
+  const rollBudget = ds / args.rollMinRadius;
+  let worstRollR = Number.POSITIVE_INFINITY;
+  let worstRollRU = 0;
+  let flaggedRollSampleCount = 0;
+
+  for (let i = 0; i < N; i += 1) {
+    const ta = tangents[i];
+    const tb = tangents[i + 1];
+    const tx = ta.x + tb.x, ty = ta.y + tb.y, tz = ta.z + tb.z;
+    const tlen = Math.sqrt(tx * tx + ty * ty + tz * tz);
+    if (tlen < 1e-8) {
+      rollRadii[i] = Number.POSITIVE_INFINITY;
+      rollFlags[i] = false;
+      continue;
+    }
+    const tnx = tx / tlen, tny = ty / tlen, tnz = tz / tlen;
+
+    const ra = rights[i];
+    const rb = rights[i + 1];
+    const dotA = ra.x * tnx + ra.y * tny + ra.z * tnz;
+    const dotB = rb.x * tnx + rb.y * tny + rb.z * tnz;
+    const pax = ra.x - dotA * tnx, pay = ra.y - dotA * tny, paz = ra.z - dotA * tnz;
+    const pbx = rb.x - dotB * tnx, pby = rb.y - dotB * tny, pbz = rb.z - dotB * tnz;
+    const palen = Math.sqrt(pax * pax + pay * pay + paz * paz);
+    const pblen = Math.sqrt(pbx * pbx + pby * pby + pbz * pbz);
+    if (palen < 1e-8 || pblen < 1e-8) {
+      rollRadii[i] = Number.POSITIVE_INFINITY;
+      rollFlags[i] = false;
+      continue;
+    }
+    const cosAngle = clamp((pax * pbx + pay * pby + paz * pbz) / (palen * pblen), -1, 1);
+    const rollAngle = Math.acos(cosAngle);
+    const rollR = rollAngle > 1e-6 ? ds / rollAngle : Number.POSITIVE_INFINITY;
+    rollRadii[i] = rollR;
+    const flagged = rollAngle > rollBudget;
+    rollFlags[i] = flagged;
+    if (flagged) flaggedRollSampleCount += 1;
+    if (rollR < worstRollR) {
+      worstRollR = rollR;
+      worstRollRU = i / N;
+    }
+  }
+  rollRadii[N] = rollRadii[N - 1] ?? Number.POSITIVE_INFINITY;
+  rollFlags[N] = false;
+
+  const rollRegions: RollRegion[] = [];
+  {
+    let rStart = -1;
+    let rGap = 0;
+    let rMin = Number.POSITIVE_INFINITY;
+    let rLast = -1;
+    let rCount = 0;
+    const finalize = (endIdx: number) => {
+      if (rStart < 0) return;
+      const startU = rStart / N;
+      const endU = endIdx / N;
+      rollRegions.push({
+        startU,
+        endU,
+        centerU: (startU + endU) / 2,
+        minRollRadius: rMin,
+        severity: rMin > 0 ? args.rollMinRadius / rMin : Number.POSITIVE_INFINITY,
+        sampleCount: rCount,
+      });
+      rStart = -1;
+      rMin = Number.POSITIVE_INFINITY;
+      rLast = -1;
+      rCount = 0;
+      rGap = 0;
+    };
+    for (let i = 0; i < N; i += 1) {
+      if (rollFlags[i]) {
+        if (rStart < 0) rStart = i;
+        rLast = i;
+        rCount += 1;
+        if (rollRadii[i] < rMin) rMin = rollRadii[i];
+        rGap = 0;
+      } else if (rStart >= 0) {
+        rGap += 1;
+        if (rGap > MAX_GAP) finalize(rLast + 1);
+      }
+    }
+    finalize(rLast + 1);
+  }
+  rollRegions.sort((a, b) => b.severity - a.severity);
+
+  const rollFlaggedPct = (flaggedRollSampleCount / N) * 100;
+  const worstRollSeverity = rollRegions[0]?.severity ?? 0;
+
+  console.log("");
+  console.log(`Roll-rate analysis (ROLL_MIN_RADIUS=${fmt(args.rollMinRadius, 2)}m):`);
+  console.log(
+    `roll regions flagged: ${rollRegions.length}   samples flagged: ${flaggedRollSampleCount} (${rollFlaggedPct.toFixed(2)}%)`,
+  );
+  console.log(`tightest roll radius: ${fmt(worstRollR, 2)}m at u=${pct(worstRollRU)}`);
+  console.log(`worst roll severity: ${fmt(worstRollSeverity, 2)}`);
+  console.log("");
+
+  if (rollRegions.length === 0) {
+    console.log(`No roll-rate regions exceed budget ${fmt(args.rollMinRadius, 2)}m.`);
+  } else {
+    console.log(`Top roll regions (by severity):`);
+    console.log(`  #   u-range                 center    minRollR   budget   sev    samples`);
+    for (let i = 0; i < Math.min(args.top, rollRegions.length); i += 1) {
+      const r = rollRegions[i];
+      const idx = (i + 1).toString().padStart(3, " ");
+      const rng = `${pct(r.startU).padStart(7, " ")} - ${pct(r.endU).padStart(7, " ")}`;
+      const center = pct(r.centerU).padStart(7, " ");
+      const minR = `${fmt(r.minRollRadius, 2)}m`.padStart(9, " ");
+      const budget = `${fmt(args.rollMinRadius, 2)}m`.padStart(7, " ");
+      const sev = fmt(r.severity, 2).padStart(5, " ");
+      const cnt = r.sampleCount.toString().padStart(5, " ");
+      console.log(`  ${idx}  ${rng}   ${center}  ${minR} ${budget}  ${sev}  ${cnt}`);
+    }
+  }
+
+  if (args.assertMaxRollSeverity !== null) {
+    console.log("");
+    if (worstRollSeverity > args.assertMaxRollSeverity) {
+      console.error(
+        `FAIL: worst roll severity ${fmt(worstRollSeverity, 2)} exceeded ${fmt(args.assertMaxRollSeverity, 2)}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(
+      `PASS: worst roll severity ${fmt(worstRollSeverity, 2)} stayed at or below ${fmt(args.assertMaxRollSeverity, 2)}`,
     );
   }
 }
