@@ -30,6 +30,8 @@ import {
   toToonMaterial,
 } from "./car-toon-shader";
 import { HologramMaterial } from "./hologram-material";
+import { HologramPlume } from "./hologram-plume";
+import { HoverJets } from "./hover-jets";
 import { NormalBlending } from "three";
 
 const OUTLINE_MESH_NAME = "tempo-car-outline";
@@ -47,6 +49,11 @@ export class CarPreview {
   private carGroup: Group | null = null;
   private loadRevision = 0;
   private readonly hologramMaterials: HologramMaterial[] = [];
+  private readonly plume = new HologramPlume("#6afcff");
+  private readonly hoverJets = new HoverJets(new Color("#6afcff"));
+  private materializeStartedAt: number | null = null;
+  private readonly materializeDurationMs = 1400;
+  private lastAnimateTime = 0;
 
   constructor(
     private readonly host: HTMLElement,
@@ -72,6 +79,9 @@ export class CarPreview {
     this.camera.position.set(0, 1.3, 7.4);
     this.camera.lookAt(0, 0.2, 0);
 
+    this.root.add(this.plume.mesh);
+    this.hoverJets.attachTo(this.root);
+
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.host);
   }
@@ -95,6 +105,8 @@ export class CarPreview {
     this.stop();
     this.resizeObserver.disconnect();
     this.clearCar();
+    this.plume.dispose();
+    this.hoverJets.dispose();
     this.renderer.dispose();
     this.host.replaceChildren();
   }
@@ -103,6 +115,11 @@ export class CarPreview {
     const definition = getCarAssetDefinition(variant);
     const revision = ++this.loadRevision;
     this.clearCar();
+
+    const accent = new Color(definition.fallbackPreviewSpec.accent);
+    this.plume.setColor(accent);
+    this.hoverJets.setColor(accent);
+    this.materializeStartedAt = performance.now();
 
     const group = new Group();
     const fallback = buildFallbackCar(
@@ -116,6 +133,7 @@ export class CarPreview {
       }
     });
     group.add(fallback);
+    group.visible = false;
     this.carGroup = group;
     this.root.add(group);
     this.render();
@@ -127,6 +145,7 @@ export class CarPreview {
         this.toonifyAsset(asset);
         group.add(asset);
         fallback.visible = false;
+        this.hoverJets.bindToMesh(asset, group);
         this.render();
       })
       .catch((error) => {
@@ -179,6 +198,8 @@ export class CarPreview {
 
   private readonly animate = (time: number): void => {
     if (!this.running) return;
+    const deltaSeconds = this.lastAnimateTime > 0 ? (time - this.lastAnimateTime) / 1000 : 0;
+    this.lastAnimateTime = time;
     if (this.carGroup) {
       const bob = Math.sin(time * 0.0018) * 0.09;
       this.carGroup.position.y = bob;
@@ -187,9 +208,32 @@ export class CarPreview {
     }
     const timeSec = time / 1000;
     for (const mat of this.hologramMaterials) mat.setTime(timeSec);
+    this.plume.setTime(timeSec);
+    this.updateMaterialize(time);
+    this.hoverJets.update(Math.min(deltaSeconds, 1 / 30), 0.35, 1);
     this.render();
     this.animationFrameId = window.requestAnimationFrame(this.animate);
   };
+
+  private updateMaterialize(nowMs: number): void {
+    if (this.materializeStartedAt === null) {
+      this.plume.setIntensity(0);
+      if (this.carGroup && !this.carGroup.visible) this.carGroup.visible = true;
+      return;
+    }
+    const rawT = Math.min(1, (nowMs - this.materializeStartedAt) / this.materializeDurationMs);
+    const intensity = Math.sin(rawT * Math.PI);
+    this.plume.setIntensity(intensity);
+    if (this.carGroup) {
+      const shouldShow = rawT >= 0.45;
+      if (this.carGroup.visible !== shouldShow) this.carGroup.visible = shouldShow;
+    }
+    if (rawT >= 1) {
+      this.plume.setIntensity(0);
+      if (this.carGroup) this.carGroup.visible = true;
+      this.materializeStartedAt = null;
+    }
+  }
 
   private render(): void {
     this.renderer.render(this.scene, this.camera);
