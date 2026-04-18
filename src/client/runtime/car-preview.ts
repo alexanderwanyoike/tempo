@@ -80,7 +80,6 @@ export class CarPreview {
     this.camera.lookAt(0, 0.2, 0);
 
     this.root.add(this.plume.mesh);
-    this.hoverJets.attachTo(this.root);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.host);
@@ -136,6 +135,7 @@ export class CarPreview {
     group.visible = false;
     this.carGroup = group;
     this.root.add(group);
+    this.hoverJets.attachTo(group);
     this.render();
 
     void loadCarMesh(this.config, variant)
@@ -241,6 +241,7 @@ export class CarPreview {
 
   private clearCar(): void {
     if (!this.carGroup) return;
+    this.hoverJets.detachFrom(this.carGroup);
     this.root.remove(this.carGroup);
     this.carGroup.traverse((object) => {
       if (!(object instanceof Mesh) || isSharedCarMesh(object)) return;
