@@ -4,10 +4,10 @@ import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 
 const HISTORY_LENGTH = 28;
-const BASE_LINEWIDTH = 3.2;
-const PEAK_LINEWIDTH = 7.8;
+const BASE_LINEWIDTH = 3.6;
+const PEAK_LINEWIDTH = 11.5;
 const BASE_OPACITY = 0.0;
-const PEAK_OPACITY = 0.86;
+const PEAK_OPACITY = 0.97;
 const LATERAL_OFFSET = 0.48;
 const TAIL_DROP = 0.02;
 const TAIL_BACK = 0.75;
