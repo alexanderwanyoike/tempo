@@ -617,9 +617,20 @@ export class App {
       return;
     }
     const rawT = Math.min(1, elapsed / visual.materializeDurationMs);
-    const intensity = Math.sin(rawT * Math.PI);
+    const riseEnd = 0.5;
+    const fadeStart = 0.7;
+    let intensity: number;
+    if (rawT < riseEnd) {
+      const r = rawT / riseEnd;
+      intensity = r * r * (3 - 2 * r);
+    } else if (rawT < fadeStart) {
+      intensity = 1;
+    } else {
+      const f = (rawT - fadeStart) / (1 - fadeStart);
+      intensity = 1 - f * f * (3 - 2 * f);
+    }
     visual.plume.setIntensity(intensity);
-    const realVisible = rawT >= 0.55;
+    const realVisible = rawT >= 0.6;
     if (visual.bodyPivot.visible !== realVisible) visual.bodyPivot.visible = realVisible;
     if (rawT >= 1) {
       visual.plume.setIntensity(0);

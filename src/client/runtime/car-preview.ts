@@ -222,10 +222,21 @@ export class CarPreview {
       return;
     }
     const rawT = Math.min(1, (nowMs - this.materializeStartedAt) / this.materializeDurationMs);
-    const intensity = Math.sin(rawT * Math.PI);
+    const riseEnd = 0.5;
+    const fadeStart = 0.7;
+    let intensity: number;
+    if (rawT < riseEnd) {
+      const r = rawT / riseEnd;
+      intensity = r * r * (3 - 2 * r);
+    } else if (rawT < fadeStart) {
+      intensity = 1;
+    } else {
+      const f = (rawT - fadeStart) / (1 - fadeStart);
+      intensity = 1 - f * f * (3 - 2 * f);
+    }
     this.plume.setIntensity(intensity);
     if (this.carGroup) {
-      const shouldShow = rawT >= 0.45;
+      const shouldShow = rawT >= 0.55;
       if (this.carGroup.visible !== shouldShow) this.carGroup.visible = shouldShow;
     }
     if (rawT >= 1) {

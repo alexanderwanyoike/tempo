@@ -7,7 +7,7 @@ import {
   ShaderMaterial,
 } from "three";
 
-const PARTICLE_COUNT = 220;
+const PARTICLE_COUNT = 160;
 
 const VERTEX_SHADER = `
 attribute float aPhase;
@@ -22,17 +22,17 @@ varying float vAlpha;
 varying float vLifetime;
 
 void main() {
-  float t = fract(aPhase + uTime * 0.8);
+  float t = fract(aPhase + uTime * 0.45);
   float radialFade = 1.0 - t * 0.2;
   float r = uRadius * aRadiusMul * radialFade;
   float y = t * uHeight;
   vec3 local = vec3(cos(aAngle) * r, y, sin(aAngle) * r);
   vec4 mvPosition = modelViewMatrix * vec4(local, 1.0);
   gl_Position = projectionMatrix * mvPosition;
-  float size = (14.0 + uIntensity * 34.0) * uPixelRatio;
-  gl_PointSize = size * (55.0 / max(0.1, -mvPosition.z));
-  float shimmer = 0.7 + 0.3 * sin(aAngle * 4.0 + uTime * 6.0);
-  vAlpha = uIntensity * (1.0 - t * 0.7) * shimmer;
+  float size = (10.0 + uIntensity * 22.0) * uPixelRatio;
+  gl_PointSize = size * (50.0 / max(0.1, -mvPosition.z));
+  float shimmer = 0.75 + 0.25 * sin(aAngle * 4.0 + uTime * 4.0);
+  vAlpha = uIntensity * (1.0 - t * 0.65) * shimmer;
   vLifetime = t;
 }
 `;
@@ -46,9 +46,9 @@ void main() {
   vec2 uv = gl_PointCoord - 0.5;
   float r2 = dot(uv, uv);
   if (r2 > 0.25) discard;
-  float falloff = pow(1.0 - r2 * 4.0, 1.4);
-  vec3 tinted = uColor * (1.6 + vLifetime * 1.2) + vec3(0.25, 0.35, 0.45) * vLifetime;
-  float alpha = clamp(falloff * vAlpha * 1.4, 0.0, 1.0);
+  float falloff = pow(1.0 - r2 * 4.0, 1.6);
+  vec3 tinted = uColor * (1.2 + vLifetime * 0.8) + vec3(0.15, 0.22, 0.28) * vLifetime;
+  float alpha = clamp(falloff * vAlpha * 0.95, 0.0, 1.0);
   gl_FragColor = vec4(tinted, alpha);
 }
 `;
