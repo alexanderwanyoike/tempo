@@ -630,6 +630,7 @@ export class App {
       intensity = 1 - f * f * (3 - 2 * f);
     }
     visual.plume.setIntensity(intensity);
+    visual.plume.setScanProgress(rawT);
     const realVisible = rawT >= 0.6;
     if (visual.bodyPivot.visible !== realVisible) visual.bodyPivot.visible = realVisible;
     if (rawT >= 1) {

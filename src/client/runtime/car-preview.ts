@@ -235,6 +235,7 @@ export class CarPreview {
       intensity = 1 - f * f * (3 - 2 * f);
     }
     this.plume.setIntensity(intensity);
+    this.plume.setScanProgress(rawT);
     if (this.carGroup) {
       const shouldShow = rawT >= 0.55;
       if (this.carGroup.visible !== shouldShow) this.carGroup.visible = shouldShow;
