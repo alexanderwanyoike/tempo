@@ -208,7 +208,11 @@ export class TrackGenerator implements Track {
   }
 
   getPointAt(u: number): Vector3 {
-    return this.centerline.getPointAt(TMath.clamp(u, 0, 0.9999));
+    const t = TMath.clamp(u, 0, 0.9999) * this.sampleCount;
+    const i = Math.floor(t);
+    const frac = t - i;
+    const j = Math.min(i + 1, this.sampleCount);
+    return this.frames.samples[i].clone().lerp(this.frames.samples[j], frac);
   }
 
   getStartPosition(): { position: Vector3; yaw: number } {
@@ -221,9 +225,9 @@ export class TrackGenerator implements Track {
 
   getRespawnAt(u: number): { position: Vector3; yaw: number } {
     const clampedU = Math.max(0, Math.min(u, 1));
-    const pos = this.centerline.getPointAt(clampedU);
+    const pos = this.getPointAt(clampedU);
     pos.y += 0.45;
-    const t = this.centerline.getTangentAt(Math.min(clampedU, 0.9999)).normalize();
+    const t = this.getFrameAt(clampedU).tangent;
     const yaw = Math.atan2(-t.x, -t.z);
     return { position: pos, yaw };
   }
@@ -379,8 +383,8 @@ export class TrackGenerator implements Track {
 
     for (let step = 0; step < 4; step++) {
       const uMid = (uLow + uHigh) / 2;
-      const pLow = this.centerline.getPointAt(Math.min(uLow, 0.9999));
-      const pHigh = this.centerline.getPointAt(Math.min(uHigh, 0.9999));
+      const pLow = this.getPointAt(uLow);
+      const pHigh = this.getPointAt(uHigh);
       if (this.xzDistSq(position, pLow) < this.xzDistSq(position, pHigh)) {
         uHigh = uMid;
       } else {
@@ -389,7 +393,7 @@ export class TrackGenerator implements Track {
     }
 
     const uFinal = Math.min((uLow + uHigh) / 2, 0.9999);
-    const center = this.centerline.getPointAt(uFinal);
+    const center = this.getPointAt(uFinal);
     const frame = this.getFrameAt(uFinal);
     const toPos = position.clone().sub(center);
     const lateralOffset = toPos.dot(frame.right);

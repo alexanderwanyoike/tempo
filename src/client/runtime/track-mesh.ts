@@ -64,6 +64,14 @@ function sampleHalfWidth(halfWidths: readonly number[] | number, i: number): num
   return halfWidths[Math.min(i, halfWidths.length - 1)] ?? halfWidths[halfWidths.length - 1] ?? 0;
 }
 
+// Adaptive centerline smoothing: rounds only the spots where Catmull-Rom produces
+// a radius of curvature below the track half-width, leaving straights and gentle
+// bends untouched. Max angle per step = ds / R_min; samples exceeding that budget
+// get pulled toward the line between their neighbors until the budget is met.
+const CENTERLINE_MIN_RADIUS = 12.5;
+const CENTERLINE_RELAX_STEP = 0.5;
+const CENTERLINE_MAX_RELAX_PASSES = 200;
+
 export function computeParallelTransportFrames(
   centerline: CatmullRomCurve3,
   sampleCount: number,
@@ -73,12 +81,43 @@ export function computeParallelTransportFrames(
   const rights: Vector3[] = [];
   const ups: Vector3[] = [];
 
-  // Compute tangents
+  const arcLength = centerline.getLength();
+  const ds = arcLength / sampleCount;
+  const maxAnglePerStep = ds / CENTERLINE_MIN_RADIUS;
+  const tmpA = new Vector3();
+  const tmpB = new Vector3();
+
+  for (let pass = 0; pass < CENTERLINE_MAX_RELAX_PASSES; pass++) {
+    let touched = false;
+    for (let i = 1; i < sampleCount; i++) {
+      tmpA.subVectors(samples[i], samples[i - 1]);
+      tmpB.subVectors(samples[i + 1], samples[i]);
+      const lenA = tmpA.length();
+      const lenB = tmpB.length();
+      if (lenA < 1e-6 || lenB < 1e-6) continue;
+      const cosAngle = TMath.clamp(tmpA.dot(tmpB) / (lenA * lenB), -1, 1);
+      const angle = Math.acos(cosAngle);
+      if (angle <= maxAnglePerStep) continue;
+      const excess = angle / maxAnglePerStep - 1;
+      const weight = Math.min(CENTERLINE_RELAX_STEP, excess * CENTERLINE_RELAX_STEP);
+      const midX = (samples[i - 1].x + samples[i + 1].x) * 0.5;
+      const midY = (samples[i - 1].y + samples[i + 1].y) * 0.5;
+      const midZ = (samples[i - 1].z + samples[i + 1].z) * 0.5;
+      samples[i].set(
+        samples[i].x + (midX - samples[i].x) * weight,
+        samples[i].y + (midY - samples[i].y) * weight,
+        samples[i].z + (midZ - samples[i].z) * weight,
+      );
+      touched = true;
+    }
+    if (!touched) break;
+  }
+
+  // Tangents from central differences of relaxed samples (consistent with rendered geometry).
   for (let i = 0; i <= sampleCount; i++) {
-    const u = i / sampleCount;
-    tangents.push(
-      centerline.getTangentAt(Math.min(u, 0.9999)).normalize(),
-    );
+    const prev = samples[Math.max(0, i - 1)];
+    const next = samples[Math.min(sampleCount, i + 1)];
+    tangents.push(next.clone().sub(prev).normalize());
   }
 
   // Parallel transport: initialize first frame from world up
