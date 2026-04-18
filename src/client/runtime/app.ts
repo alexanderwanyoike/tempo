@@ -63,6 +63,7 @@ import {
 } from "./car-toon-shader";
 import { HoverJets } from "./hover-jets";
 import { BoostRibbons } from "./boost-ribbons";
+import { BoostFxPass } from "./boost-fx-pass";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -169,6 +170,7 @@ export class App {
   private readonly renderer: WebGLRenderer;
   private readonly composer: EffectComposer;
   private readonly bloomPass: UnrealBloomPass;
+  private readonly boostFxPass: BoostFxPass;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private readonly localVehicle: RemoteCarVisual;
@@ -356,6 +358,8 @@ export class App {
       0.3,
     );
     this.composer.addPass(this.bloomPass);
+    this.boostFxPass = new BoostFxPass();
+    this.composer.addPass(this.boostFxPass);
 
     this.localVehicle = this.createVehicleVisual(launch.carVariant ?? "vector");
     this.scene.add(this.localVehicle.group);
@@ -2077,6 +2081,7 @@ export class App {
     this.tempVectorB.set(0, 1, 0).applyQuaternion(carQuaternion);
     this.boostRibbons.sample(this.localVehicle.group.position, this.tempVector, this.tempVectorB);
     this.boostRibbons.update(deltaSeconds, Math.min(surgeBoost, 1));
+    this.boostFxPass.setStrength(Math.min(surgeBoost, 1));
   }
 
   private updateSpeedFeedback(deltaSeconds: number): void {
