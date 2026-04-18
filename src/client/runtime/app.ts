@@ -62,6 +62,7 @@ import {
   toToonMaterial,
 } from "./car-toon-shader";
 import { HoverJets } from "./hover-jets";
+import { BoostRibbons } from "./boost-ribbons";
 import { buildCheckpointUs, checkpointIndexForU } from "../../../shared/race-utils";
 import {
   RACE_SIM,
@@ -173,6 +174,7 @@ export class App {
   private readonly localVehicle: RemoteCarVisual;
   private readonly combatVfx: CombatVfx;
   private readonly pickupGroup = new Group();
+  private readonly boostRibbons: BoostRibbons;
   private readonly remoteCars = new Map<string, RemoteCarVisual>();
   private readonly pickupVisuals = new Map<string, PickupVisual>();
   private readonly winSfx = new Audio(App.WIN_SFX_URL);
@@ -375,6 +377,11 @@ export class App {
     this.scene.add(this.environment.group);
     this.scene.add(this.track.meshGroup);
     this.scene.add(this.pickupGroup);
+    this.boostRibbons = new BoostRibbons(App.BOOST_COLOR, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    this.scene.add(this.boostRibbons.group);
     this.scene.add(this.camera);
     this.combatVfx = new CombatVfx(
       this.scene,
@@ -750,6 +757,7 @@ export class App {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.boostRibbons.setViewportSize(window.innerWidth, window.innerHeight);
   };
 
   private createVehicleVisual(variant: CarVariant): RemoteCarVisual {
@@ -2030,7 +2038,7 @@ export class App {
     }
   }
 
-  private updateBoostVisuals(): void {
+  private updateBoostVisuals(deltaSeconds: number): void {
     const boost = this.vehicleController.state.visualBoost;
     const surgeBoost = MathUtils.clamp(boost + this.boostSurge * 0.42 + this.pickupSurge * 0.22, 0, 1.35);
     const slowdownMix = Math.min(this.slowdownFlash, 1);
@@ -2063,6 +2071,12 @@ export class App {
     this.localVehicle.feedbackGlowMaterial.opacity = Math.min(surgeBoost * 0.42 + slowdownMix * 0.38, 0.72);
     const glowScale = 1 + surgeBoost * 0.55 + slowdownMix * 0.18;
     this.localVehicle.feedbackGlow.scale.set(glowScale, 1, glowScale);
+
+    const carQuaternion = this.localVehicle.group.quaternion;
+    this.tempVector.set(0, 0, -1).applyQuaternion(carQuaternion);
+    this.tempVectorB.set(0, 1, 0).applyQuaternion(carQuaternion);
+    this.boostRibbons.sample(this.localVehicle.group.position, this.tempVector, this.tempVectorB);
+    this.boostRibbons.update(deltaSeconds, Math.min(surgeBoost, 1));
   }
 
   private updateSpeedFeedback(deltaSeconds: number): void {
@@ -2885,7 +2899,7 @@ export class App {
     this.track.setLoadingBlend(loadingBlend, loadingPulse);
     this.updateCarTransform(deltaSeconds);
     this.updateRemoteCars(deltaSeconds);
-    this.updateBoostVisuals();
+    this.updateBoostVisuals(deltaSeconds);
     this.updatePickupVisuals(time / 1000);
     this.combatVfx.update(performance.now());
     this.updateCamera(deltaSeconds);
