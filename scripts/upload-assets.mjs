@@ -15,6 +15,7 @@ const uploadRoots = [
   join(publicDir, "music"),
   join(publicDir, "songs"),
   join(publicDir, "cars"),
+  join(publicDir, "album-art"),
   join(publicDir, "song-catalog.json"),
 ];
 
@@ -52,6 +53,11 @@ const contentTypes = {
   ".glb": "model/gltf-binary",
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
 };
 
 async function walk(target) {
