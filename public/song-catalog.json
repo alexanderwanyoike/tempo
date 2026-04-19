@@ -60,6 +60,36 @@
       "previewStartTime": 92,
       "searchTerms": ["house", "club mix", "four on the floor", "neon"],
       "fictionIds": [1, 2, 3]
+    },
+    {
+      "id": "mercutio-mo-money-honey",
+      "title": "Mo Money Honey",
+      "artist": "Mercutio",
+      "genre": "UKG",
+      "bpm": 132.51,
+      "duration": 349.675,
+      "baseSeed": 3908143227,
+      "songPath": "/songs/mercutio-mo-money-honey.json",
+      "musicPath": "/music/mercutio-mo-money-honey.mp3",
+      "albumArtPath": "/album-art/mercutio-mo-money-honey.svg",
+      "previewStartTime": 60,
+      "searchTerms": ["uk garage", "2-step", "garage", "skippy"],
+      "fictionIds": [1, 2, 3]
+    },
+    {
+      "id": "mercutio-context-engineering",
+      "title": "Context Engineering",
+      "artist": "Mercutio",
+      "genre": "Jungle",
+      "bpm": 173.0,
+      "duration": 405.394,
+      "baseSeed": 1662575202,
+      "songPath": "/songs/mercutio-context-engineering.json",
+      "musicPath": "/music/mercutio-context-engineering.mp3",
+      "albumArtPath": "/album-art/mercutio-context-engineering.svg",
+      "previewStartTime": 72,
+      "searchTerms": ["jungle", "amen", "breakbeat", "ragga"],
+      "fictionIds": [1, 2, 3]
     }
   ]
 }

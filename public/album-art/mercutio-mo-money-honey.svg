@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="title desc">
+  <title id="title">Mo Money Honey Album Art</title>
+  <desc id="desc">UK Garage cover art with gold coin motif, purple grid, and amber title.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#120819"/>
+      <stop offset="100%" stop-color="#05030c"/>
+    </linearGradient>
+    <radialGradient id="coin" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffe58a"/>
+      <stop offset="55%" stop-color="#f5b142"/>
+      <stop offset="100%" stop-color="#7a3e00"/>
+    </radialGradient>
+    <linearGradient id="title-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ffe58a"/>
+      <stop offset="100%" stop-color="#f28f2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="720" fill="url(#bg)"/>
+  <g stroke="#4a2a6b" stroke-width="1.5" opacity="0.55">
+    <path d="M0 180H720"/>
+    <path d="M0 300H720"/>
+    <path d="M0 420H720"/>
+    <path d="M0 540H720"/>
+    <path d="M180 0V720"/>
+    <path d="M300 0V720"/>
+    <path d="M420 0V720"/>
+    <path d="M540 0V720"/>
+  </g>
+  <circle cx="520" cy="230" r="150" fill="url(#coin)" fill-opacity="0.95"/>
+  <circle cx="520" cy="230" r="150" fill="none" stroke="#ffd872" stroke-width="3" stroke-opacity="0.8"/>
+  <circle cx="520" cy="230" r="120" fill="none" stroke="#ffd872" stroke-width="1.5" stroke-opacity="0.4"/>
+  <text x="520" y="255" fill="#7a3e00" font-family="Arial, sans-serif" font-size="110" font-weight="900" text-anchor="middle">$</text>
+  <circle cx="168" cy="512" r="80" fill="#a26bff" fill-opacity="0.2"/>
+  <circle cx="168" cy="512" r="80" fill="none" stroke="#a26bff" stroke-width="2" stroke-opacity="0.6"/>
+  <rect x="64" y="398" width="592" height="210" fill="none" stroke="#ffd872" stroke-opacity="0.3" stroke-width="2"/>
+  <text x="80" y="496" fill="url(#title-grad)" font-family="Arial, sans-serif" font-size="76" font-weight="800" letter-spacing="4">MO MONEY</text>
+  <text x="80" y="558" fill="#f7e6ff" font-family="Arial, sans-serif" font-size="64" font-weight="700" letter-spacing="8">HONEY</text>
+  <text x="82" y="590" fill="#c9a8ff" font-family="Arial, sans-serif" font-size="20" letter-spacing="10">MERCUTIO / UK GARAGE</text>
+</svg>

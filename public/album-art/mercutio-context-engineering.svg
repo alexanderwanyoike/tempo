@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="title desc">
+  <title id="title">Context Engineering Album Art</title>
+  <desc id="desc">Jungle cover art with neon green terminal glyphs, red warning arc, and monospace title.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#04130a"/>
+      <stop offset="100%" stop-color="#020608"/>
+    </linearGradient>
+    <linearGradient id="title-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#54ff9f"/>
+      <stop offset="100%" stop-color="#2be0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="720" fill="url(#bg)"/>
+  <g stroke="#0a3a22" stroke-width="1" opacity="0.7">
+    <path d="M0 90H720"/>
+    <path d="M0 180H720"/>
+    <path d="M0 270H720"/>
+    <path d="M0 360H720"/>
+    <path d="M0 450H720"/>
+    <path d="M0 540H720"/>
+    <path d="M90 0V720"/>
+    <path d="M180 0V720"/>
+    <path d="M270 0V720"/>
+    <path d="M360 0V720"/>
+    <path d="M450 0V720"/>
+    <path d="M540 0V720"/>
+    <path d="M630 0V720"/>
+  </g>
+  <g fill="#54ff9f" font-family="monospace" font-size="18" opacity="0.55">
+    <text x="40" y="110">01001101 01 01110110</text>
+    <text x="40" y="140">0x7F A3 02 00 FF AMEN</text>
+    <text x="420" y="200">&gt; ctx.load()</text>
+    <text x="40" y="240">loop.at(173.5 bpm) {</text>
+    <text x="70" y="270">break = amen.splice</text>
+    <text x="70" y="300">bass = sub.roll(8)</text>
+    <text x="40" y="330">}</text>
+    <text x="480" y="310">// run</text>
+  </g>
+  <circle cx="548" cy="432" r="112" fill="none" stroke="#ff3c5a" stroke-width="4" stroke-opacity="0.9"/>
+  <circle cx="548" cy="432" r="112" fill="#ff3c5a" fill-opacity="0.12"/>
+  <path d="M468 432 L628 432 M548 352 L548 512" stroke="#ff3c5a" stroke-width="2" stroke-opacity="0.6"/>
+  <text x="548" y="442" fill="#ff3c5a" font-family="monospace" font-size="24" font-weight="700" text-anchor="middle">[ CTX ]</text>
+  <rect x="48" y="400" width="448" height="224" fill="#031008" stroke="#54ff9f" stroke-opacity="0.3" stroke-width="2"/>
+  <text x="68" y="490" fill="url(#title-grad)" font-family="monospace" font-size="64" font-weight="700">CONTEXT</text>
+  <text x="68" y="556" fill="#eafff5" font-family="monospace" font-size="52" font-weight="700">ENGINEERING</text>
+  <text x="70" y="596" fill="#7effba" font-family="monospace" font-size="18" letter-spacing="6">MERCUTIO / JUNGLE</text>
+</svg>
